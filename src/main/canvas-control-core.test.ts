@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { ISSUE_BRANCH_SLUG_MAX } from '../shared/issue-worktree'
 import {
   GITHUB_READ_LIMIT_DEFAULT as GH_READ_LIMIT_DEFAULT,
@@ -9,6 +11,7 @@ import {
 } from '../core/github/control-read'
 import {
   parseControlRequest,
+  browserFlagRefusal,
   isDestructiveVerb,
   mergeCanvasControlBlock,
   buildCanvasControlInstructions,
@@ -1708,3 +1711,26 @@ describe('buildCanvasSkillBody — shim invocation dialect', () => {
   })
 })
 
+describe('browser control unknown flags (#539)', () => {
+  it.each(['width', 'height', 'viewport', 'size', 'preset'])('refuses open-browser --%s before creating anything', (key) => {
+    expect(parseControlRequest('open-browser', { url: 'https://example.test', [key]: '375' })).toEqual({ error: `open-browser: unknown flag --${key}` })
+  })
+  it('refuses a browser typo at the shared Desktop/Server boundary', () => {
+    expect(parseControlRequest('browser', { node: 'b1', screenshot: 'x.png', ful: 'true' })).toEqual({ error: 'browser: unknown flag --ful' })
+  })
+})
+
+describe('browserFlagRefusal is the one gate both shells run (#539)', () => {
+  it('names the unknown flag on both browser verbs and passes known ones', () => {
+    expect(browserFlagRefusal('open-browser', { url: 'https://x.test', width: '375' })).toBe('open-browser: unknown flag --width')
+    expect(browserFlagRefusal('open-browser', { url: 'https://x.test', project: 'p1', 'dry-run': 'true' })).toBeNull()
+    expect(browserFlagRefusal('browser', { node: 'b1', screenshot: 'a.png', full: 'true' })).toBeNull()
+    expect(browserFlagRefusal('show-web', { url: 'https://x.test', width: '1' })).toBeNull()
+  })
+  it('desktop main runs it before forwarding or driving (it never runs parseControlRequest)', () => {
+    const src = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const gate = src.indexOf('const browserRefusal = browserFlagRefusal(verb, args)')
+    expect(gate).toBeGreaterThan(0)
+    expect(gate).toBeLessThan(src.indexOf("if (verb === 'browser') return handleBrowserVerb("))
+  })
+})

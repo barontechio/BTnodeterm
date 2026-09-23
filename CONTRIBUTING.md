@@ -1483,3 +1483,9 @@ the real POST: a confirm-gated verb waits for a human. Keep real owning-endpoint
 legacy hook delivery unchanged. When no owner answers, say so once, as a temporary state
 (`FOREIGN_ENDPOINT_HINT`); never let another instance's "permanent, do not retry" stand in for a
 dropped tunnel.
+
+**Browser control must measure settled geometry.** A CDP wheel acknowledgement precedes
+Chromium's scroll frames. Use the bounded settlement helper before reporting movement or
+resolving pointer targets. Keep actions on one guest exclusive. A temporary CDP viewport
+override survives debugger detach and loses scroll position; a screenshot repair must address
+that lifecycle, including revocation, before adding emulation to the production allowlist.

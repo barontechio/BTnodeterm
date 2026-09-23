@@ -339,7 +339,7 @@ import { contextLinkShimPath, initContextLink, setNodeTranscript } from '../core
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, canvasControlShimPath } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
-import { issueFlagRefusal } from '../core/canvas-control-core'
+import { browserFlagRefusal, issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
 import { arrangeArgsRefusal } from '../shared/arrange-verb'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
@@ -4393,6 +4393,10 @@ app.whenReady().then(async () => {
     // renderer resolves `#N` against the project's repository and re-parses with the same grammar.
     const issueRefusal = issueFlagRefusal(verb, args)
     if (issueRefusal) return { ok: false, error: issueRefusal, message: issueRefusal }
+    // `browser` / `open-browser` unknown flags (#539): same placement, same reason — without it a
+    // desktop `open-browser --width 375` answered a normal `opened browser <id>`.
+    const browserRefusal = browserFlagRefusal(verb, args)
+    if (browserRefusal) return { ok: false, error: browserRefusal, message: browserRefusal }
     // `--after-pr` / `--pr-deadline`: same placement and same reason. Whether the pull request
     // exists in the board's repository is the renderer's question (`resolvePrWaitFor`).
     const afterPrRefusal = afterPrFlagRefusal(verb, args)

@@ -19,7 +19,7 @@ import { shimCommand, shimFence, windowsShimNoteLines, type ShimDialect } from '
 import { RETRYABLE } from './agents/agent-message-decide'
 import { FANOUT_PER_TURN, PAIR_MIN_INTERVAL_MS } from './agents/agent-message-flow'
 import { BROWSER_RETRYABLE, BROWSER_OUTCOME_LABEL } from './browser-outcomes'
-import { BROWSER_KEYS, BROWSER_TIMEOUT_DEFAULT_MS, BROWSER_TIMEOUT_MAX_MS } from './browser-verb'
+import { BROWSER_FLAGS, BROWSER_KEYS, BROWSER_TIMEOUT_DEFAULT_MS, BROWSER_TIMEOUT_MAX_MS } from './browser-verb'
 import { nodeColorChoices } from '@shared/node-colors'
 import { offScreenGuidanceLines } from '@shared/control-off-screen'
 import { arrangeArgsRefusal, arrangeGroupGuidanceLines } from '@shared/arrange-verb'
@@ -694,6 +694,20 @@ export function issueFlagRefusal(verb: string, args: Record<string, string | und
   return issue.ok ? null : `${verb}: ${issue.error}`
 }
 
+/** The flags `open-browser` reads. Anything else is refused by name (#539): a silently dropped
+ *  `--width 375` is indistinguishable from success to the agent that passed it. */
+export const OPEN_BROWSER_FLAGS: ReadonlySet<string> = new Set(['url', 'project'])
+
+/** The browser verbs' unknown-flag gate, shared by BOTH shells: the Server Edition runs it inside
+ *  `parseControlRequest`, desktop main calls it directly (that handler never runs the parser — the
+ *  `--issue` trap). `dry-run` keeps its own disposition in each shell's common gate. */
+export function browserFlagRefusal(verb: string, args: Record<string, string>): string | null {
+  const allowed = verb === 'browser' ? BROWSER_FLAGS : verb === 'open-browser' ? OPEN_BROWSER_FLAGS : undefined
+  if (!allowed) return null
+  const unknown = Object.keys(args).find((key) => key !== 'dry-run' && !allowed.has(key))
+  return unknown ? `${verb}: unknown flag --${unknown}` : null
+}
+
 /** Validate a raw (verb, args) pair into a ControlCommand, or return an { error }. */
 export function parseControlRequest(
   verb: string,
@@ -701,6 +715,8 @@ export function parseControlRequest(
 ): ControlCommand | { error: string } {
   if (!VERBS.includes(verb as ControlVerb)) return { error: `Unknown verb: ${verb}` }
   const v = verb as ControlVerb
+  const browserRefusal = browserFlagRefusal(v, args)
+  if (browserRefusal) return { error: browserRefusal }
   if (v === 'close' && !args.node) return { error: 'close requires --node <id>' }
   if (v === 'run' && !args.node) return { error: 'run requires --node <id>' }
   if (v === 'write' && !args.node) return { error: 'write requires --node <id>' }
