@@ -60,6 +60,7 @@ import {
   type PersistedLedgerRow
 } from '../control-request-ledger'
 import { DurableFactFile } from '../durable-state'
+import { createPaneOriginGate, parseClaudeHookOrigin, type PaneOriginGate } from './claude-pane-origin'
 
 // v2 advertises NODETERM_NODE_TOKEN_DIR so clients read their per-node capability from a file
 // rather than receiving it in argv. Nothing consumes the posted version server-side, so the bump
@@ -548,6 +549,24 @@ export class HookServer {
       )
     }
     return this.codexPermissionGate
+  }
+
+  /**
+   * Which claude may speak for a node (issues #1112, #1153 — claude-pane-origin.ts). Created
+   * eagerly: the "not the foreground of any terminal" half needs no shell at all, so a shell that
+   * never wires a resolver still drops a detached `claude -p`. The pane-tty half needs
+   * `setPaneTtyResolver`, which BOTH shells call (hook-verified-parity.test.ts pins it).
+   */
+  private readonly paneOrigin: PaneOriginGate = createPaneOriginGate()
+
+  /** The node's pane tty, read by each shell from its own PtyManager (`paneOwner(...).tty`). */
+  setPaneTtyResolver(fn: ((nodeId: string) => Promise<string | null>) | undefined): void {
+    this.paneOrigin.setPaneTtyResolver(fn)
+  }
+
+  /** Drop the cached pane tty of a node whose session ended or was recycled (new pane, new tty). */
+  forgetPaneOrigin(nodeId: string): void {
+    this.paneOrigin.forgetNode(nodeId)
   }
 
   // Raw payload listener: receives the parsed (un-normalized) hook JSON. Drives the
@@ -1113,6 +1132,18 @@ export class HookServer {
           if (agentId === 'antigravity') {
             if (form.nodeterm_hook_event) payload.nodeterm_hook_event = form.nodeterm_hook_event
             else delete payload.nodeterm_hook_event
+          }
+          // A claude event from a process that merely INHERITED this node's id — a detached
+          // `claude -p`, Claude's own daemon hosting a fork — is not the node's, and must reach
+          // NEITHER listener: the raw one rebinds the node's session, meter and context-link
+          // transcript, the normalized one the mirror's session id, title and badge (#1112,
+          // #1153). Decided per node in arrival order; see claude-pane-origin.ts for the rule and
+          // the measurement behind it. Every claude event goes through the gate, with or without
+          // an origin, so an event waiting for a pane read is never overtaken by the next one.
+          if (agentId === 'claude' && !(await this.paneOrigin.admit(nodeId, parseClaudeHookOrigin(form)))) {
+            res.writeHead(204)
+            res.end()
+            return
           }
           // Raw listener first: it drives the transcript-tailing features (which need
           // transcript_path). Inside the try so a throwing raw listener still ends 204.

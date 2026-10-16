@@ -192,9 +192,12 @@ describe('the managed script for antigravity', () => {
     // IDENTITY-ROOT variant (the second hash of each pair) moved — codex's most, since it reads its
     // payload first. The no-root (remote) variants did not.
     const expected: Record<string, [string, string]> = {
+      // claude changed DELIBERATELY (issues #1112/#1153): it now reports which process ran the
+      // hook (`$CLAUDE_PID`, foreground, tty — claude-pane-origin.ts). Recomputed from this
+      // branch's builder; the other five are untouched, which is what this test still proves.
       claude: [
-        '0c160e0081608c44e327bb22f394aa51e17e852bc277523d0edee9c6d867711d',
-        '57fb9ccb0731a2baa5042741309c7bd52cc559db45738d0742d651fda668e2a5'
+        '0e3e1e0d89e7b3ca269effe57067047f9321897c79bf53a3edeadf2bb30ca992',
+        '84a8fc82dede3cf252138376b209e6469a22bfdc9b72f953eb35cb94ccd4fbe3'
       ],
       codex: [
         '592fe88ee069db002c9f5c385a2e0465f9659bade3f0bd18c86b5b51f7644e59',

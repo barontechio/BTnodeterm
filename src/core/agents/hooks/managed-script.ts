@@ -225,6 +225,42 @@ const ANSWER_DECODE_SH: readonly string[] = [
   '      fi'
 ]
 
+/**
+ * CLAUDE ONLY: which claude process ran this hook, and is it the foreground of its terminal
+ * (issues #1112, #1153 — the rule and the measurement are in core/agents/claude-pane-origin.ts).
+ *
+ * Read HERE, synchronously, before the POST is backgrounded: claude waits on its hook, so
+ * `$CLAUDE_PID` is alive for this one `ps` even on `SessionEnd`; a read in the server could land
+ * after the process exited. `$CLAUDE_PID` is exported to hooks by Claude Code itself (measured on
+ * 2.1.301; present in the binary from at least 2.1.220). One `ps`, BSD- and procps-compatible:
+ * `stat`'s `+` means "in the foreground process group of its controlling terminal" on both, and
+ * one `-o` per keyword for the reason PS_FOREGROUND_FLAGS gives. Every way this can fail — no
+ * `$CLAUDE_PID` (an older claude), a `ps` without `-o`/`-p` (Git Bash, BusyBox), a process already
+ * gone — leaves all three EMPTY, which the server reads as "unknown" and delivers as before. Git
+ * Bash is skipped outright: its `ps` cannot answer and a fork there is expensive.
+ */
+const CLAUDE_ORIGIN_SH: readonly string[] = [
+  'nt_claude_pid=""',
+  'nt_claude_fg=""',
+  'nt_claude_tty=""',
+  'if [ -z "$nt_msys" ]; then',
+  '  case "$CLAUDE_PID" in',
+  "    ''|*[!0-9]*) ;;",
+  '    *)',
+  '      nt_ps=$(ps -o stat= -o tty= -p "$CLAUDE_PID" 2>/dev/null) || nt_ps=""',
+  '      set -f',
+  '      set -- $nt_ps',
+  '      set +f',
+  '      if [ "$#" -ge 1 ]; then',
+  '        nt_claude_pid="$CLAUDE_PID"',
+  `        case "$1" in *+*) nt_claude_fg=1 ;; *) nt_claude_fg=0 ;; esac`,
+  `        case "$2" in ''|'?'|'??'|-|*[!A-Za-z0-9/._-]*) ;; *) nt_claude_tty="$2" ;; esac`,
+  '      fi',
+  '      ;;',
+  '  esac',
+  'fi'
+]
+
 function safeIdentityRoot(): string | null {
   try {
     return codexThreadIdentityRoot()
@@ -266,6 +302,15 @@ export function buildManagedScript(
   // only thread id a hook under the shared app-server has (#1150/#1175, codex-thread-identity-sh.ts).
   const codexPayloadFirst = agentId === 'codex' && !!identityRoot
   // The event name rides the POST for antigravity only — its payload never carries one.
+  // Which claude ran this hook (claude-pane-origin.ts) — claude only, like the event field above.
+  const originFields =
+    agentId === 'claude'
+      ? [
+          '      --data-urlencode "nodeterm_claude_pid=${nt_claude_pid}" \\',
+          '      --data-urlencode "nodeterm_claude_fg=${nt_claude_fg}" \\',
+          '      --data-urlencode "nodeterm_claude_tty=${nt_claude_tty}" \\'
+        ]
+      : []
   const eventField = antigravity
     ? [`      --data-urlencode "nodeterm_hook_event=\${${ANTIGRAVITY_EVENT_ENV}}" \\`]
     : []
@@ -389,15 +434,18 @@ export function buildManagedScript(
     '# environment itself rather than inherited, so it still holds when a caller replaces the env',
     '# (which is exactly what the hook tests in this repo do). CYGWIN* is deliberately outside the',
     '# gate: Cygwin ships its own curl, and that one takes POSIX paths.',
+    ...(agentId === 'claude' ? ['nt_msys=""'] : []),
     'nt_payload_arg="$nt_payload_file"',
     'case "$(uname -s 2>/dev/null)" in',
     '  MINGW*|MSYS*)',
+    ...(agentId === 'claude' ? ['    nt_msys=1'] : []),
     '    if command -v cygpath >/dev/null 2>&1; then',
     '      nt_payload_arg=$(cygpath -w "$nt_payload_file" 2>/dev/null) || nt_payload_arg="$nt_payload_file"',
     '      [ -n "$nt_payload_arg" ] || nt_payload_arg="$nt_payload_file"',
     '    fi',
     '    ;;',
     'esac',
+    ...(agentId === 'claude' ? CLAUDE_ORIGIN_SH : []),
     '# Deterministic-approval request: only for a PermissionRequest hook while the wait is armed.',
     '# `nt_pending` stays empty otherwise, so the POST tag and the poll loop below are both inert.',
     'nt_pending=""',
@@ -416,7 +464,9 @@ export function buildManagedScript(
     // not depend on the env at all.
     ...(agentId === 'claude'
       ? [
-          'if [ -n "$NODETERM_PERM_WAIT_SECS" ] && [ "$NODETERM_PERM_WAIT_SECS" -gt 0 ] 2>/dev/null; then',
+          '# Never arm for a claude that is not the foreground of a terminal (claude-pane-origin.ts):',
+          '# its events are not delivered as this node\'s, so nobody could ever answer the hold.',
+          'if [ "$nt_claude_fg" != 0 ] && [ -n "$NODETERM_PERM_WAIT_SECS" ] && [ "$NODETERM_PERM_WAIT_SECS" -gt 0 ] 2>/dev/null; then',
           '  case "$payload" in',
           '    *\'"hook_event_name":"PermissionRequest"\'*|*\'"hook_event_name": "PermissionRequest"\'*)',
           '      nt_node=$(printf %s "$NODETERM_NODE_ID" | tr -c \'A-Za-z0-9_-\' \'_\')',
@@ -458,6 +508,7 @@ export function buildManagedScript(
     '      --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '      --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
     ...eventField,
+    ...originFields,
     '      --data-urlencode "payload@${nt_payload_arg}" 2>/dev/null) || return 1',
     '  elif [ -n "$NODETERM_HOOK_PORT" ]; then',
     '    nt_code=$(nt_hook_headers |',
@@ -469,6 +520,7 @@ export function buildManagedScript(
     '      --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '      --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
     ...eventField,
+    ...originFields,
     '      --data-urlencode "payload@${nt_payload_arg}" 2>/dev/null) || return 1',
     '  else',
     '    return 1',
@@ -574,6 +626,9 @@ export function buildManagedScript(
     '              --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '              --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
     '              --data-urlencode "nodeterm_answered=${nt_verb}" \\',
+    '              --data-urlencode "nodeterm_claude_pid=${nt_claude_pid}" \\',
+    '              --data-urlencode "nodeterm_claude_fg=${nt_claude_fg}" \\',
+    '              --data-urlencode "nodeterm_claude_tty=${nt_claude_tty}" \\',
     '              --data-urlencode "payload@${nt_payload_arg}" >/dev/null 2>&1; rm -f "$nt_payload_file" 2>/dev/null || :; } &',
     '            nt_payload_owned=1',
     '          elif [ -n "$NODETERM_HOOK_PORT" ]; then',
@@ -586,6 +641,9 @@ export function buildManagedScript(
     '              --data-urlencode "nodeterm_context_window=${nt_context_window}" \\',
     '              --data-urlencode "nodeterm_pending_id=${nt_pending}" \\',
     '              --data-urlencode "nodeterm_answered=${nt_verb}" \\',
+    '              --data-urlencode "nodeterm_claude_pid=${nt_claude_pid}" \\',
+    '              --data-urlencode "nodeterm_claude_fg=${nt_claude_fg}" \\',
+    '              --data-urlencode "nodeterm_claude_tty=${nt_claude_tty}" \\',
     '              --data-urlencode "payload@${nt_payload_arg}" >/dev/null 2>&1; rm -f "$nt_payload_file" 2>/dev/null || :; } &',
     '            nt_payload_owned=1',
     '          fi',
