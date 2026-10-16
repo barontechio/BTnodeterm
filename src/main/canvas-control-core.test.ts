@@ -1734,3 +1734,16 @@ describe('browserFlagRefusal is the one gate both shells run (#539)', () => {
     expect(gate).toBeLessThan(src.indexOf("if (verb === 'browser') return handleBrowserVerb("))
   })
 })
+
+describe('the browser verb text matches #539 behaviour, in both bodies', () => {
+  it.each([
+    ['skill body', buildCanvasSkillBody('/x/nodeterm.sh')],
+    ['instructions block', buildCanvasControlInstructions('/x/nodeterm.sh')]
+  ])('%s', (_name, body) => {
+    const flat = body.replace(/\s+/g, ' ')
+    expect(flat).toContain('`+200` or `-200`')
+    expect(flat).toContain('MEASURED once the page stopped moving')
+    expect(flat).toContain('an unknown flag (on `browser` or `open-browser`) is refused by name, never ignored')
+    expect(flat).toContain('sizes the page\'s viewport to the full content height')
+  })
+})

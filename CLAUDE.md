@@ -2133,14 +2133,36 @@ returns a refusal instead of a misleading movement report.
 `driveBrowser` permits only one active action per guest session so a click cannot overtake a
 scroll's settlement. Revocation during a polling delay aborts without reattaching the debugger.
 
-Full-page screenshots remain unresolved: `captureBeyondViewport` misplaces sticky/fixed layers
-on a scrolled page. The disposable Electron probe (`scripts/probes/browser-539.ts`) also proves
-that a metrics override clamps scroll to zero and survives debugger detach; clearing it does
-not restore the old scroll position. A future repair must restore geometry even on revocation
-without reattaching a revoked lease. Do not ship an override with only a `finally` clear.
+**`--screenshot --full true` renders the page as ONE viewport** (`browser-screenshot.ts`
+`captureFullPage`). `captureBeyondViewport` alone paints off-viewport layers without re-laying the
+page out: MEASURED on Electron 42.9.1 against a page scrolled 400px, the sticky header came out at
+y=400 and the fixed footer mid-image — the reported "header twice / overlapping" shot. The capture
+now sends `Emulation.setDeviceMetricsOverride` (width unchanged, height = content height, capped at
+`MAX_VIEWPORT_OVERRIDE` 16384 and said so), settles, captures, clears in `finally`, and puts the
+scroll back with one wheel (an override that tall clamps scroll to 0 and clearing does not restore
+it — measured); a position it could not restore is in the reply. Rules a refactor must keep:
+- **The allowlist admits exactly that shape** — the four keys, bounded integers,
+  `deviceScaleFactor: 0`, `mobile: false`, plus a parameterless clear; every other Emulation method
+  stays default-denied. No agent value reaches it; a caller-sized viewport (a resize verb, #539's
+  feature ask) is a separate decision with its own validator.
+- **The override survives `debugger.detach()` and a reload** (measured), so its lifecycle is the
+  LEASE's: `BrowserSession.metricsOverridden` goes up when the set is sent and down only on a
+  confirmed clear; every detach we make sends the clear first (measured to take effect when sent
+  immediately before `detach()`), and after a detach we did not make the FIRST command of the next
+  attach is the clear. The screenshot never reattaches a released lease to clear or restore.
+- Side effect, stated in the agent text: the page sees one resize, so `100vh` content renders
+  taller (one bounded re-measure follows growth).
+- Residual, stated: a detach we did not make (not our release/idle/revoke, not page teardown) in
+  the sub-second capture window leaves the page tall until the node is next driven. No path we
+  know triggers one today (DevTools does not detach the lease — see browser-lease.ts's probe note).
+The disposable probe `scripts/probes/browser-539.ts` asserts all of it on a real Electron
+(header once at the top, footer once at the bottom, scroll restored, release clears).
 
-`browser` and `open-browser` reject unknown flags at the shared parser boundary. This does not
-add resize, console, network or attribute-reading actions. Server Edition retains its explicit
+`browser` and `open-browser` reject unknown flags through ONE gate, `browserFlagRefusal`
+(`core/canvas-control-core.ts`): the Server Edition runs it inside `parseControlRequest`, and desktop
+main calls it directly, because that handler never runs the parser (the `--issue` trap — #918's first
+version only reached the Server Edition). This does not add resize, console, network or
+attribute-reading actions. Server Edition retains its explicit
 browser-control refusal; its supported `open-browser` route shares flag validation. Mobile has
 no new wire fields or UI; host-side Desktop control inherits the fix.
 
