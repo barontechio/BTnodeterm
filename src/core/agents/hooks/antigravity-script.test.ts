@@ -187,30 +187,34 @@ describe('the managed script for antigravity', () => {
     // dir once it exists, token read by `read` instead of `head`, the `[A-Za-z0-9._-]` curl-config
     // header fast path): the shared script changed for every agent, so every pin moved. Each
     // change is pinned behaviourally in managed-script / node-token-sh / hook-curl-config tests.
+    //
+    // RECOMPUTED again for #1150/#1175 on top of that: the shared codex prelude changed, so every
+    // IDENTITY-ROOT variant (the second hash of each pair) moved — codex's most, since it reads its
+    // payload first. The no-root (remote) variants did not.
     const expected: Record<string, [string, string]> = {
       claude: [
         '0c160e0081608c44e327bb22f394aa51e17e852bc277523d0edee9c6d867711d',
-        'e0fd180e49fd26fca4b74b281f1357c8d26eea6338b39dc20e6a38e266ced42f'
+        '57fb9ccb0731a2baa5042741309c7bd52cc559db45738d0742d651fda668e2a5'
       ],
       codex: [
         '592fe88ee069db002c9f5c385a2e0465f9659bade3f0bd18c86b5b51f7644e59',
-        '3a09c15cb7a3ce6ba71f8bc695a50e58346f05c8015b2eb8812b8003a2e384ea'
+        '0399f289c489544c377f90b747437621e6f7b8fe813bb2c46a364975bc8c6bbe'
       ],
       gemini: [
         'c3fb01424ff2a78012ffd6e87200430badfe60b05f603731bf205ee3b791f988',
-        '23d62f97dc80483fba92ef760c0dc6a5b3e2f923ce706915739baee1b76579d8'
+        '9e984e142b62c2a5d158f3ecefbd77fc5e775f20522bfe2b3e52807df781dd7a'
       ],
       opencode: [
         '910dc7bc71c9af9043f05509d72584c633a790c0dee66d621baeee1db671845f',
-        '89d5b0c9b9fc083befb429493093af76d48c5ff5782b6f9cfdb2cdb1adf44344'
+        '19ba31a1dfaa981678e87bcc92417a473c3a98720fb86287e9ca285f01e96500'
       ],
       grok: [
         'fe9636e0e6e961109a3d96079a5f10d0304d77e751a6d1de57aa2810b2075b6c',
-        '313c0e80dd5160d61b893d8438c952d8a40a1d13bb9ff5280730df507ae910b2'
+        'd2e66a9386d62eb56c5d520fd695545b447c0facc77bb0948bfb2a0e4240be56'
       ],
       copilot: [
         '8907ee6ac3274cc92f3aa44f55119cc3d42b5a2446fcbd4a847fe42064c1f015',
-        '27117418faf66ab0c5960cdec22d0bf2594058df0874910b5da16cb56c10c528'
+        '101b2d44c3fb11126cb8d487a425951b63f8f0c1262ed1aa2d6241bce060ec55'
       ]
     }
     const sha = (s: string): string => createHash('sha256').update(s).digest('hex')

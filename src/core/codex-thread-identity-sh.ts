@@ -35,7 +35,8 @@
  * it was written; a record that names an agent is exported as it stands, grant included, and never
  * falls back to the guess.
  *
- * Inert for every other agent: without `CODEX_THREAD_ID` the whole block is skipped. A machine with
+ * Inert for every other agent: without `CODEX_THREAD_ID` (or, in the codex HOOK script only, the
+ * payload's `session_id` — see HOOK_PAYLOAD_THREAD_SH) the whole block is skipped. A machine with
  * no managed accounts has no subdirs, so the scan reduces to the one bare-root read S4 did — the
  * legacy layout keeps resolving byte-for-byte (Constraint 12).
  *
@@ -43,6 +44,35 @@
  * cores are shared by the desktop and the Server Edition.
  */
 import { posixQuote } from '../shared/ssh'
+
+/**
+ * The HOOK variant (#1150, #1175). MEASURED on codex-cli 0.162.0, 2026-10-16 (private CODEX_HOME,
+ * private tmux socket, a hook that dumped its env and stdin): under the shared app-server a hook
+ * process is a child of the DAEMON, carries the daemon's environment and NEVER `CODEX_THREAD_ID`
+ * (only tool shells get that). So:
+ *   - a daemon our launcher started (scrubbed) runs hooks with no node id at all and the gate
+ *     below exits silently: every managed Codex node stayed dark (#1150);
+ *   - a daemon a plain `codex` pane started keeps THAT pane's `NODETERM_NODE_ID` and runs every
+ *     later node's hooks under it: events land on a stale node (#1175).
+ * What a hook does carry is its payload, whose first key is `session_id` = the thread id (the
+ * rollout file is named after it). The managed script reads stdin first and hands this block the
+ * id in `nt_hook_thread`; it is still validated by the case below before it names a file.
+ *
+ * The payload's thread is this EVENT's own, so a record for it outranks an INHERITED node id — but
+ * only an inherited one. A pane whose own env is authoritative (our launcher's plain-codex exit,
+ * which runs codex in-process with `--no-daemon`) is marked `NODETERM_CODEX_PLAIN=1`, and there the
+ * env id stands: that is the bind-refused fallback that legitimately runs a thread another node's
+ * record names. A thread with no record changes nothing either way.
+ *
+ * A forged payload buys nothing: the record only names a node whose 0600 token file the same user
+ * can already read, and the event is still verified against that token (docs/node-identity.md).
+ */
+const HOOK_PAYLOAD_THREAD_SH = `# A HOOK never gets CODEX_THREAD_ID; its payload's session_id is this event's thread.
+if [ -n "\${nt_hook_thread-}" ]; then
+  nt_codex_tid=$nt_hook_thread
+  [ "\${NODETERM_CODEX_PLAIN-}" = 1 ] || nt_codex_rebind=1
+fi
+`
 
 /**
  * PROBE U5 (Codex 0.146.0, 2026-08-19 — docs/superpowers/probes/2026-08-codex-tool-shell-env.md):
@@ -55,11 +85,16 @@ import { posixQuote } from '../shared/ssh'
  * @param identityRoot absolute path of the thread → node record directory
  *   (`codexThreadIdentityRoot()`, i.e. under `CorePlatform.userDataDir` — NOT `~`).
  */
-export function codexThreadIdentityResolverSh(identityRoot: string): string {
+export function codexThreadIdentityResolverSh(
+  identityRoot: string,
+  opts: { hookPayloadThread?: boolean } = {}
+): string {
   return `# A shared-app-server Codex tool shell inherits CODEX_THREAD_ID, not the TUI client's
 # NODETERM_* env. Recover this thread's exact node binding (account-scoped), or change nothing.
-if [ -z "\${NODETERM_NODE_ID-}" ] && [ -n "\${CODEX_THREAD_ID-}" ]; then
-  case "$CODEX_THREAD_ID" in
+nt_codex_tid=\${CODEX_THREAD_ID-}
+nt_codex_rebind=0
+${opts.hookPayloadThread ? HOOK_PAYLOAD_THREAD_SH : ''}if { [ -z "\${NODETERM_NODE_ID-}" ] || [ "$nt_codex_rebind" = 1 ]; } && [ -n "$nt_codex_tid" ]; then
+  case "$nt_codex_tid" in
     # '.' and '..' MATCH the charset and are path segments: "$identityRoot"/.. is the record dir's
     # PARENT. Refused by name here for the same reason isSafeThreadId refuses them in TypeScript.
     ''|.|..|*[!A-Za-z0-9._-]*) ;;
@@ -147,7 +182,7 @@ if [ -z "\${NODETERM_NODE_ID-}" ] && [ -n "\${CODEX_THREAD_ID-}" ]; then
       case "\${NODETERM_CODEX_ACCOUNT_ID-}" in
         '')
           # Unknown account: scan every scope, bind only if exactly one candidate matches.
-          nt_codex_try "$nt_codex_root/$CODEX_THREAD_ID" ''
+          nt_codex_try "$nt_codex_root/$nt_codex_tid" ''
           for nt_codex_dir in "$nt_codex_root"/*/; do
             [ -d "$nt_codex_dir" ] || continue
             nt_codex_scope=\${nt_codex_dir%/}
@@ -155,19 +190,23 @@ if [ -z "\${NODETERM_NODE_ID-}" ] && [ -n "\${CODEX_THREAD_ID-}" ]; then
             case "$nt_codex_scope" in
               ''|.|..|system|*[!A-Za-z0-9._-]*) continue ;;
             esac
-            nt_codex_try "$nt_codex_dir$CODEX_THREAD_ID" "$nt_codex_scope"
+            nt_codex_try "$nt_codex_dir$nt_codex_tid" "$nt_codex_scope"
           done
           ;;
         # A daemon scope that could escape the mapping directory, or the reserved system word used
         # as a managed id: resolve nothing.
         .|..|system|*[!A-Za-z0-9._-]*) ;;
         *)
-          nt_codex_try "$nt_codex_root/\${NODETERM_CODEX_ACCOUNT_ID}/$CODEX_THREAD_ID" \\
+          nt_codex_try "$nt_codex_root/\${NODETERM_CODEX_ACCOUNT_ID}/$nt_codex_tid" \\
             "$NODETERM_CODEX_ACCOUNT_ID"
           ;;
       esac
       if [ "$nt_codex_matches" -eq 1 ] && [ -n "$nt_codex_node" ] && [ -n "$nt_codex_endpoint" ]
       then
+        # The endpoint's own values come from sourcing the RECORD's endpoint file below; anything
+        # left over belongs to the env this shell inherited (a stale daemon's, when rebinding).
+        unset NODETERM_HOOK_PORT NODETERM_HOOK_TOKEN NODETERM_HOOK_SOCK NODETERM_NODE_TOKEN_DIR \\
+          NODETERM_CANVAS_CONTROL
         NODETERM_NODE_ID="$nt_codex_node"
         NODETERM_HOOK_ENDPOINT="$nt_codex_endpoint"
         NODETERM_AGENT_ID="$nt_codex_agent"

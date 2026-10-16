@@ -889,9 +889,19 @@ nt_run_shared() {
 # in-process. The launch line normally carries it already (the desktop probed its own codex); on a
 # host nobody probed (an SSH launcher) this asks the binary about to run, and a codex that does not
 # advertise the flag gets the caller's arguments untouched — clap exits on an unknown option.
+#
+# Every IN-PROCESS exit is marked NODETERM_CODEX_PLAIN=1: its hooks run with THIS pane's env, which
+# is authoritative even when the thread's record names another node (the bind-refused fallback).
+# The hook prelude lets a thread record outrank only an INHERITED id — a daemon's (#1175). A
+# --remote exit runs its hooks in the daemon, so it is not marked.
 nt_exec_plain() {
   for nt_plain_arg in "$@"; do
-    case "$nt_plain_arg" in --no-daemon|--remote|--remote=*) exec codex "$@" ;; esac
+    case "$nt_plain_arg" in --remote|--remote=*) exec codex "$@" ;; esac
+  done
+  NODETERM_CODEX_PLAIN=1
+  export NODETERM_CODEX_PLAIN
+  for nt_plain_arg in "$@"; do
+    case "$nt_plain_arg" in --no-daemon) exec codex "$@" ;; esac
   done
   if codex --help 2>/dev/null | grep -q -E '${CODEX_NO_DAEMON_HELP_ERE}'; then
     exec codex --no-daemon "$@"

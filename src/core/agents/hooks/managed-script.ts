@@ -262,6 +262,9 @@ export function buildManagedScript(
   identityRoot: string | null = safeIdentityRoot()
 ): string {
   const antigravity = agentId === 'antigravity'
+  // The codex hook reads its payload BEFORE the identity prelude: the payload's session_id is the
+  // only thread id a hook under the shared app-server has (#1150/#1175, codex-thread-identity-sh.ts).
+  const codexPayloadFirst = agentId === 'codex' && !!identityRoot
   // The event name rides the POST for antigravity only — its payload never carries one.
   const eventField = antigravity
     ? [`      --data-urlencode "nodeterm_hook_event=\${${ANTIGRAVITY_EVENT_ENV}}" \\`]
@@ -269,7 +272,23 @@ export function buildManagedScript(
   return [
     '#!/bin/sh',
     ...(antigravity ? antigravityAnswerFirst() : []),
-    ...(identityRoot ? [codexThreadIdentityResolverSh(identityRoot)] : []),
+    ...(codexPayloadFirst
+      ? [
+          '# Payload first (codex only): its leading session_id is this event\'s thread. Parsed with',
+          '# builtins, anchored at the first byte, so a nested "session_id" in tool input never matches.',
+          'nt_pre_payload=$(cat)',
+          'nt_hook_thread=\'\'',
+          'case "$nt_pre_payload" in',
+          '  \'{"session_id":"\'*)',
+          '    nt_hook_thread=${nt_pre_payload#\'{"session_id":"\'}',
+          '    nt_hook_thread=${nt_hook_thread%%\'"\'*}',
+          '    ;;',
+          'esac'
+        ]
+      : []),
+    ...(identityRoot
+      ? [codexThreadIdentityResolverSh(identityRoot, { hookPayloadThread: codexPayloadFirst })]
+      : []),
     '# GATE FIRST, and drain stdin before bailing (issues #186/#187). Order is load-bearing twice:',
     '#  - The codex thread-identity prelude above may DERIVE the node id (and endpoint) from its',
     '#    thread id, so the gate cannot move above it — but nothing below needs to run for a',
@@ -331,7 +350,7 @@ export function buildManagedScript(
           '[ "${#nt_context_window}" -le 16 ] || nt_context_window=""'
         ]
       : ['nt_context_window=""']),
-    'payload=$(cat)',
+    codexPayloadFirst ? 'payload=$nt_pre_payload' : 'payload=$(cat)',
     'if [ -z "$payload" ]; then',
     ...(antigravity
       ? [
