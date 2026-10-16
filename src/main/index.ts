@@ -339,6 +339,7 @@ import { sessionName } from '../core/tmux-naming'
 import { posixQuote, sshHostKey, type SshConnection } from '../shared/ssh'
 import { buildHandoff, type HandoffRemote } from './handoff'
 import { contextLinkShimPath, initContextLink, setNodeTranscript } from '../core/context-link'
+import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, canvasControlShimPath } from './canvas-control'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
@@ -4086,6 +4087,17 @@ app.whenReady().then(async () => {
   // host's tails too, instead of leaking them.
   corePlatform.on(IPC.ptyDestroy, (nodeId: string) => releaseNodeTails(nodeId))
   corePlatform.on(IPC.ptyRecycle, (nodeId: string) => releaseNodeTails(nodeId))
+  // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
+  // Same call as the Server Edition's (hook-verified-parity.test.ts).
+  wireClaudePaneOrigin({
+    hooks: hookServer,
+    paneOwner: (nodeId) => ptyManager.paneOwner(nodeId),
+    cannotRead: (nodeId) =>
+      !ptyManager.sshRemoteForNode(nodeId) && !!workspaceStore.sshProjectIdForNode(nodeId),
+    on: (channel, cb) => corePlatform.on(channel, cb),
+    destroyChannel: IPC.ptyDestroy,
+    recycleChannel: IPC.ptyRecycle
+  })
   // Agent canvas control: the spawned agent's `nodeterm` CLI POSTs a verb to the hook server,
   // which we forward to the renderer and await a reply. A pending-request map (keyed by a random
   // requestId) bridges the two async hops; both the reply and the timeout below clear the entry.

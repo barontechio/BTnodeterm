@@ -50,6 +50,7 @@ import { installLogSink } from '../core/log-sink'
 import { registerLogHandlers } from '../core/log-handlers'
 import os from 'os'
 import { hookServer } from '../core/agents/hook-server'
+import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { serverEditionControlHandler } from './control-unsupported'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
@@ -561,6 +562,17 @@ export async function startServer(
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const { contextTail, geminiContextTail, codexContextTail } = wireAgentStatus(platform, {
     onEvent: (event) => canvasControl?.onAgentEvent(event)
+  })
+  // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
+  // Same call as the desktop's (hook-verified-parity.test.ts).
+  wireClaudePaneOrigin({
+    hooks: hookServer,
+    paneOwner: (nodeId) => ptyManager.paneOwner(nodeId),
+    // No SSH-project manager here: such a node's pane is on another machine, never readable.
+    cannotRead: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId),
+    on: (channel, cb) => platform.on(channel, cb),
+    destroyChannel: IPC.ptyDestroy,
+    recycleChannel: IPC.ptyRecycle
   })
   // The ⌘M chat view + the find-bar's transcript index. Registered HERE rather than with the rest
   // of the handlers because the hook-fed path authority is the tail created just above. No remote
