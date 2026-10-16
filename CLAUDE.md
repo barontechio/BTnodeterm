@@ -630,6 +630,22 @@ addon's `select()` must never touch the clipboard. Canvas node and kanban modal 
 settings preview; attached once per xterm (it survives park/adopt) and written via the bridge's
 `{ quiet: true }` path so a failed write raises no toast per drag.
 
+**Every viewer answers the tmux client's handshake; only one answer may reach it** (issue #1172).
+A new tmux client queries the terminal it is drawn in (DA1 `ESC[c`, DA2 `ESC[>c`, XTVERSION, OSC
+10/11 — measured on 3.4). With N viewers on one pty (two Server Edition tabs, a canvas node plus its
+kanban card modal, a relay peer) all N xterms answer; tmux consumes ONE DA answer inside its ~5 s
+query timeout and passes the rest — and a lone late one — to the pane as typed input, so
+`1;2c0;276;0c` landed in front of agent launch lines (the echo check passes: the line itself is
+intact) and in live prompts on every reattach. OSC replies are always consumed by tmux. The gate is
+`core/da-reply-gate.ts`, per Session, fed from `proc.onData` and applied in `PtyManager.write`: a write
+made ONLY of DA1/DA2 replies spends one open query of its kind per reply, and a reply with no open
+query (a duplicate, an unsolicited one, or one past `DA_REPLY_TTL_TMUX_MS` = 4 s for a real tmux
+client) is dropped. Rules: match only `CSI ? … c` / `CSI > … c` — no key produces them, while a
+broader report match eats keystrokes (`ESC[1;2R` is CPR AND Shift+F3); touch only whole reply-only
+writes (xterm.js emits each reply as its own data event, so a mixed write is a person); never close
+the gate for the session's life (a pane app's DCS-passthrough query shows up as the same `ESC[c` and
+gets exactly one answer).
+
 **A tmux client is not necessarily a watcher.** `SessionInfo.clients` is a COUNT
 (`#{session_attached}`), never a boolean, because one session can hold several: the app's painter,
 the user's own `tmux -L node-terminal attach`, a second nodeterm on the same socket, and our own

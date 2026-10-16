@@ -259,6 +259,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   from a background header: only the active SSH project is git-routable. SSH headers observe
   Source refreshes instead.
 
+- **Pty input is filtered for exactly one thing: duplicate Device Attributes answers.** Every viewer
+  of a session (browser tabs, a kanban card modal, a relay peer) answers the tmux client's DA
+  handshake, and tmux types every answer after the first into the pane. `core/da-reply-gate.ts`, in
+  `PtyManager.write`, lets one DA1/DA2 reply through per query seen on the output and drops the rest.
+  Do not widen it to "anything that looks like a terminal report": `ESC[1;2R` is both a CPR and
+  Shift+F3, and a filter that eats a keystroke is worse than the bug (see CLAUDE.md → Terminal
+  session continuity).
+
 - **A port is a node's only if its listener is in that node's process tree.** Dev-server
   discovery (`core/dev-ports.ts`) attributes ports by socket ownership and never connects to
   anything. A new consumer reads the scan, it does not add a probe. A forward
