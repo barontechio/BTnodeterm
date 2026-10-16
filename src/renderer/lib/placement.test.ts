@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  emptySpotCenter,
   freeSpot,
   placeBelowSource,
   pendingClaimBoxes,
@@ -189,5 +190,65 @@ describe('placement claims — opens that raced ahead of the render', () => {
       { projectId: 'p', id: 'b', box, at: 5 }
     ]
     expect(pruneClaims(claims, PLACEMENT_CLAIM_TTL_MS + 1).map((c) => c.id)).toEqual(['b'])
+  })
+})
+
+// Issue #1140: a node created by a shortcut / dock / palette landed wherever the unbounded ring
+// search found room — often far outside the view — and the check was made at the wrong place.
+describe('emptySpotCenter (issue #1140)', () => {
+  const size = { w: 100, h: 100 }
+  const view: Box = { x: -300, y: -200, w: 600, h: 400 }
+  const tl = (c: { x: number; y: number }) => ({ x: c.x - size.w / 2, y: c.y - size.h / 2 })
+  const overlaps = (p: { x: number; y: number }, b: Box) =>
+    p.x < b.x + b.w && p.x + size.w > b.x && p.y < b.y + b.h && p.y + size.h > b.y
+  const insideView = (p: { x: number; y: number }) =>
+    p.x >= view.x && p.y >= view.y && p.x + size.w <= view.x + view.w && p.y + size.h <= view.y + view.h
+
+  it('returns the view centre when it is free', () => {
+    expect(emptySpotCenter([], view, { x: 0, y: 0 }, size)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('checks the CENTRED box the factory will place, not a box hanging off the centre', () => {
+    // Overlaps the centred node (-50..50) but not a box whose top-left is the centre (0..100).
+    const box: Box = { x: -120, y: -120, w: 80, h: 80 }
+    const c = emptySpotCenter([box], view, { x: 0, y: 0 }, size)
+    expect(overlaps(tl(c), box)).toBe(false)
+  })
+
+  it('stays inside the view when the centre is taken', () => {
+    const box: Box = { x: -60, y: -60, w: 120, h: 120 }
+    const c = emptySpotCenter([box], view, { x: 0, y: 0 }, size)
+    expect(overlaps(tl(c), box)).toBe(false)
+    expect(insideView(tl(c))).toBe(true)
+  })
+
+  it('a full view never sends the node off screen — it takes the least-covered spot in view', () => {
+    // Everything visible is covered except a strip on the right edge.
+    const wall: Box = { x: -320, y: -220, w: 520, h: 440 }
+    const c = emptySpotCenter([wall], view, { x: 0, y: 0 }, size)
+    expect(insideView(tl(c))).toBe(true)
+    // The old unbounded search answered a clear cell outside the view; this one prefers room in it.
+    const fully: Box = { x: -10_000, y: -10_000, w: 20_000, h: 20_000 }
+    const d = emptySpotCenter([fully], view, { x: 0, y: 0 }, size)
+    expect(insideView(tl(d))).toBe(true)
+  })
+
+  it('two nodes made in a row on a full view do not land exactly on top of each other', () => {
+    const wall: Box = { x: -320, y: -220, w: 640, h: 440 }
+    const first = tl(emptySpotCenter([wall], view, { x: 0, y: 0 }, size))
+    const second = tl(emptySpotCenter([wall, { ...first, ...size }], view, { x: 0, y: 0 }, size))
+    expect(second).not.toEqual(first)
+    expect(insideView(second)).toBe(true)
+  })
+
+  it('a view smaller than the node keeps the node centred on it', () => {
+    const tiny: Box = { x: -20, y: -20, w: 40, h: 40 }
+    expect(emptySpotCenter([{ x: -50, y: -50, w: 100, h: 100 }], tiny, { x: 0, y: 0 }, size)).toEqual({ x: 0, y: 0 })
+  })
+
+  it('without a view it is the old unbounded search, in centre terms', () => {
+    const box: Box = { x: -50, y: -50, w: 100, h: 100 }
+    const c = emptySpotCenter([box], undefined, { x: 0, y: 0 }, size)
+    expect(overlaps(tl(c), box)).toBe(false)
   })
 })

@@ -401,7 +401,8 @@ import {
   projectTargetFlagRefusal,
   resolveProjectTarget,
   clearAttachConsent,
-  folderName
+  folderName,
+  rootPositionIn
 } from '../lib/projectOpen'
 import {
   absolutePosition,
@@ -684,6 +685,7 @@ import {
 } from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'
 import {
+  emptySpotCenter,
   freeSpot,
   placeBelowSource,
   pendingClaimBoxes,
@@ -5185,33 +5187,50 @@ export function Canvas() {
   }, [screenToFlowPosition])
 
   /**
-   * A non-overlapping drop point for a NODE created without a cursor (dock / palette / kanban
-   * board) — otherwise every one lands on the view center and piles into a stack you only discover
-   * when you switch back to the canvas. Returns undefined only if the view isn't measured yet.
+   * A non-overlapping drop point for a NODE created without a cursor (dock / palette / keyboard
+   * shortcut / kanban board) — otherwise every one lands on the view center and piles into a stack
+   * you only discover when you switch back to the canvas. Returns undefined only if the view isn't
+   * measured yet.
+   *
+   * Issue #1140: a node's answer stays INSIDE the visible canvas (minus pinned panels, the controls
+   * and the dock — `measureMaximizeInsets`), so a node made from a shortcut never lands where the
+   * user cannot see it; a full view gets the least-covered visible spot instead. The camera is not
+   * moved.
    */
   // `box` places something other than a default-sized node — a worktree frame, say. For a box the
-  // answer is a TOP-LEFT that centres it on the view (`freeSpot` answers top-lefts); without one
-  // the historical point is returned unchanged.
+  // answer is a TOP-LEFT that centres it on the view (`freeSpot` answers top-lefts); without one it
+  // is a CENTRE, which is what the node factories take (`placeAt` subtracts half the size) — the
+  // search itself is made on the centred box the factory will place (`emptySpotCenter`).
   const emptyNodePos = useCallback((box?: { w: number; h: number }): { x: number; y: number } | undefined => {
+    const wrapRect = flowWrapRef.current?.getBoundingClientRect()
     const center = viewCenter()
-    if (!center) return undefined
-    const preferred = box ? { x: center.x - box.w / 2, y: center.y - box.h / 2 } : center
-    const s = useSettings.getState().settings
-    const w = s.defaultNodeWidth || 640
-    const h = s.defaultNodeHeight || 440
+    if (!center || !wrapRect) return undefined
+    const insets = measureMaximizeInsets(wrapRect)
+    const a = screenToFlowPosition({ x: wrapRect.left + insets.left, y: wrapRect.top + (insets.top ?? 0) })
+    const b = screenToFlowPosition({ x: wrapRect.right - insets.right, y: wrapRect.bottom - (insets.bottom ?? 0) })
+    const view = b.x > a.x && b.y > a.y ? { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y } : undefined
+    const term = terminalNodeSize()
+    const w = term.width
+    const h = term.height
     // Real, laid-out nodes only (skip ephemeral subagent/loop cards, which aren't persisted and
-    // vanish on their own — see useAgentNodes).
+    // vanish on their own — see useAgentNodes). Positions in ROOT space: a group child's position
+    // is relative to its frame.
     const ephemeral = new Set(Object.keys(useAgentNodes.getState().byId))
-    const boxes = nodesRef.current
-      .filter((n) => !ephemeral.has(n.id))
-      .map((n) => ({
-        x: n.position.x,
-        y: n.position.y,
+    const live = nodesRef.current.filter((n) => !ephemeral.has(n.id))
+    const boxes = live.map((n) => {
+      const at = rootPositionIn(live, n)
+      return {
+        x: at.x,
+        y: at.y,
         w: (n.measured?.width as number | undefined) ?? (n.width as number | undefined) ?? w,
         h: (n.measured?.height as number | undefined) ?? (n.height as number | undefined) ?? h
-      }))
-    return freeSpot(boxes, preferred, box ?? { w, h })
-  }, [viewCenter])
+      }
+    })
+    // A frame keeps the unbounded search: drawn over existing nodes it would read as containing
+    // them, which is worse than landing beside the view.
+    if (box) return freeSpot(boxes, { x: center.x - box.w / 2, y: center.y - box.h / 2 }, box)
+    return emptySpotCenter(boxes, view, center, { w, h })
+  }, [viewCenter, screenToFlowPosition])
 
   /** The checkout a Source Control action refers to. The panel hands its ACTIVE SCOPE's cwd
    *  (main checkout or a bound worktree) with every relative path, so the diff/agent node it opens

@@ -20,16 +20,25 @@ export interface Box {
  * The nearest position (to `preferred`) where a `size` box does not overlap any of `existing`,
  * searched outward on a grid stepped by the node size. Returns `preferred` unchanged when it's
  * already clear (so a lone node / an empty canvas keeps the centered placement). Pure + testable.
+ * `preferred` and the answer are TOP-LEFT corners.
  *
  * `gap` is the minimum breathing room kept between boxes. The ring search is capped so a pathological
  * canvas can never loop forever — past the cap it gives up and returns `preferred` (overlap is a far
  * lesser evil than a hang).
+ *
+ * `bounds` (issue #1140) keeps the answer inside a rectangle — the visible canvas — so a node made
+ * from a shortcut never lands somewhere the user cannot see. Inside it the search runs on a half-step
+ * grid (a view is only a few nodes wide), and when nothing in view is clear it takes the in-view
+ * spot covered LEAST, nearest first: a busy view gets a visible, partly overlapping node rather than
+ * a clear one off screen, and two made in a row do not stack exactly. A `preferred` box that does not
+ * fit inside `bounds` at all (zoomed in past the node's size) is returned unchanged.
  */
 export function freeSpot(
   existing: Box[],
   preferred: { x: number; y: number },
   size: { w: number; h: number },
-  gap = 28
+  gap = 28,
+  bounds?: Box
 ): { x: number; y: number } {
   const clear = (x: number, y: number): boolean =>
     !existing.some(
@@ -41,6 +50,36 @@ export function freeSpot(
     )
 
   if (clear(preferred.x, preferred.y)) return preferred
+
+  if (bounds) {
+    const inside = (x: number, y: number): boolean =>
+      x >= bounds.x && y >= bounds.y && x + size.w <= bounds.x + bounds.w && y + size.h <= bounds.y + bounds.h
+    if (!inside(preferred.x, preferred.y)) return preferred
+    const covered = (x: number, y: number): number =>
+      existing.reduce((sum, b) => {
+        const w = Math.min(x + size.w, b.x + b.w) - Math.max(x, b.x)
+        const h = Math.min(y + size.h, b.y + b.h) - Math.max(y, b.y)
+        return w > 0 && h > 0 ? sum + w * h : sum
+      }, 0)
+    const sx = (size.w + gap) / 2
+    const sy = (size.h + gap) / 2
+    const rings = Math.min(200, Math.ceil(Math.max(bounds.w / sx, bounds.h / sy)) + 1)
+    let best = { x: preferred.x, y: preferred.y, area: covered(preferred.x, preferred.y) }
+    for (let ring = 1; ring <= rings; ring++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue // perimeter only
+          const x = preferred.x + dx * sx
+          const y = preferred.y + dy * sy
+          if (!inside(x, y)) continue
+          if (clear(x, y)) return { x, y }
+          const area = covered(x, y)
+          if (area < best.area) best = { x, y, area }
+        }
+      }
+    }
+    return { x: best.x, y: best.y }
+  }
 
   const stepX = size.w + gap
   const stepY = size.h + gap
@@ -57,6 +96,24 @@ export function freeSpot(
     }
   }
   return preferred
+}
+
+/**
+ * `freeSpot` in the terms the node factories speak: a CENTRE in, a CENTRE out (`placeAt` turns a
+ * centre into the top-left by subtracting half the size). Issue #1140: `emptyNodePos` used to hand
+ * the view centre to `freeSpot` AS a top-left and then give the answer to the factories AS a centre,
+ * so every overlap check was made half a node away from where the node actually landed.
+ */
+export function emptySpotCenter(
+  existing: Box[],
+  view: Box | undefined,
+  center: { x: number; y: number },
+  size: { w: number; h: number },
+  gap = 28
+): { x: number; y: number } {
+  const topLeft = { x: center.x - size.w / 2, y: center.y - size.h / 2 }
+  const at = freeSpot(existing, topLeft, size, gap, view)
+  return at === topLeft ? center : { x: at.x + size.w / 2, y: at.y + size.h / 2 }
 }
 
 /**
