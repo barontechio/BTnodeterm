@@ -4631,8 +4631,18 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   (`carryLocalNodeExec`); the reflector forwards one only between OWNER clients
   (`CorePlatform.isOwnerClient`: the app window, a cookie-authenticated Server Edition tab — never a
   relay peer), stamped `origin: 'core'`, which a client cannot supply and a relay tab ignores. That
-  owner→owner leg is load-bearing: it is how two Server Edition tabs agree a launch was claimed, and
-  how a headless delivery's clear reaches the browser, so nothing types it twice. Our OWN writes
+  owner→owner leg is load-bearing: it is how two Server Edition tabs converge on a launch's
+  attempted/cleared state, and how a headless delivery's clear reaches the browser. **It is NOT the
+  exactly-once guarantee** — it lands only after a publish → reflector → apply hop, and two tabs on
+  one project both claimed a fresh node's launch inside that window and both typed it (#1173). The
+  claim therefore asks the CORE first: `commitLaunchAttempt`'s `claim` → `workspace.claimLaunch`
+  (`workspace:claim-launch`, `core/launch-claim-ledger.ts`, registered by `WorkspaceStore` in both
+  shells, host-only). Keyed (node id, command) → the claiming CLIENT: the first claimant owns it, a
+  later AUTOMATIC claim from another client answers `elsewhere` and types nothing and marks
+  nothing (the writer's outcome `elsewhere` is not a failure; the canvas loop keeps it in flight),
+  the owner asking again is still the owner, and a manual Run now is never refused. In memory and
+  bounded (4096): a process restart forgets it, and the persisted `attempted` mark is the barrier
+  then. Desktop has one renderer, so its single claimer always wins. Our OWN writes
   into a background project go through `applyOwnNodeMutation` (unstripped — a cold open keeps its
   launch, a patch to `undefined` clears it); `applyNodeMutation` is the peer path (the one reducer,
   `applyCanvasOp`). On a Server Edition that governs a shared project, the canvas authority hears

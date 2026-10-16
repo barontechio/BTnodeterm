@@ -356,6 +356,10 @@ export function buildRealApi(
   const workspace: WorkspaceApi = {
     load: () => client.request(IPC.workspaceLoad) as Promise<Workspace>,
     save: (ws: Workspace, opts?: WorkspaceSaveOptions) => client.request(IPC.workspaceSave, ws, opts) as Promise<void>,
+    // REAL: core's WorkspaceStore registers it, and it is the whole point on this surface — two
+    // browser tabs on one project must not both type a launch (#1173).
+    claimLaunch: (nodeId: string, command: string, manual: boolean) =>
+      client.request(IPC.workspaceClaimLaunch, nodeId, command, manual) as Promise<'claimed' | 'elsewhere'>,
     // REAL: WorkspaceStore (core) registers IPC.workspaceProbeFolder, so the server serves it.
     // Stubbing it to `null` meant "Open folder…" on a repo that already carries a committed
     // .nodeterm/project.json concluded there was no project there, created an EMPTY one, and the

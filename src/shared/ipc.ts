@@ -459,6 +459,9 @@ export const IPC = {
   ptyResync: (sessionId: string) => `pty:resync:${sessionId}`,
   workspaceLoad: 'workspace:load',
   workspaceSave: 'workspace:save',
+  /** Exactly-once claim of a renderer-delivered held launch across every viewer of a project
+   *  (core/launch-claim-ledger.ts, issue #1173). Host-only. */
+  workspaceClaimLaunch: 'workspace:claim-launch',
   workspaceProbeFolder: 'workspace:probe-folder',
   /** Is a folder's .nodeterm/project.json present / absent / unreadable — the distinction
    *  `probeFolder`'s null collapses. Recovery of an `unavailable` project needs it (issue #385). */

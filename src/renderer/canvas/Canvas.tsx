@@ -2626,6 +2626,13 @@ export function Canvas() {
           launchInFlight.current.delete(f.id)
           return
         }
+        if (outcome === 'elsewhere') {
+          // Another viewer of this project (a second Server Edition tab) claimed this launch and is
+          // typing it (#1173). Not a failure, and nothing to retry: keep it in flight here so the
+          // loop does not ask again, and let that viewer's attempted/cleared state arrive by sync.
+          clearStallTimer(f.id)
+          return
+        }
         // The verified writer already exhausted its bounded echo repair. A failed launch
         // needs an explicit retry; unrelated hooks and remounts must never inject it later.
         setNodes((ns) => ns.map((n) => n.id === f.id && n.data.pendingLaunch
@@ -3624,6 +3631,15 @@ export function Canvas() {
       pending: node.data.pendingLaunch,
       command,
       manual,
+      // Exactly once across every viewer of this project (#1173): every owner tab runs this loop
+      // against its OWN copy of the node, so the decision belongs to the core that owns the shell.
+      claim: api.workspace.claimLaunch
+        ? () => api.workspace.claimLaunch!(nodeId, command, manual)
+        : undefined,
+      // The claim is a round trip: decide against the node as it stands when it answers.
+      current: () => canCommitCanvas(nodesProjectIdRef.current, projectId)
+        ? nodesRef.current.find((n) => n.id === nodeId)?.data.pendingLaunch
+        : undefined,
       update: (pendingLaunch) => {
         const next = nodesRef.current.map((n) => n.id === nodeId
           ? { ...n, data: { ...n.data, pendingLaunch } } : n)

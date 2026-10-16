@@ -82,6 +82,12 @@ through the launch writer (`createLaunchWriter`) so a Windows-native pane can ex
 `data.launchIntent` instead (`pty:execute-launch`). If you add a launch input the core planner does
 not model, exclude it in `heldLaunchIntentFor`, or the Windows pane launches without it.
 
+**Held launches are claimed by the core, not by a tab.** Every viewer of a project runs the
+canvas launch loop against its own copy of the nodes, so a per-tab check cannot stop two Server
+Edition tabs from typing the same launch (#1173). A launch path must claim through
+`commitLaunchAttempt` with its `claim` (`workspace.claimLaunch`) and treat the `elsewhere`
+outcome as "another viewer is typing it": no input, no state change, no failure.
+
 Claude usage identity is scoped to the same config directory as its credentials. Read organization
 metadata even when credentials already include an email, and degrade to the email-only row when
 metadata cannot be read. Managed usage must never fall back to an unscoped system Keychain token:

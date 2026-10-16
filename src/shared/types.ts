@@ -1441,6 +1441,13 @@ export interface WorkspaceApi {
    *  round trips (the mirror is owed and rides the next ordinary save). For a write-ahead barrier
    *  that must be durable here but must not wait on a remote host — see WorkspaceStore.save. */
   save(workspace: Workspace, opts?: WorkspaceSaveOptions): Promise<void>
+  /**
+   * Ask the core to claim one held launch (node id + command) before any viewer types it
+   * (issue #1173): `claimed` = this viewer delivers it, `elsewhere` = another viewer of the same
+   * project already claimed it, type nothing. A manual Run now is never refused. Optional: a
+   * client without it (an older core, a test double) keeps the per-viewer barrier alone.
+   */
+  claimLaunch?(nodeId: string, command: string, manual: boolean): Promise<'claimed' | 'elsewhere'>
   /** Reads <folder>/.nodeterm/project.json and returns the assembled Project (cwd resolved), or null. */
   probeFolder(folder: string): Promise<Project | null>
   /** Whether <folder>/.nodeterm/project.json is `present`, definitely `absent`, or `unreadable`

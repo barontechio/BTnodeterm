@@ -303,6 +303,9 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.ptyExecuteLaunch,
   // Workspace, project settings and setup: writes, probes of arbitrary folders, trust, scripts.
   IPC.workspaceSave,
+  // Host-only for every peer (shared/host-control.ts): a peer's claim would make every viewer of
+  // the host stand down from a launch (#1173). A relay tab never sends it.
+  IPC.workspaceClaimLaunch,
   IPC.workspaceProbeFolder,
   IPC.workspaceProjectFileState,
   IPC.projectSettingsRead,
