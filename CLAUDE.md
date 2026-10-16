@@ -3406,6 +3406,36 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `questions` (a held AskUserQuestion's exact question texts, from the one `readQuestions`) is what
   the ⌘M answer controls match their card by — absent = unreadable input = no controls. Desktop local + SSH, Server Edition local;
   relay unchanged; phone keeps `allow`/`deny` (its plan approve now works via the script mapping).
+- **A hook event's node id is INHERITED, so only the pane's foreground claude speaks for a node**
+  (issues #1112, #1153; `core/agents/claude-pane-origin.ts`). `NODETERM_NODE_ID` (and the per-node
+  token, looked up by that id) reaches every process the node's claude starts: a background script's
+  `claude -p` took over the node's session id, model, meter and context-link transcript (#1112), and
+  Claude's daemon (`claude daemon run` → `--bg-pty-host` → the `--fork-session` claude) posted a
+  fork's hooks as the node that spawned it, so `/rename` retitled the wrong node (#1153). The rule is
+  keyed on the PROCESS, not the session: the managed claude script runs one
+  `ps -o stat= -o tty= -p $CLAUDE_PID` WHILE claude waits on the hook and posts
+  `nodeterm_claude_{pid,fg,tty}`; the hook server sends every claude event through a per-node
+  ordered gate BEFORE either listener, and drops it when the claude is not in the foreground group
+  of any terminal, or is foreground on a tty that is not the node's pane tty (`PtyManager.paneOwner`,
+  wired in BOTH shells by `wireClaudePaneOrigin`, cached 5 min, re-read on disagreement at most every
+  10 s, forgotten on destroy/recycle). MEASURED on Claude Code 2.1.301 in a private tmux server:
+  `CLAUDE_PID` is in every hook's env (and in the binary from at least 2.1.220, absent from 2.1.200);
+  the pane's interactive claude has `+` on the pane tty; a `claude -p` run from claude's Bash tool
+  (a setsid'd shell) has tty `?`; a `&` job of the pane shell has no `+`. Every legitimate change —
+  `/clear`, `/resume`, `/compact`, Branch, cold-restore resume, in-place restart, a new `claude`
+  after the old one quit — happens in the pane's foreground and needs no rule of its own; a claude
+  that died without `SessionEnd` blocks nothing (there is no binding to release). Rejected:
+  session-source allowlists (a detached `claude -p --resume` also says `resume`; a missing
+  `SessionEnd` locks the next session out — both found in the #1112 prototype) and "first session
+  wins until its pid dies" (needs a remote liveness probe, and a daemon fork outliving its spawner
+  would take the node over). **Fails OPEN** wherever a fact is missing — no `CLAUDE_PID` (older
+  claude), Git Bash / BusyBox `ps`, a pane tty this core cannot read (Zellij, plain-shell fallback,
+  an SSH node with no live client here), a probe over 2 s — because dropping the pane's OWN events
+  strands a node on RUNNING. The script also never arms the approval wait for a non-foreground
+  claude. Known residuals: a claude wrapped in its own pty inside the pane (`script`, `unbuffer`) is
+  foreground on that pty and reads as foreign; a node whose TUI attaches to a daemon-hosted session
+  gets no hook events at all (they were never posted under its id). Mobile: N/A (the mirror simply
+  stops receiving foreign events).
 - **Per-node hook identity** (`src/core/agents/node-auth-*.ts`, `node-token-*.ts`,
   `node-identity-policy.ts` — full write-up in **`docs/node-identity.md`**) — the shared bearer proves
   "a session on this machine", never *which* session, so every node also gets a capability derived

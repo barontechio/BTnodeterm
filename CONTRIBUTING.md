@@ -321,6 +321,14 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   must pass `isBoundedAnswerContent` or it is silently ignored. Answer content never goes on an argv.
   See `docs/hook-reply-approvals.md`.
 
+- **`NODETERM_NODE_ID` is inherited, so a hook event's node id is not proof it is that node's
+  session.** A detached `claude -p` started from a node, or Claude's own daemon hosting a fork,
+  posts hooks under the node's id (and its token). Claude events pass `core/agents/claude-pane-origin.ts`
+  in the hook server before ANY listener: the managed script reports `$CLAUDE_PID`'s foreground
+  flag and tty, and only the pane's foreground claude speaks for the node. Do not add a listener
+  that runs before that gate, and do not "fix" a stuck node by loosening it: missing facts already
+  fail open. Both shells call `wireClaudePaneOrigin` (pinned by `hook-verified-parity.test.ts`).
+
 - **Never call the user's machine a Mac in user-visible copy.** Use `thisMachine()` /
   `thisMachineCap()` / `machineNoun()` from `src/renderer/lib/machineName.ts` — "this Mac" on
   macOS, "this PC" on Windows, "this computer" elsewhere and in any Server Edition browser tab
