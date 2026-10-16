@@ -85,30 +85,30 @@ export const FRESH_INSTALL_MARKER = 'integration-consent-fresh-install'
  */
 export function detectExistingIntegrations(userDataDir: string, home: string = os.homedir()): boolean {
   const marker = path.join(userDataDir, FRESH_INSTALL_MARKER)
-  if (existsSync(marker)) return false
   let evidence = false
   try {
     evidence = readdirSync(agentHooksDir(home)).length > 0
   } catch {
     evidence = false
   }
-  if (!evidence) {
-    try {
-      mkdirSync(userDataDir, { recursive: true })
-      writeFileSync(
-        marker,
-        `First boot ${new Date().toISOString()}: no earlier nodeterm agent integration was found, so ` +
-          'this install is never grandfathered into one. Agent integrations are enabled only from ' +
-          'the first-run question or Settings → Agents (issue #1149).\n',
-        { flag: 'wx', mode: 0o600 }
-      )
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-        console.warn('[integrations] could not record the fresh-install marker', error)
-      }
+  if (evidence) return !existsSync(marker)
+  // No evidence: the answer is false whether or not an earlier boot already left the marker, so the
+  // exclusive create is the only check needed (an existing marker is EEXIST).
+  try {
+    mkdirSync(userDataDir, { recursive: true })
+    writeFileSync(
+      marker,
+      `First boot ${new Date().toISOString()}: no earlier nodeterm agent integration was found, so ` +
+        'this install is never grandfathered into one. Agent integrations are enabled only from ' +
+        'the first-run question or Settings → Agents (issue #1149).\n',
+      { flag: 'wx', mode: 0o600 }
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      console.warn('[integrations] could not record the fresh-install marker', error)
     }
   }
-  return evidence
+  return false
 }
 
 /**
