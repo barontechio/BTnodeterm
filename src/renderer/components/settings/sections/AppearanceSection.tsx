@@ -119,7 +119,7 @@ const ROWS = {
   },
   headerButtons: {
     title: 'Terminal header buttons',
-    keywords: ['terminal', 'header', 'buttons', 'icons', 'hide']
+    keywords: ['terminal', 'header', 'buttons', 'icons', 'hide', 'context', 'meter', 'model', 'usage']
   },
   reset: {
     title: 'Reset appearance',
@@ -634,7 +634,8 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
         <div>
           <h4 className="text-[13px] font-medium text-text">Terminal header buttons</h4>
           <p className="mt-1 text-[13px] leading-relaxed text-muted">
-            Which icon buttons the terminal node header shows. Close and the terminal Search
+            Which icon buttons the terminal node header shows. The model &amp; context meter
+            hides on kanban cards and in the card modal too. Close and the terminal Search
             button are always shown, as are the right-click menu's destructive and recovery
             actions (Delete, Restart agent).
           </p>
