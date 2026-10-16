@@ -756,7 +756,7 @@ import type {
   TranscriptHit
 } from '@shared/types'
 import type { KanbanCreateChoice, KanbanSession } from '../components/kanban/KanbanView'
-import { assignNode, assignedTo, defaultKanban, labelsForCard, migrateProjectTags, resolveColumnRef, unassigned } from '../lib/kanban'
+import { assignNode, defaultKanban, labelsForCard, migrateProjectTags, resolveColumnRef } from '../lib/kanban'
 import { registerWorkspaceDirty } from '../state/workspaceDirty'
 import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
@@ -929,6 +929,7 @@ import {
 import type { CodexAccount } from '@shared/codex-account'
 import { useSystemCodexAccount } from '../state/systemCodexAccount'
 import { kanbanSessionsFrom, toKanbanSession } from './toKanbanSession'
+import { boardVerbReply } from '../lib/boardVerb'
 import type { TeamStation } from '../lib/teamProgress'
 import { canvasTeamStations, useTeamStations } from '../state/teamStations'
 import { applyPullAutoMove } from '../lib/pullAutoMove'
@@ -13192,6 +13193,38 @@ export function Canvas() {
           return
         }
       }
+      // #1179: `board --project <id>` reads THAT project's board. Main has already gated the id (own
+      // or granted, PROJECT_TARGETABLE_VERBS); this resolves it with the same belt as `run`. It used
+      // to fall through and answer with the caller's own board, silently about the wrong project.
+      // Read-only: the board is answered from the target's nodes (live when it is on screen, else
+      // its serialized ones) and never moves the user's view.
+      if (verb === 'board' && args.project !== undefined) {
+        const boardStore = useProjects.getState()
+        const boardResolved = resolveProjectTarget({
+          targetId: args.project,
+          sourceNodeId,
+          liveNodes: nodesRef.current,
+          projects: boardStore.projects,
+          activeProjectId: boardStore.activeProjectId,
+          sshVerbWord: 'opening'
+        })
+        if (boardResolved.kind === 'refused') {
+          reply({ ok: false, error: boardResolved.error })
+          return
+        }
+        if (boardResolved.kind === 'target') {
+          const target = boardResolved.project
+          const targetNodes =
+            target.id === boardStore.activeProjectId && nodesProjectIdRef.current === target.id
+              ? (nodesRef.current as CanvasNode[])
+              : nodeStatesToFlow(target.nodes)
+          const sessions = targetNodes
+            .map(toKanbanSession)
+            .filter((s): s is KanbanSession => s !== null)
+          reply({ ok: true, ...boardVerbReply(target.kanban, sessions, target.name) })
+          return
+        }
+      }
       // ── end of the early-handled (store-answered) verbs ─────────────────────────────────────
 
       // Which canvas answers? React Flow holds only the ACTIVE project's nodes, but every OTHER
@@ -15548,56 +15581,19 @@ export function Canvas() {
             return
           }
           case 'board': {
-            // Read-only snapshot of the CALLER'S project's kanban board: columns + the session
-            // cards filed in each, plus the virtual Ungrouped column. The board's cards ARE the
-            // canvas session nodes (toKanbanSession), derived from `ctlNodes()` — the board file
-            // only stores column assignments, so a session with no/dangling assignment sits
-            // Ungrouped.
+            // Read-only snapshot of the CALLER'S project's kanban board (lib/boardVerb): columns +
+            // the session cards filed in each, plus the virtual Ungrouped column. The board's cards
+            // ARE the canvas session nodes (toKanbanSession), derived from `ctlNodes()`.
+            // `board --project <other>` never reaches here — it is answered before the routing.
             //
             // `ctlProject`, not `activeProjectId`: off canvas those are two different projects, and
             // reading the active one would answer a background agent's `board` with whatever the
             // human happens to be looking at. On screen they are the same project, which is why
             // the old read was never wrong in practice — the travel had already made it true.
-            const board = ctlProject?.kanban
             const sessions = ctlNodes()
               .map(toKanbanSession)
               .filter((s): s is KanbanSession => s !== null)
-            const titleOf = new Map(sessions.map((s) => [s.id, s.title || 'Untitled']))
-            const sessionIds = sessions.map((s) => s.id)
-            if (!board) {
-              // No board yet (lazy default not written) — every session is Ungrouped.
-              const lines = [
-                'Kanban board: (no columns yet — default To Do / In Progress / Done appears on first edit)',
-                `Ungrouped (${sessionIds.length}):`,
-                ...sessionIds.map((id) => `  - ${titleOf.get(id)} (id: ${id})`)
-              ]
-              reply({
-                ok: true,
-                message: lines.join('\n'),
-                result: { columns: [], ungrouped: sessionIds }
-              })
-              return
-            }
-            const columnsOut = board.columns.map((c) => {
-              const ids = assignedTo(board, c.id).filter((id) => titleOf.has(id))
-              return { id: c.id, title: c.title, cards: ids }
-            })
-            const ungroupedIds = unassigned(board, sessionIds)
-            const fmt = (ids: string[]) => ids.map((id) => `  - ${titleOf.get(id)} (id: ${id})`)
-            const lines = [
-              'Kanban board:',
-              ...columnsOut.flatMap((c) => [
-                `${c.title} (${c.cards.length}) [column id: ${c.id}]:`,
-                ...fmt(c.cards)
-              ]),
-              `Ungrouped (${ungroupedIds.length}):`,
-              ...fmt(ungroupedIds)
-            ]
-            reply({
-              ok: true,
-              message: lines.join('\n'),
-              result: { columns: columnsOut, ungrouped: ungroupedIds }
-            })
+            reply({ ok: true, ...boardVerbReply(ctlProject?.kanban, sessions) })
             return
           }
           case 'assign': {

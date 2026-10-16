@@ -1669,6 +1669,24 @@ describe('the read-only GitHub lane verbs (issues, prs) in both agent-facing bod
   })
 })
 
+describe('board --project (issue #1179)', () => {
+  const bodies: [string, string][] = [
+    ['skill', buildCanvasSkillBody('/x/shim.sh')],
+    ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+  ]
+
+  it('board is --project-targetable, so main gates the id (own or granted)', () => {
+    expect(PROJECT_TARGETABLE_VERBS.has('board')).toBe(true)
+  })
+
+  it('no body still claims board acts on the CURRENTLY OPEN project', () => {
+    for (const [name, body] of bodies) {
+      expect(body, name).not.toMatch(/CURRENTLY OPEN project/)
+      expect(body, name).toContain('`board [--project <id>]`')
+    }
+  })
+})
+
 describe('open-project --name limit in the agent-facing text (issue #940)', () => {
   it('both bodies name the limit, rendered from PROJECT_NAME_MAX', () => {
     const sentence = `\`--name\` over ${PROJECT_NAME_MAX} characters`
