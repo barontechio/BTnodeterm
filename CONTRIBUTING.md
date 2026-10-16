@@ -982,6 +982,13 @@ record path into a remote host is both wrong and a local-layout leak. A guard te
 (`remote-shim-neutrality.guard.test.ts`), because the leak is silent — the remote shim keeps
 working, and nothing goes red.
 
+**A Codex hook is identified by its payload, not its env.** Hooks the shared app-server runs are
+the daemon's children: they carry the daemon's env (often a stale pane's `NODETERM_NODE_ID`) and no
+`CODEX_THREAD_ID`. The codex hook script reads the payload's leading `session_id` before the prelude
+and lets that thread's record outrank an inherited id; only a pane marked `NODETERM_CODEX_PLAIN=1`
+(the launcher's in-process exits) keeps its own. Do not move the codex payload read back below the
+prelude (`codex-shared-daemon-hook.test.ts` runs the real script against the real hook server).
+
 **That prelude may not decide anything a pane already decided.** It exports the agent id and the
 canvas-control grant the ownership RECORD carries, never constants. They used to be hardcoded
 (`codex`, granted) and both are `buildPtyEnv`'s answers: a custom agent inheriting the codex harness

@@ -960,8 +960,10 @@ Lifecycle, by intent:
     plain terminal, or by an agent through `open-terminal --cmd codex` / `write` — carries that
     node's `NODETERM_NODE_ID` and, on 0.157+, can still start the account's daemon with it; managed
     threads' tool shells then keep the leaked id (the prelude skips a set one). Changing the prelude
-    to prefer the thread record over a set id was rejected: a bind-refused fallback pane legitimately
-    runs a thread another node's record names. (2) A launch-command override or custom `launchCmd`
+    to prefer the thread record over a set id was rejected FOR TOOL SHELLS: a bind-refused fallback
+    pane legitimately runs a thread another node's record names. HOOKS are different (#1175, below):
+    their payload names the event's own thread, so the codex hook script lets that thread's record
+    outrank an inherited id unless the pane is marked `NODETERM_CODEX_PLAIN=1`. (2) A launch-command override or custom `launchCmd`
     that runs a DIFFERENT codex than PATH's (`npx @openai/codex@0.148.0`) is given the flag from
     PATH's probe and dies on it; the fix there is the user's (drop the pin or add the flag to their
     own command) — we cannot probe an arbitrary command line. (3) The Windows argv planner
@@ -3416,6 +3418,23 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
     layout by construction on all three surfaces) and then the well-known data dirs; it is monotone
     — advertised dir first, keyed by node-id filename in every candidate, and a foreign instance's
     dir yields a foreign `kid` = `legacy` = exactly what presenting nothing already gave.
+  - **A Codex HOOK under the shared app-server is identified by its PAYLOAD, not its env** (#1150,
+    #1175). MEASURED on codex-cli 0.162.0 (private CODEX_HOME + tmux socket, a hook dumping env and
+    stdin): a hook process is the DAEMON's child, carries the daemon's env and NEVER
+    `CODEX_THREAD_ID` (only tool shells get that), and its stdin starts `{"session_id":"<thread>"`.
+    So a scrubbed daemon ran every managed node's hooks with no node id (silent exit, #1150), and a
+    daemon a plain `codex` pane started ran them under THAT pane's long-gone `NODETERM_NODE_ID`
+    (#1175). The codex managed script (local only — remote scripts carry no prelude) now reads stdin
+    FIRST, takes the LEADING `session_id` with builtins (anchored, so a nested one in tool input
+    never matches), and hands it to the prelude (`hookPayloadThread`), where a record for that thread
+    wins over an INHERITED node id and the stale endpoint vars are unset before the record's
+    endpoint file is sourced. The one exception is a pane our launcher ran in-process
+    (`nt_exec_plain` exports `NODETERM_CODEX_PLAIN=1`; never on a `--remote` exit): its env is its
+    own and stands. Tool shells and both shims keep the old rule (a set id is never touched). The
+    event is still verified against the bound node's 0600 token, so a forged payload buys nothing a
+    same-user process could not already do. Residuals: a node launched with a bare `codex` (shared
+    identity off) whose thread has ANOTHER node's record reports as that node; and a codex typed
+    inside a marked plain pane's tool shell starts a daemon that carries the marker.
   - **Every LOCAL generated sh client recovers shared-Codex identity before its env gate.** A tool
     shell forked by the account-scoped app-server carries `CODEX_THREAD_ID`, not the pane's
     `NODETERM_*`. Managed hooks, local `nodeterm.sh`, and local `context.sh` therefore prepend
