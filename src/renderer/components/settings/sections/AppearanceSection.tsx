@@ -1,3 +1,4 @@
+import { CANVAS_BACKING_MAX, CANVAS_BACKING_MIN, resolveCanvasBacking } from '@shared/canvas-backing'
 import { useEffect, useState } from 'react'
 import { useSettings } from '../../../state/settings'
 import { useWallpaperBackgroundFor } from '../../../state/wallpaper'
@@ -69,6 +70,14 @@ const ROWS = {
   tabBarHeight: {
     title: 'Tab bar height',
     keywords: ['tab', 'bar', 'height', 'strip', 'top', 'title bar', 'thickness', 'compact', 'dense']
+  },
+  stickyNoteBacking: {
+    title: 'Sticky note background',
+    keywords: ['sticky', 'note', 'notes', 'transparency', 'transparent', 'opacity', 'opaque', 'solid', 'see-through', 'background', 'readability']
+  },
+  groupFrameBacking: {
+    title: 'Group frame background',
+    keywords: ['group', 'frame', 'frames', 'transparency', 'transparent', 'opacity', 'opaque', 'solid', 'see-through', 'background']
   },
   markdownFont: {
     title: 'Markdown font',
@@ -243,6 +252,37 @@ function TabBarHeightRow(): React.JSX.Element {
             onChange={(v) => update({ tabBarHeight: resolveTabBarHeight(v) })}
           />
           <span style={{ opacity: 0.6 }}>px</span>
+        </div>
+      }
+    />
+  )
+}
+
+/** How solid a sticky note / group frame is behind its colour tint (issue #1113). 0 = the
+ *  original see-through look; the tint itself never changes. */
+function CanvasBackingRow({ kind }: { kind: 'stickyNoteBacking' | 'groupFrameBacking' }): React.JSX.Element {
+  const value = useSettings((s) => s.settings[kind])
+  const update = useSettings((s) => s.update)
+  const sticky = kind === 'stickyNoteBacking'
+  const label = sticky ? 'Sticky note background' : 'Group frame background'
+  return (
+    <FieldRow
+      label={label}
+      htmlFor={kind}
+      description={sticky
+        ? `How much of what lies behind a sticky note shows through it: 0% is see-through (default), 100% is solid. The note keeps its colour either way.`
+        : `How much of the canvas shows through a group frame: 0% is see-through (default), 100% is solid. The frame keeps its colour either way.`}
+      control={
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <NumberField
+            value={resolveCanvasBacking(value)}
+            min={CANVAS_BACKING_MIN}
+            max={CANVAS_BACKING_MAX}
+            step={10}
+            ariaLabel={label}
+            onChange={(v) => update({ [kind]: resolveCanvasBacking(v) })}
+          />
+          <span style={{ opacity: 0.6 }}>%</span>
         </div>
       }
     />
@@ -537,6 +577,12 @@ export function AppearanceSection({ isActive }: { isActive: boolean }): React.JS
       </SearchableRow>
       <SearchableRow {...ROWS.tabBarHeight}>
         <TabBarHeightRow />
+      </SearchableRow>
+      <SearchableRow {...ROWS.stickyNoteBacking}>
+        <CanvasBackingRow kind="stickyNoteBacking" />
+      </SearchableRow>
+      <SearchableRow {...ROWS.groupFrameBacking}>
+        <CanvasBackingRow kind="groupFrameBacking" />
       </SearchableRow>
       <MarkdownFontRows />
       <SearchableRow {...ROWS.accent}>

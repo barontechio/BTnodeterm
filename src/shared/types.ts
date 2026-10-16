@@ -1883,6 +1883,11 @@ export interface Settings {
    *  the default for anything that is not a finite number. Machine-local: it is one person's
    *  chrome, not a canvas fact. */
   tabBarHeight: number
+  /** How solid sticky notes / group frames are behind their colour tint, 0–100 (Settings →
+   *  Appearance, issue #1113). 0 = see-through, the original look. Hand-editable; read through
+   *  `resolveCanvasBacking` (@shared/canvas-backing). Machine-local. */
+  stickyNoteBacking: number
+  groupFrameBacking: number
   /** Font of the rendered-Markdown reading views — the ⌘M output and chat views and the editor's
    *  Markdown preview (Settings → Appearance). A CSS font stack. Hand-editable; read through
    *  `resolveMarkdownFontFamily` (@shared/markdown-font). Code inside Markdown follows the
@@ -2391,6 +2396,8 @@ export const DEFAULT_SETTINGS: Settings = {
   snapToGrid: false,
   autoAlignGrid: false,
   tabBarHeight: TABBAR_HEIGHT_PX,
+  stickyNoteBacking: 0,
+  groupFrameBacking: 0,
   markdownFontFamily: DEFAULT_MARKDOWN_FONT_FAMILY,
   markdownFontSize: DEFAULT_MARKDOWN_FONT_SIZE,
   defaultNodeWidth: 640,
