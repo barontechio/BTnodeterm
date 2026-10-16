@@ -5256,8 +5256,24 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   host whose transcripts and tmux it reads, and SSH projects are a desktop-only concept. Discovery is the `get-linked-context` skill in each consented
   context-link-capable agent's own skills dir (since #744; the old marker block
   `<!-- nodeterm:get-linked-context:start/end -->` in AGENTS.md / GEMINI.md is stripped — see
-  **Agent-integration consent**). On connect an idle-gated one-line note is injected into each endpoint
-  (claude → skill pointer; codex/gemini → inline CLI command via `contextLink.info()`).
+  **Agent-integration consent**). On connect a one-line discovery note is typed into each endpoint
+  (claude → skill pointer; codex/gemini → inline CLI command via `contextLink.info()`) — **only into
+  an idle agent at an EMPTY prompt** (issue #1144: it used to be a bare `sendText` gated only on
+  `state !== 'working'`, so it was pasted in front of the user's half-typed draft and the Enter
+  submitted both as one prompt, and a `blocked`/`waiting` pane would have had its dialog ANSWERED).
+  Two halves: the renderer's `linkNoteRefusal` (`renderer/lib/noteLink.ts` — the ⌘M composer's
+  `chatSendRefusal`: never working / waiting / blocked / CLI gone) and core's
+  `PtyManager.sendToEmptyPrompt` (`pty:send-to-empty-prompt`, both shells), which reads a STYLED
+  capture with `readClaudeComposer` (`shared/agents/claude-screen.ts`) and writes only on `empty`,
+  inside `serializePaneWrite`. MEASURED on Claude Code 2.1.301 (fixtures
+  `__fixtures__/claude/composer-capture.json`): the empty composer's placeholder is SGR 2 (dim), a
+  draft is not, shell mode (`!`) is a draft. Only dim text counts as placeholder, so a capture that
+  lost its SGR reads `draft` — the safe direction. Emptiness is therefore provable only for an agent
+  in `SCREEN_DIALOG_READABLE` (claude); **every other agent gets no note** (`unsupported`). A refused
+  note is DROPPED, not queued — the link is the capability (pull-based), the note only advertises
+  it, and a note arriving minutes later is the same unsolicited prompt at a moment nobody chose —
+  and every skipped endpoint is named in ONE info strip (`linkNoteSkippedNotice`). Residual: a
+  keystroke in the milliseconds between the capture and the write.
   (Replaced the earlier MCP-based bridge.)
   **One-way links (issue #852):** a context bridge may carry `reader` (`BridgeLink.reader`, the ONE
   endpoint allowed to read the other); absent = both read, which is every pre-#852 link, so old
@@ -5284,9 +5300,9 @@ bridges enter live state only via `appendBridgeEdges`) and the server
   which the peer then saved and published back. A malformed reader on the wire REFUSES the op
   (never dropped — dropping widens), and a rope never carries one.
   **Note links:** a sticky note can be connected to ANY terminal node (one-way, sticky →
-  terminal). On connect, agent sessions get a one-shot idle-gated push of the note text
-  (`buildNotePushMessage`, single-line, truncated at 2000 chars); plain terminals get no
-  push (sendText appends Enter — the text would execute). The note's live text also rides
+  terminal). On connect, agent sessions get a one-shot push of the note text
+  (`buildNotePushMessage`, single-line, truncated at 2000 chars) through the SAME empty-prompt gate
+  as the context-link note above (#1144); plain terminals get no push (the text would execute). The note's live text also rides
   the link file (`ContextLinkInfo.note`), so Claude reads the current text via the
   get-linked-context CLI (`summary`/`transcript` print it; `list` marks `(note)`). Pure
   edge/push/map logic in `renderer/lib/noteLink.ts`.

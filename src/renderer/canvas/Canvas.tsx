@@ -1,6 +1,5 @@
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
-import { reportTextDelivery } from '../lib/textDelivery'
 import { useDevPortScanner } from './useDevPortScanner'
 import { withCodexNoDaemon } from '@shared/agents/codex-daemon'
 import { codexApprovalCaps } from '../state/codexCli'
@@ -644,7 +643,7 @@ import { answerHostedRequest, type HostedAnswer } from '../lib/hostedOwner'
 import { headRequest, type QueuedRequest } from '../lib/hostedPendingQueue'
 import { useHostedPending } from '../state/hostedPending'
 import { hostedInfoFor, isHostedReadOnly, useHostedTeams } from '../state/hostedTeams'
-import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, isCurrentLinkDirection, linkIdsCoveredByRopes, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint } from '../lib/noteLink'
+import { appendBridgeEdges, bridgeToEdge, buildContextLinkNote, contextLinkForEdge, buildNotePushMessage, classifyLink, edgeToBridge, gainedReaders, hiddenLinkIds, isCurrentLinkDirection, linkIdsCoveredByRopes, linkNoteRefusal, linkNoteSkippedNotice, linkReadPairs, pairKey, planBridges, withLinkReader, type LinkEndpoint, type LinkNoteSkip } from '../lib/noteLink'
 import {
   deliveriesToRetire,
   launchesToFire,
@@ -4789,22 +4788,57 @@ export function Canvas() {
     [agentIdOf]
   )
 
-  // One-shot discovery note into an idle agent endpoint that can now read `otherId` (skip a node
-  // mid-turn so we don't interrupt it). Claude gets the skill pointer; codex/gemini the CLI inline.
-  const announceContextLink = useCallback(
-    async (selfId: string, otherId: string) => {
-      if (useAgentStatus.getState().byId[selfId]?.state === 'working') return
-      const title = (nodesRef.current.find((n) => n.id === otherId)?.data.title as string) || 'a linked node'
-      const { shimPath, platform: shimHost } = await window.nodeTerminal.contextLink.info()
-      // The shim named here is the LOCAL core's; an SSH node's agent runs on its host, whose skill
-      // is POSIX, so only a local node gets the host-platform wording (`.cmd` on Windows).
-      const selfData = nodesRef.current.find((n) => n.id === selfId)?.data
-      void api.pty.sendText(
-        selfId,
-        buildContextLinkNote(agentIdOf(selfId), title, shimPath, isRemoteSessionNode(selfData) ? undefined : shimHost)
-      ).then(reportTextDelivery)
+  // Type one link note into an agent node — ONLY into an idle agent at an EMPTY prompt (issue
+  // #1144: the note used to be pasted + Enter'd over the user's half-typed draft, and into a
+  // blocked/waiting pane whose dialog the Enter would answer). The state gate is the renderer's
+  // (`linkNoteRefusal`), the empty-composer proof is core's (`pty.sendToEmptyPrompt`). Answers why
+  // it was skipped, or null when it was delivered; nothing is queued for later.
+  const pushLinkNote = useCallback(
+    async (targetId: string, text: string): Promise<LinkNoteSkip | null> => {
+      const agentId = agentIdOf(targetId)
+      if (!agentId) return 'unsupported'
+      const refused = linkNoteRefusal(agentId, useAgentStatus.getState().byId[targetId] ?? {})
+      if (refused) return refused
+      try {
+        const r = await api.pty.sendToEmptyPrompt(targetId, text, capabilityAgentId(agentId))
+        return r.sent ? null : r.reason
+      } catch {
+        return 'failed'
+      }
     },
     [agentIdOf]
+  )
+
+  // One-shot discovery note into an agent endpoint that can now read `otherId`. Claude gets the
+  // skill pointer; codex/gemini the CLI inline. Answers the skip (with the node's title for the
+  // notice), or null when delivered.
+  const announceContextLink = useCallback(
+    async (selfId: string, otherId: string): Promise<{ title: string; reason: LinkNoteSkip } | null> => {
+      const selfData = nodesRef.current.find((n) => n.id === selfId)?.data
+      const selfTitle = (selfData?.title as string) || selfId
+      const title = (nodesRef.current.find((n) => n.id === otherId)?.data.title as string) || 'a linked node'
+      let note: string
+      try {
+        const { shimPath, platform: shimHost } = await window.nodeTerminal.contextLink.info()
+        // The shim named here is the LOCAL core's; an SSH node's agent runs on its host, whose skill
+        // is POSIX, so only a local node gets the host-platform wording (`.cmd` on Windows).
+        note = buildContextLinkNote(agentIdOf(selfId), title, shimPath, isRemoteSessionNode(selfData) ? undefined : shimHost)
+      } catch {
+        return { title: selfTitle, reason: 'failed' }
+      }
+      const reason = await pushLinkNote(selfId, note)
+      return reason ? { title: selfTitle, reason } : null
+    },
+    [agentIdOf, pushLinkNote]
+  )
+  // Every endpoint that was not told is named in ONE strip — a skipped note is never silent.
+  const reportLinkNotes = useCallback(
+    async (kind: 'context' | 'note', pending: Promise<{ title: string; reason: LinkNoteSkip } | null>[]) => {
+      const skips = (await Promise.all(pending)).filter((s): s is { title: string; reason: LinkNoteSkip } => s !== null)
+      const n = linkNoteSkippedNotice(kind, skips)
+      if (n) setNotice(n)
+    },
+    []
   )
 
   // Draw a link: context (two agent nodes read each other) or note (sticky text becomes
@@ -4832,28 +4866,29 @@ export function Canvas() {
         addEdge({ id: `bridge-${source}-${target}`, source, target }, es)
       )
       markDirty()
-      const status = useAgentStatus.getState().byId
       if (kind === 'context') {
-        // Discovery: tell each idle endpoint it is now linked (skip a node mid-turn so we
-        // don't interrupt it). Claude gets the skill pointer; codex/gemini get the CLI inline.
-        void announceContextLink(source, target)
-        void announceContextLink(target, source)
+        // Discovery: tell each endpoint it is now linked — only where it is idle at an empty
+        // prompt (pushLinkNote); every endpoint skipped is named in one notice.
+        void reportLinkNotes('context', [announceContextLink(source, target), announceContextLink(target, source)])
         return
       }
-      // Note link: push the note text once into the terminal — agent sessions only.
-      // pty.sendText appends Enter, so pushing into a plain shell would EXECUTE the text
-      // as a command; plain terminals get the link file but no injection.
+      // Note link: push the note text once into the terminal — agent sessions only. A plain
+      // shell would EXECUTE the text as a command; plain terminals get the link file but no
+      // injection, and say nothing (there is no agent there to tell).
       if (!agentIdOf(target)) return
-      if (status[target]?.state === 'working') return
       const sticky = nodes.find((n) => n.id === source)
       const msg = buildNotePushMessage(
         (sticky?.data.title as string) || 'Note',
         (sticky?.data.text as string) ?? '',
         agentIdOf(target)
       )
-      if (msg) void api.pty.sendText(target, msg).then(reportTextDelivery)
+      if (!msg) return
+      const targetTitle = (nodes.find((n) => n.id === target)?.data.title as string) || target
+      void reportLinkNotes('note', [
+        pushLinkNote(target, msg).then((reason) => (reason ? { title: targetTitle, reason } : null))
+      ])
     },
-    [linkEndpointOf, agentIdOf, setLinkEdges, markDirty, nodes, announceContextLink]
+    [linkEndpointOf, agentIdOf, setLinkEdges, markDirty, nodes, announceContextLink, pushLinkNote, reportLinkNotes]
   )
 
   // Right-click a context link: pick its direction (issue #852) or remove it. Direction is a
@@ -4881,9 +4916,10 @@ export function Canvas() {
           es.map((x) => (x.id === link.id ? { ...bridgeToEdge(next), selected: x.selected } : x))
         )
         markDirty()
-        for (const id of gainedReaders(current, next)) {
-          void announceContextLink(id, id === next.source ? next.target : next.source)
-        }
+        void reportLinkNotes(
+          'context',
+          gainedReaders(current, next).map((id) => announceContextLink(id, id === next.source ? next.target : next.source))
+        )
       }
       const a = titleOf(link.source)
       const b = titleOf(link.target)
@@ -4915,7 +4951,7 @@ export function Canvas() {
         ]
       })
     },
-    [setLinkEdges, markDirty, announceContextLink]
+    [setLinkEdges, markDirty, announceContextLink, reportLinkNotes]
   )
 
   // Of these ropes, the ones that are NOT live waits. A waiting rope's removal means "stop waiting

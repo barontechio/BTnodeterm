@@ -1,4 +1,4 @@
-import type { ChatPromptResult, TextDeliveryResult } from './text-delivery'
+import type { ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
 import type { PrWaitHold } from './pr-wait'
@@ -1354,6 +1354,10 @@ export interface PtyApi {
    *  (`readsScreenDialogs`), refused BEFORE anything is written when the agent's own dialog owns the
    *  keyboard (`ChatPromptBlocked`) — such dialogs fire no hook. Otherwise the `sendText` contract. */
   sendChatPrompt(persistKey: string, text: string, agentId: string): Promise<ChatPromptResult>
+  /** Type `text` + Enter ONLY into an empty composer of an agent whose composer can be read
+   *  (issue #1144 — the app's own link notes). Refused, with the reason, before anything is written
+   *  when the composer holds a draft, a dialog owns the keyboard, or emptiness cannot be proven. */
+  sendToEmptyPrompt(persistKey: string, text: string, agentId: string): Promise<EmptyPromptResult>
   /** Is tmux available on this host (else the silent plain-shell fallback), plus a suggested
    *  install command for the "tmux not found" banner. */
   tmuxStatus(): Promise<TmuxStatus>

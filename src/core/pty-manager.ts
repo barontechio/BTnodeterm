@@ -1,5 +1,5 @@
-import type { ChatPromptBlocked, ChatPromptResult, TextDeliveryResult } from '../shared/text-delivery'
-import { claudeScreenBlocksInput, readClaudeScreen } from '../shared/agents/claude-screen'
+import type { ChatPromptBlocked, ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from '../shared/text-delivery'
+import { claudeScreenBlocksInput, readClaudeComposer, readClaudeScreen } from '../shared/agents/claude-screen'
 import os from 'os'
 import fs from 'fs'
 import path from 'path'
@@ -2142,6 +2142,10 @@ export class PtyManager {
       // `agentId` crosses a process boundary: it only picks the screen reader, and a non-string
       // picks none (plain `sendText`), never a wrong one.
       this.sendChatPrompt(persistKey, text, typeof agentId === 'string' ? agentId : '')
+    )
+    platform().handle(IPC.ptySendToEmptyPrompt, (persistKey: string, text: string, agentId: unknown) =>
+      // Like `agentId` above: it only picks the composer reader, and a non-string picks none.
+      this.sendToEmptyPrompt(persistKey, text, typeof agentId === 'string' ? agentId : '')
     )
     platform().handle(IPC.ptyTmuxStatus, () => this.tmuxStatus())
     platform().handle(IPC.ptyPaneCommand, (persistKey: string) => this.paneCommand(persistKey))
@@ -6417,6 +6421,44 @@ export class PtyManager {
     // Claude Code records a multi-line paste as <pasted_content>, which its model is told may not
     // be the user's own words. Decided here from the agent id — never by a renderer-sent flag.
     return typesChatInput(agentId) ? this.sendText(persistKey, text, { typedFor: agentId }) : this.sendText(persistKey, text)
+  }
+
+  /**
+   * Write `text` + Enter into an agent's composer ONLY when that composer is empty — the app's own
+   * unsolicited notes (the context-link discovery note, a sticky note pushed over a note link).
+   * Issue #1144: those were `sendText` calls gated on nothing but `state !== 'working'`, so a note
+   * landed in front of the user's half-typed draft and the Enter submitted both as one prompt (and a
+   * `blocked`/`waiting` pane would have had its dialog ANSWERED by that Enter).
+   *
+   * Emptiness is read off a STYLED capture (`readClaudeComposer`: the placeholder is dim, a draft is
+   * not), so only an agent with a measured composer reader may receive one (`readsScreenDialogs`);
+   * every other agent answers `unsupported` and nothing is written. The read and the write run inside
+   * `serializePaneWrite`, so no other app write lands between them. What no gate closes: a keystroke
+   * the user makes in the milliseconds between the capture and the paste. A claude composer is TYPED
+   * (`typesChatInput`) and re-checks for a dialog before its Enter, like a chat prompt.
+   */
+  async sendToEmptyPrompt(persistKey: string, text: string, agentId: string): Promise<EmptyPromptResult> {
+    if (!readsScreenDialogs(agentId)) return { sent: false, reason: 'unsupported' }
+    return this.serializePaneWrite(persistKey, async (): Promise<EmptyPromptResult> => {
+      const composer = readClaudeComposer(await this.captureStyledScreen(persistKey))
+      if (composer !== 'empty') return { sent: false, reason: composer }
+      const delivered = await this.sendTextNow(
+        persistKey,
+        text,
+        typesChatInput(agentId) ? { typedFor: agentId } : undefined
+      )
+      if (delivered === true) return { sent: true }
+      return { sent: false, reason: delivered === 'pasted-not-submitted' ? 'not-submitted' : 'failed' }
+    })
+  }
+
+  /** The visible screen WITH its SGR, for `readClaudeComposer`: an ssh-project node's capture already
+   *  carries `-e` (`remoteCapturePaneArgs`), everything else is `captureSnapshot`. '' on any failure. */
+  private async captureStyledScreen(persistKey: string): Promise<string> {
+    const live = this.liveSessionForPersistKey(persistKey)
+    if (live?.sshRemote) return this.captureSession(persistKey)
+    if (live?.nativeWindowsPane) return ''
+    return this.captureSnapshot(persistKey)
   }
 
   /**

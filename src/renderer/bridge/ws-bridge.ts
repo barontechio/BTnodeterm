@@ -27,7 +27,7 @@ import {
   type RpcMessage
 } from '../../shared/rpc'
 import { IPC } from '../../shared/ipc'
-import type { ChatPromptResult } from '../../shared/text-delivery'
+import type { ChatPromptResult, EmptyPromptResult } from '../../shared/text-delivery'
 import type { GitHubControlApi, GitHubIssuesApi } from '../../shared/github-issues'
 import {
   UNKNOWN_CLAUDE_CLI_CAPS,
@@ -294,6 +294,8 @@ export function buildRealApi(
       client.request(IPC.ptySendText, persistKey, text, opts?.enter) as Promise<boolean>,
     sendChatPrompt: (persistKey, text, agentId) =>
       client.request(IPC.ptySendChatPrompt, persistKey, text, agentId) as Promise<ChatPromptResult>,
+    sendToEmptyPrompt: (persistKey, text, agentId) =>
+      client.request(IPC.ptySendToEmptyPrompt, persistKey, text, agentId) as Promise<EmptyPromptResult>,
     // A failed read is unknown, never evidence that persistence is available.
     tmuxStatus: () =>
       client

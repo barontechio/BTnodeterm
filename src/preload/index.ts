@@ -112,6 +112,8 @@ const api: NodeTerminalApi = {
       ipcRenderer.invoke(IPC.ptySendText, persistKey, text, opts?.enter),
     sendChatPrompt: (persistKey, text, agentId) =>
       ipcRenderer.invoke(IPC.ptySendChatPrompt, persistKey, text, agentId),
+    sendToEmptyPrompt: (persistKey, text, agentId) =>
+      ipcRenderer.invoke(IPC.ptySendToEmptyPrompt, persistKey, text, agentId),
     tmuxStatus: () => ipcRenderer.invoke(IPC.ptyTmuxStatus),
     paneCommand: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneCommand, persistKey),
     paneCwd: (persistKey) => ipcRenderer.invoke(IPC.ptyPaneCwd, persistKey),

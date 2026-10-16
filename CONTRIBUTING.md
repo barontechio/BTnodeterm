@@ -269,6 +269,13 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   influenced text: a process name is chosen by the process, so parse each owner group on its own and
   never let a name reach a pid (see CLAUDE.md → Dev-server ports).
 
+- **App-originated text goes only into an empty prompt.** A note nodeterm types into an agent on
+  its own (the context-link discovery note, a sticky pushed over a note link) goes through
+  `linkNoteRefusal` + `pty.sendToEmptyPrompt`, never a bare `pty.sendText`: `sendText` pastes and
+  presses Enter, so it submits whatever the user had half-typed with it (#1144) and answers an open
+  permission dialog. Emptiness is read off the screen (`readClaudeComposer`), so an agent without a
+  measured composer reader gets no note — and a skipped note is named in a notice, never silent.
+
 - **A GitHub issue reaches a pane only as a validated reference.** Issue titles and bodies are
   written by strangers on public repositories, and a launch line is typed into a shell. Anything
   that starts or instructs an agent about an issue goes through `@shared/github-issue-ref`:
