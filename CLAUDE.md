@@ -2403,6 +2403,22 @@ else, and its context links must keep classifying across restarts).
   hook server's try/catch before), never the node's delivery chain. A remote (SSH) grok node's file is on its host, so it reads "cannot
   tell" and behaves exactly as before — a remote leg is a follow-up. Unmeasured: `events.jsonl`'s
   shape on other grok versions (a changed shape degrades to today's behaviour).
+- **Codex NEEDS YOU is checked against the session rollout under its auto-reviewer**
+  (`core/agents/codex-permission-gate.ts`, issue #1171, in the hook server, so both shells get it).
+  With `approvals_reviewer = "auto_review"` codex fires `PermissionRequest`, then its own reviewer
+  subagent approves or refuses with nobody asked; no hook fires until the approved command's
+  `PostToolUse`, so the node read NEEDS YOU for the review plus the whole command. MEASURED
+  (2026-10-16, private CODEX_HOME + fake Responses model, codex 0.156.1 `exec` and 0.163.0 TUI;
+  fixture `shared/agents/__fixtures__/codex/auto-review-permission.json`): the hook payload has NO
+  reviewer field; the rollout's per-turn `turn_context` carries `approvals_reviewer` and a `turn_id`
+  equal to the hook's, already on disk when the hook runs; `guardian_subagent` is recorded as
+  `auto_review`; a failed review rejects to the agent, never to a person. Rules: a closed match (the
+  `turn_context` for THIS `turn_id`, value in `CODEX_AUTO_REVIEWERS`) suppresses the event, so the
+  node keeps PreToolUse's `working`; everything else — no `turn_id`, unknown value, a path outside
+  the codex sessions roots (system `$CODEX_HOME/sessions`, managed `~/.nodeterm/cx/<16hex>/sessions`),
+  unreadable file (O_NOFOLLOW), no match within the 16 MB backward scan, a read over 500 ms — is
+  published unchanged as `waiting`. The hook reply never waits on the read; later events of the
+  node wait behind it. A remote (SSH) codex node's rollout is on its host, so it behaves as before.
 - **Grok chat view (⌘M + phone `chat.page`)** — `parseGrokChat` (`core/grok-chat.ts`) reads
   `chat_history.jsonl` into claude's `ChatMessage`/`ChatPart` shapes (no new wire field): typed
   prompts, assistant text, tool calls (`arg` = the salient argument — `command`, `target_file`, …, in
