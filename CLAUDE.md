@@ -5648,6 +5648,11 @@ bridges enter live state only via `appendBridgeEdges`) and the server
   read usage." in both the single-account and multi-account popovers, including beside healthy
   provider rows. Nonempty snapshots retain their last-known bars on error; no error-specific
   authentication advice is inferred from the status.
+  **Local Codex reads (issue #1168)**: an HTTP 429 from the backend returns `rateLimited` and
+  starts a per-home cooldown (`Retry-After`, else 2 min doubling, 30 s–1 h); during it NEITHER
+  tier is asked — the app-server fallback reads the same account's limits, so falling through
+  after a 429 spent the budget twice. The service holds each account row's last good numbers
+  (`holdLastGoodProvider`). The SSH Codex reader has no cooldown yet.
 
 - **Remote usage** (SSH hosts, `src/core/usage/remote-claude-usage.ts`) — the source behind the
   SSH scope above. v1 excluded remote accounts, which left a user whose Claude only ever runs on a

@@ -3061,9 +3061,14 @@ export interface ProviderUsage {
   updatedAt: number
   /**
    * 'unavailable' = not signed in / no subscription to report → hide this provider entirely.
-   * 'fetching' = request in flight. 'ok' = limits present. 'error' = the fetch failed.
+   * 'fetching' = request in flight. 'ok' = limits present. 'error' = the fetch failed — and when
+   * `limits` is non-empty alongside it, those are the LAST GOOD numbers the service kept
+   * (`holdLastGoodProvider`), still stamped with their own `updatedAt`.
    */
   status: 'unavailable' | 'fetching' | 'ok' | 'error'
+  /** The latest read was refused with HTTP 429 (Codex today, issue #1168). Absent = not rate
+   *  limited, or not known to be. */
+  rateLimited?: boolean
 }
 
 /** Host memory snapshot in MB. `null` from any reader means "could not read" — never "zero".

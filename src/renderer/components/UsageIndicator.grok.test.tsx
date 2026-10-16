@@ -108,3 +108,17 @@ describe('Grok billing diagnostics in the usage popover', () => {
     expect(host.querySelector('.usage-account')?.textContent).toContain('Could not read usage.')
   })
 })
+
+describe('a rate-limited Codex read in the usage popover (issue #1168)', () => {
+  it('names the 429 when there are no numbers to keep', async () => {
+    await open(snapshot('unavailable'), [{ provider: 'codex', account: null,
+      status: 'error', limits: [], updatedAt: 0, rateLimited: true }])
+    expect(host.querySelector('.usage-account')?.textContent).toContain('Rate limited by the usage endpoint (HTTP 429)')
+  })
+  it('keeps the held bars and says why they are old', async () => {
+    await open(snapshot('unavailable'), [{ provider: 'codex', account: null,
+      status: 'error', limits: [limit], updatedAt: Date.now() - 10 * 60_000, rateLimited: true }])
+    expect(host.querySelectorAll('.usage-account .usage-row')).toHaveLength(1)
+    expect(host.querySelector('.usage-account')?.textContent).toContain('Latest read was rate limited (HTTP 429)')
+  })
+})
