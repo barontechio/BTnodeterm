@@ -34,8 +34,9 @@ function render(el: JSX.Element): { host: HTMLDivElement; unmount: () => void } 
   return { host, unmount: () => act(() => root.unmount()) }
 }
 
-const props = (data: Record<string, unknown>) =>
-  ({ id: 'n1', data: { title: 't', color: '#336699', ...data }, selected: false }) as never
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- React Flow is mocked away
+const props = (data: Record<string, unknown>): any =>
+  ({ id: 'n1', data: { title: 't', color: '#336699', ...data }, selected: false })
 
 afterEach(() => {
   useSettings.setState((s) => ({ settings: { ...s.settings, stickyNoteBacking: 0, groupFrameBacking: 0 } }))
