@@ -896,6 +896,12 @@ shipped: managed-account `CLAUDE_CONFIG_DIR` leaked into system-account sessions
 env either joins `ACCOUNT_SCOPE_UPDATE_ENV` / the gateway list, or rides `-e` — and gets a
 real-tmux test (`account-env.realtmux.test.ts` is the pattern).
 
+**The same goes for the CWD: a tmux client never runs in the node's directory.** The server keeps
+the cwd of the client that started it, and from tmux 3.7 a new pane's `-c` is silently dropped once
+that directory is deleted — every new terminal then opens in the deleted dir (issue #1131, measured
+on tmux 3.7c). The local tmux client is spawned from `localTmuxClientCwd()` (home, else `/`) and the
+pane's directory rides `-c` only. The plain-shell fallback IS the pane and keeps the project cwd.
+
 **A new keyboard chord has to survive the shells, not just the renderer.** The application menu is
 ours (`buildAppMenu` in `main/index.ts`), but its command-style accelerators — ⌘Q, ⌘M, ⌘W, ⌘0, ⌘⇧B,
 ⌘, — are still handled above the page, so your `keydown` branch simply never runs: steal the chord

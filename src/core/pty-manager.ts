@@ -970,6 +970,36 @@ export interface DetachedSinks {
 }
 
 /**
+ * The working directory a LOCAL tmux CLIENT is spawned in (issue #1131) — never the node's own
+ * directory, which reaches tmux only through `new-session -c`.
+ *
+ * Any client can be the one that STARTS the shared `-L node-terminal` server, and the server keeps
+ * that client's cwd for the rest of its life. From tmux 3.7, `spawn.c` applies a new pane's `-c`
+ * only when the SERVER's own `getcwd()` succeeds; once the directory the server started in is
+ * deleted (a removed worktree, a cleaned-up station), `getcwd()` fails, the `chdir` is skipped and
+ * every new pane on the server inherits the deleted directory, whatever `-c` said. MEASURED on a
+ * locally built tmux 3.7c (private socket): server started from a dir that was then removed → a
+ * `new-session -c <proj>` pane at `<gone> (deleted)`; the same sequence with the client in $HOME →
+ * the pane at `<proj>`. tmux 3.4–3.6 honour `-c` either way. The home directory is what the issue's
+ * reporter and every terminal emulator use; `/` is the fallback when even that is missing.
+ *
+ * Not for the plain-shell fallback: there the spawned process IS the pane and needs the project
+ * cwd. A server started by an earlier build keeps its old cwd until it is restarted.
+ */
+export function localTmuxClientCwd(
+  home: string = os.homedir(),
+  isDir: (p: string) => boolean = (p) => {
+    try {
+      return fs.statSync(p).isDirectory()
+    } catch {
+      return false
+    }
+  }
+): string {
+  return home && isDir(home) ? home : '/'
+}
+
+/**
  * tmux attach flags. `-A` = attach-or-create. `-D` = detach OTHER clients on attach.
  *
  * `-D` STAYS for the app's own client, and co-attach does not change that: a second viewer
@@ -4795,6 +4825,9 @@ export class PtyManager {
             xtermScrollback(settings.tmuxScrollback)
           )) as unknown as pty.IPty
     } else {
+      // A tmux client must not pin the project dir as the shared server's cwd (#1131): the pane's
+      // directory is the `-c` argument above, never the client's own cwd.
+      const spawnCwd = useLocalTmux ? localTmuxClientCwd() : cwd
       try {
         proc =
           nativeSshArgv && useNativeSsh()
@@ -4811,7 +4844,7 @@ export class PtyManager {
                 name: 'xterm-256color',
                 cols: options.cols,
                 rows: options.rows,
-                cwd,
+                cwd: spawnCwd,
                 env
               })
       } catch (err) {
@@ -4824,7 +4857,7 @@ export class PtyManager {
         // Re-read the devices rather than reusing the pre-flight's reading: this spawn just consumed
         // (and, per the leak above, kept) devices of its own, so the number the user is shown should
         // be the one that was true when the failure happened.
-        throw this.spawnFailureError(reason, file, cwd, spawnHelperArchMismatch(), readPtyDevices())
+        throw this.spawnFailureError(reason, file, spawnCwd, spawnHelperArchMismatch(), readPtyDevices())
       }
     }
 

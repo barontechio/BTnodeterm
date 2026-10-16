@@ -1089,6 +1089,19 @@ unreachable there by construction; a Linux host is expected to have its own. Und
 `scripts/build-tmux.mjs` writes its artifact. If tmux is unavailable from all three,
 `PtyManager` still falls back to a plain shell; `TMUX`/`TMUX_PANE` are stripped from the child env to avoid nesting refusal.
 
+**The local tmux CLIENT is spawned from `localTmuxClientCwd()` (home, else `/`), never the node's
+cwd — the pane's directory rides `new-session -c` only** (issue #1131). Any client can be the one
+that starts the shared server, the server keeps that client's cwd for life, and from tmux 3.7
+`spawn.c` applies a pane's `-c` only when the server's own `getcwd()` succeeds: once the dir the
+server started in is deleted (a removed worktree), every NEW pane on the server inherits the deleted
+dir whatever `-c` said, and agents launched there hang. MEASURED on a locally built tmux 3.7c
+(private socket): client in the doomed dir → `-c <proj>` pane at `<gone> (deleted)`; client in
+`$HOME` → pane at `<proj>`. tmux 3.4–3.6 honour `-c` either way, which is why CI cannot reproduce it
+and the guard is a spawn-options assertion (`pty-tmux-client-cwd.test.ts`). The plain-shell fallback
+is the pane itself and keeps the project cwd; remote tmux is started from an ssh exec channel, which
+sshd places in the login home. A server started by an earlier build keeps its old cwd until it is
+restarted (`tmux -L node-terminal kill-server`, which ends every session).
+
 **A session-host session follows its most recently ACTIVE viewer, like tmux's `window-size
 latest`** (issue #914). Under tmux a relay-mirrored phone is its own tmux client, so dismissing its
 keyboard gives it its rows back; on the session host the phone and the desktop node share ONE
