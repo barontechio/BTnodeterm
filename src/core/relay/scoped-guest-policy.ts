@@ -257,6 +257,9 @@ const ptyCreate: Check = (a, s) => {
   if (!nodeInScope(opts.persistKey, s)) return no(NODE_OUTSIDE)
   if (opts.ownerProjectId !== undefined && opts.ownerProjectId !== s.projectId) return no(OUTSIDE)
   delete opts.sshRemote
+  // The local-login exemption from the SSH-project refusal is this machine's own UI's mark, never
+  // a guest's (issue #1186).
+  delete opts.localOnSshCanvas
   if (s.deps.projectIsRemote?.(s.projectId)) opts.requireRemote = true
   const root = rootOf(s)
   if (opts.cwd === undefined || opts.cwd === null || opts.cwd === '') {

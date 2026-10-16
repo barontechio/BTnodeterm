@@ -95,6 +95,10 @@ describe('scoped guest — terminals', () => {
     })
     expect(d.allow && (d.args?.[0] as Record<string, unknown>).sshRemote).toBeUndefined()
   })
+  it('drops a guest-sent local-login mark (issue #1186: this machine\'s UI sets it, never a peer)', () => {
+    const d = decide(IPC.ptyCreate, { persistKey: 'a1', cols: 1, rows: 1, localOnSshCanvas: true })
+    expect(d.allow && (d.args?.[0] as Record<string, unknown>).localOnSshCanvas).toBeUndefined()
+  })
   it('forces requireRemote for an SSH project, whatever the guest sent (never a local shell)', () => {
     const remote = { ...deps(), projectIsRemote: (p: string) => p === 'alpha' }
     const d = decideScopedAccess('alpha', remote, IPC.ptyCreate, [

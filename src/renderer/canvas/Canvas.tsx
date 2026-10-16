@@ -1,5 +1,6 @@
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
+import { markLocalOnSshCanvas } from '../lib/localOnSshCanvas'
 import { useDevPortScanner } from './useDevPortScanner'
 import { withCodexNoDaemon } from '@shared/agents/codex-daemon'
 import { codexApprovalCaps } from '../state/codexCli'
@@ -6421,10 +6422,11 @@ export function Canvas() {
       // `$HOME`; there is no local directory that project could honestly offer.
       const { getProject, activeProjectId: pid } = useProjects.getState()
       const cwd = getProject(pid)?.cwd
-      setNodes((ns) => [
-        ...ns.map((n) => ({ ...n, selected: false })),
-        { ...createAccountLoginNode(accountId, ns.length, viewCenter(), ssh, cwd), selected: true }
-      ])
+      const login = createAccountLoginNode(accountId, nodesRef.current.length, viewCenter(), ssh, cwd)
+      // A LOCAL login dropped onto an SSH project's canvas is the one terminal there that runs on
+      // this machine (issue #1186) — say so to core, from memory only (lib/localOnSshCanvas.ts).
+      if (!ssh && getProject(pid)?.ssh) markLocalOnSshCanvas(login.id)
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...login, selected: true }])
       markDirty()
       // The event fires from the full-screen Settings overlay — close it so the user actually
       // sees the login node (it spawns at viewCenter, selected). The defensive return above
@@ -6465,13 +6467,10 @@ export function Canvas() {
       // `createTerminalNode` prefers `ssh.remoteCwd` — because a local path names nothing there.
       const { getProject, activeProjectId: pid } = useProjects.getState()
       const cwd = getProject(pid)?.cwd
-      setNodes((ns) => [
-        ...ns.map((n) => ({ ...n, selected: false })),
-        {
-          ...createCodexAccountLoginNode(accountId, ns.length, viewCenter(), cwd, ssh),
-          selected: true
-        }
-      ])
+      const login = createCodexAccountLoginNode(accountId, nodesRef.current.length, viewCenter(), cwd, ssh)
+      // Same local-login exemption as the Claude branch (issue #1186).
+      if (!ssh && getProject(pid)?.ssh) markLocalOnSshCanvas(login.id)
+      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), { ...login, selected: true }])
       markDirty()
       // Same reason as the Claude branch: the event fires from the full-screen Settings overlay,
       // which would otherwise hide the login node the user has to interact with.

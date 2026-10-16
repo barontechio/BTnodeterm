@@ -1,6 +1,7 @@
 import { useContextEnsure } from '../../terminal/useContextEnsure'
 import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { FIND_DECORATIONS } from '../../lib/palette'
+import { isLocalOnSshCanvas } from '../../lib/localOnSshCanvas'
 import { ptyRefusal } from '@shared/pty-refusal'
 
 import { patchImeModeSwitch } from '../../terminal/ime-mode-switch'
@@ -535,7 +536,9 @@ export function ModalTerminal({
         agentId: spawn.agentId,
         accountId: spawn.accountId,
         sshRemote,
-        requireRemote: spawn.sshRemoteTmux
+        requireRemote: spawn.sshRemoteTmux,
+        // Same local-login exemption as the canvas node (issue #1186).
+        ...(isLocalOnSshCanvas(nodeId) ? { localOnSshCanvas: true } : {})
       })
       // Refused core-side (the master died inside our round-trip, or `ssh` is missing).
       if (res.unavailable) {

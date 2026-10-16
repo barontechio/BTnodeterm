@@ -1,5 +1,6 @@
 import path from 'path'
 import { healPathAsName } from '../shared/project-name'
+import { neutralSshProjectNodes, routeSshProjectNodes } from '../shared/ssh-project-nodes'
 import type { AgentPermissionMode } from '../shared/agents/config'
 import { collisionSeed, derivedProjectId, legacyFileId } from '../shared/project-id'
 import {
@@ -357,7 +358,13 @@ export function projectToFile(
   // reached the live nodes some other way (a peer mutation, a hand edit) is never written into
   // the shared file as if it were ours.
   const nodes = sanitizeNodeTriggers(
-    stripSharedNodeExec(p.cwd ? toPortableNodes(p.nodes, p.cwd) : p.nodes)
+    stripSharedNodeExec(
+      p.cwd
+        ? toPortableNodes(p.nodes, p.cwd)
+        : // The SSH mirror records shared LAYOUT, not where this machine runs a node: the host's own
+          // desktop opens the same file as a local project (issue #1186). Re-derived on every load.
+          neutralSshProjectNodes(p.nodes, p.ssh)
+    )
   )
   const icon = sanitizeProjectIcon(p.icon)
   // The SECOND seam for layouts. Live project data is reachable by a peer canvas mutation and by a
@@ -686,7 +693,15 @@ export function fileToProject(
     // loadedAgentBrowserPartition; without it a cloned project.json forges another project's jar.
     nodes: sanitizeNodeTriggers(
       sanitizeBrowserPartitions(
-        applyLocalNodeExec(base.cwd ? resolveNodes(f.nodes, base.cwd) : f.nodes, base.localExec),
+        applyLocalNodeExec(
+          base.cwd
+            ? resolveNodes(f.nodes, base.cwd)
+            : // An SSH project's nodes run on ITS host, whatever the shared file says (issue #1186):
+              // the host's own desktop, a teammate or git writes nodes into that file without this
+              // machine's routing fields. See @shared/ssh-project-nodes.
+              routeSshProjectNodes(f.nodes, base.ssh),
+          base.localExec
+        ),
         base.id
       )
     ),

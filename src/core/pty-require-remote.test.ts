@@ -59,13 +59,15 @@ vi.mock('./pty-devices', async (importOriginal) => ({
 
 describe('pty create: requireRemote never falls back to a local shell', () => {
   let fake: FakePlatform
+  let manager: import('./pty-manager').PtyManager
 
   beforeEach(async () => {
     spawned.length = 0
     fake = fakePlatform()
     initPlatform(fake)
     const { PtyManager } = await import('./pty-manager')
-    new PtyManager().registerIpc()
+    manager = new PtyManager()
+    manager.registerIpc()
   })
   afterEach(() => {
     resetPlatformForTests()
@@ -106,5 +108,44 @@ describe('pty create: requireRemote never falls back to a local shell', () => {
     expect(spawned).toHaveLength(1)
     expect(joined.unavailable).toBeUndefined()
     expect(joined.sessionId).toBe(first.sessionId)
+  })
+
+  // Issue #1186: `requireRemote` comes from the node's own fields, which reach a node through a
+  // SHARED file the host's desktop also writes. The owning project — a machine-local fact — must
+  // refuse the local spawn on its own when a caller forgot to route the node.
+  describe('a node owned by an SSH project (issue #1186)', () => {
+    const sshProjects = new Set(['ssh-p'])
+    beforeEach(() => manager.setSshProjectCheck((id) => sshProjects.has(id)))
+
+    it('refuses a local spawn with no requireRemote and no sshRemote', async () => {
+      const res = await create(ALICE, { ownerProjectId: 'ssh-p', cwd: '.', agentId: 'codex' })
+      expect(spawned).toHaveLength(0)
+      expect(res.unavailable).toBe('ssh')
+    })
+
+    it('a LOCAL project still spawns locally', async () => {
+      const res = await create(ALICE, { ownerProjectId: 'local-p', cwd: '/srv/app' })
+      expect(spawned).toHaveLength(1)
+      expect(res.unavailable).toBeUndefined()
+    })
+
+    it('a plain `ssh <host>` terminal is a local pty by design and still spawns', async () => {
+      const res = await create(ALICE, { ownerProjectId: 'ssh-p', shell: 'ssh', shellArgs: ['-p', '22', 'u@h'] })
+      expect(spawned).toHaveLength(1)
+      expect(res.unavailable).toBeUndefined()
+    })
+
+    it('the renderer-marked local login node still spawns', async () => {
+      const res = await create(ALICE, { ownerProjectId: 'ssh-p', localOnSshCanvas: true })
+      expect(spawned).toHaveLength(1)
+      expect(res.unavailable).toBeUndefined()
+    })
+
+    it('unwired: no refusal (the pre-check behaviour)', async () => {
+      manager.setSshProjectCheck(null)
+      const res = await create(ALICE, { ownerProjectId: 'ssh-p' })
+      expect(spawned).toHaveLength(1)
+      expect(res.unavailable).toBeUndefined()
+    })
   })
 })

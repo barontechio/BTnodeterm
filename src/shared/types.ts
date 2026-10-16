@@ -214,6 +214,15 @@ export interface PtyCreateOptions {
    */
   requireRemote?: boolean
   /**
+   * The ONE way a terminal may run on THIS machine while it sits on an SSH project's canvas: the
+   * local-account login node Settings → Accounts drops onto whatever canvas is active. Core refuses
+   * every other local spawn whose `ownerProjectId` is an SSH project (`PtyManager.setSshProjectCheck`,
+   * issue #1186) — the node fields that route a node remotely come from a shared file, and a node
+   * that lacks them must never become a local shell. Set only from an in-memory, never-persisted
+   * renderer mark (`renderer/lib/localOnSshCanvas.ts`), never from node data.
+   */
+  localOnSshCanvas?: boolean
+  /**
    * Hosted-relay VIEWERS may watch a terminal but never start one: refuse a create that would spawn
    * a NEW session (`unavailable: 'join-only'`), while a co-attach join or a warm tmux reattach still
    * proceeds. Set only by the relay access policy (src/core/relay/access-policy.ts).

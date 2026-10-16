@@ -1266,6 +1266,8 @@ export class PtyManager {
   private overridesInFlight = new Map<string, Promise<ProjectSpawnOverrides | null>>()
   /** "Which SSH host owns this node?", from the persisted index — see `setRemoteNodeOwner`. */
   private remoteNodeOwner: RemoteNodeOwnerResolver | null = null
+  /** "Is this project an SSH project?", from the index — see `setSshProjectCheck`. */
+  private isSshProject: ((projectId: string) => boolean) | null = null
   /** Machine-local records the relay host's attach is decided from — see `setRelayNodeResolver`. */
   private relayNodes: RelayNodeResolver | null = null
   /** Host-authoritative launch facts for a phone's `pty.attach { launch }` (see relay-launch.ts).
@@ -1928,6 +1930,16 @@ export class PtyManager {
    */
   setRemoteNodeOwner(resolve: RemoteNodeOwnerResolver | null): void {
     this.remoteNodeOwner = resolve
+  }
+
+  /**
+   * Wire "is this machine-local project id an SSH project?", answered from the workspace INDEX —
+   * the machine-local record, never a node's own fields (issue #1186). With it, `spawnRefusal`
+   * refuses a local spawn for a node whose owning project runs on another machine even when the
+   * caller forgot to route it remotely. Unwired (tests, early boot) = no such refusal.
+   */
+  setSshProjectCheck(check: ((projectId: string) => boolean) | null): void {
+    this.isSshProject = check
   }
 
   /**
@@ -2737,6 +2749,22 @@ export class PtyManager {
     // the same reason `spawnSession` checks it — without the executable the remote branch there
     // is skipped and the local one runs.
     if (options.requireRemote && !(options.sshRemote && options.persistKey && findSsh())) {
+      return 'ssh'
+    }
+    // The same refusal when the caller did NOT say `requireRemote` but the node belongs to an SSH
+    // project (issue #1186). `requireRemote` comes from the node's own fields, and those reach a
+    // node through a SHARED file the host's desktop, a teammate or git also write — a node without
+    // them used to become a local shell (an agent shown inside the SSH project, running on this
+    // machine in an unrelated folder, under the id the host was running). The owning project is
+    // the machine-local fact. Exempt: a plain `ssh <host>` terminal (its program IS ssh) and the
+    // renderer's explicit local-login mark (`localOnSshCanvas`).
+    if (
+      !options.sshRemote &&
+      options.ownerProjectId &&
+      options.shell !== 'ssh' &&
+      options.localOnSshCanvas !== true &&
+      this.isSshProject?.(options.ownerProjectId)
+    ) {
       return 'ssh'
     }
     // A managed remote Codex account needs a known id and a safe resolved home so the

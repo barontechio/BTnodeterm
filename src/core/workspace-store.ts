@@ -40,6 +40,7 @@ import { appendProjectNode, removeProjectNode, type RemoteNodeInput } from './pr
 import { editProjectCardLabels, ensureProjectBoard, setProjectCardColumn, type CardLabelEdit } from './project-kanban-write'
 import { boardLabels, cardMeta } from '../shared/kanban-labels'
 import { localizeAdoptedNode } from '../shared/adopt-cwd'
+import { routeSshProjectNode, routeSshProjectNodes } from '../shared/ssh-project-nodes'
 import { clampProjectName, folderName } from '../shared/project-name'
 import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
 import { codedError } from './relay/admin-error'
@@ -2066,15 +2067,19 @@ export class WorkspaceStore {
    * cwds portable (`./sub`), and this resolves them against the project root exactly as
    * `fileToProject` / `persistedCanvases` do. For callers that hand the cwd to a resolver keyed on
    * the absolute path (the phone Chat verbs' transcript read). `getNode` keeps the stored form so
-   * its existing callers are unchanged.
+   * its existing callers are unchanged. An SSH project's node comes back ROUTED (its host, its
+   * remote cwd — `routeSshProjectNode`, issue #1186), since its cache holds the neutral shared form.
    */
   getNodeResolved(nodeId: string): CanvasNodeState | undefined {
     const hit = this.findNode(nodeId)
     if (!hit) return undefined
+    if (hit.ssh) return routeSshProjectNode(hit.node, hit.ssh)
     return hit.root ? resolveNodes([hit.node], hit.root)[0] : hit.node
   }
 
-  private findNode(nodeId: string): { node: CanvasNodeState; root?: string } | undefined {
+  private findNode(
+    nodeId: string
+  ): { node: CanvasNodeState; root?: string; ssh?: Project['ssh'] } | undefined {
     for (const e of this.index?.entries ?? []) {
       let nodes: CanvasNodeState[] | undefined
       if (e.project) nodes = e.project.nodes
@@ -2091,7 +2096,12 @@ export class WorkspaceStore {
       }
       const node = nodes?.find((n) => n.id === nodeId)
       // Only a local ref's nodes come off the shared file in portable form.
-      if (node) return { node, root: !e.project && !e.cache && e.cwd ? e.cwd : undefined }
+      if (node)
+        return {
+          node,
+          root: !e.project && !e.cache && e.cwd ? e.cwd : undefined,
+          ...(!e.project && e.cache && e.ssh ? { ssh: e.ssh } : {})
+        }
     }
     return undefined
   }
@@ -2261,7 +2271,9 @@ export class WorkspaceStore {
       } else if (e.cache) {
         out.push({
           id: e.id,
-          nodes: e.cache.nodes,
+          // Routed exactly as `fileToProject` routes them (issue #1186): the cache is the shared
+          // file's neutral form, and callers decide where a node runs from what this returns.
+          nodes: routeSshProjectNodes(e.cache.nodes, e.ssh),
           bridges: sanitizeLinks(e.cache.bridges),
           ropes: sanitizeLinks(e.cache.ropes)
         })

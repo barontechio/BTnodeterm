@@ -1,6 +1,7 @@
 import { elementOnScreen } from '../terminal/on-screen'
 import { useContextEnsure } from '../terminal/useContextEnsure'
 import { canPlainApprove, sendHeaderAnswer } from '../lib/approveGate'
+import { isLocalOnSshCanvas } from '../lib/localOnSshCanvas'
 import { FIND_DECORATIONS } from '../lib/palette'
 import { ptyRefusal } from '@shared/pty-refusal'
 
@@ -3635,7 +3636,10 @@ export function TerminalNode({
           sshRemote,
           // Belt AND braces: the guard above cannot see a `ssh` executable that has gone missing,
           // which is core's other route into the local branch.
-          requireRemote: sshRemoteTmux
+          requireRemote: sshRemoteTmux,
+          // The one local terminal an SSH project's canvas may hold (issue #1186): core refuses
+          // every other local spawn owned by an SSH project. In-memory mark, never node data.
+          ...(isLocalOnSshCanvas(id) ? { localOnSshCanvas: true } : {})
         })
         .then(
         async ({

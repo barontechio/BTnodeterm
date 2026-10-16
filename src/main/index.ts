@@ -666,6 +666,10 @@ ptyManager.setRemoteNodeOwner((nodeId) => {
     remote: ref ? { conn: ref.conn, controlPath: ref.controlPath } : undefined
   }
 })
+// The core half of "a remote node is never spawned locally" for a node whose OWN fields do not say
+// it is remote (issue #1186): those fields arrive through the SSH project's shared file, which the
+// host's desktop also writes. The owning project's index entry is the machine-local fact.
+ptyManager.setSshProjectCheck((projectId) => workspaceStore.sshProjectIds().includes(projectId))
 // WHERE a phone's relay `pty.attach` runs, and with what env — decided in core
 // (`PtyManager.prepareRelayAttach` / `core/relay-attach-plan.ts`) from THIS machine's records, never
 // from the phone's words. Before this the relay attach ran `tmux new-session -A` on the LOCAL socket
