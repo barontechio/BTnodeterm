@@ -145,6 +145,7 @@ import { normalizeSessionBackend } from '../shared/session-backend'
 import { releasePty, type ReleasablePty } from './pty-release'
 import { terminateWindowsProcessTree } from '../session-host/windows-process-tree'
 import { effectiveSize, type PtySize } from './pty-size'
+import { DaReplyGate, DA_REPLY_TTL_OTHER_MS, DA_REPLY_TTL_TMUX_MS } from './da-reply-gate'
 import { machOArch, archMismatch } from './macho-arch'
 import { writeScrollback, readScrollback, deleteScrollback } from './scrollback-store'
 import { snapshotDue } from './scrollback-cadence'
@@ -855,6 +856,8 @@ interface Session {
    *  create re-attaches with `new-session -A`. It is the precondition for the idle reap — see
    *  pty-reap.ts — and it is exactly the condition `persisted` is computed from at spawn. */
   tmuxBacked: boolean
+  /** One DA1/DA2 answer per query from however many viewers answer it (issue #1172, da-reply-gate.ts). */
+  daReplies: DaReplyGate
   /** When the reap sweep first saw this session with nobody attached (no live subscriber, no relay
    *  sink); `null` while somebody is. See `reapTick`. */
   unwatchedSince: number | null
@@ -4895,6 +4898,11 @@ export class PtyManager {
       // asks a different question of it: not "is it worth snapshotting" but "would releasing this
       // pty client destroy anything" (pty-reap.ts).
       tmuxBacked: persisted,
+      // A real tmux client (local or the SSH project's remote one) gives up on its handshake after
+      // ~5 s; anything else has no known deadline. Zellij is not measured, so it gets the generous one.
+      daReplies: new DaReplyGate(
+        persisted && !useSessionHost && !useLocalZellij ? DA_REPLY_TTL_TMUX_MS : DA_REPLY_TTL_OTHER_MS
+      ),
       unwatchedSince: null,
       pausedBy: new Set<string>(),
       accountFallback,
@@ -4944,6 +4952,7 @@ export class PtyManager {
       // rollback removes this exact generation, late callbacks must not recreate its flush timer
       // or leak bytes into a replacement that happens to reuse the same node id.
       if (this.sessions.get(sessionId) !== session) return
+      session.daReplies.noteOutput(data, Date.now())
       session.nativeWindowsPane?.recordOutput(data)
       this.queueData(sessionId, session, data)
     })
@@ -5388,6 +5397,10 @@ export class PtyManager {
   write(clientId: ClientId | null, sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId)
     if (!session) return this.backgroundWriteBySessionId(sessionId, data)
+    // Every viewer's xterm answers the tmux client's DA handshake; only one answer per question may
+    // reach tmux, or the rest are typed into the pane (issue #1172, da-reply-gate.ts).
+    data = session.daReplies.filterInput(data, Date.now())
+    if (!data) return
     if (clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
       presenceHub.noteTyping(clientId, session.nodeId)
     session.proc.write(data)
