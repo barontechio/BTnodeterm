@@ -327,7 +327,7 @@ function ProviderBlock({ u, mode, hostKey }: { u: ProviderUsage; mode: 'used' | 
       ))}
       {/* One line per distinct reason (issue #912): two views failing the same way are one
           failure of this provider, not two paragraphs of the same sentence. */}
-      {usageDiagnosticLines(label, u.diagnostics).map((line) => (
+      {usageDiagnosticLines(label, u.diagnostics, u.provider).map((line) => (
         <div className="usage-popover__empty" key={line}>
           {line}
         </div>

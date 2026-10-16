@@ -64,6 +64,11 @@ describe('Grok billing diagnostics in the usage popover', () => {
     expect(text).not.toContain('expired')
     expect(text).not.toContain('No usage data.')
   })
+  it('wires the provider id through, so the Grok 401 hint shows (issue #983)', async () => {
+    await open(snapshot('unavailable'), [{ provider: 'grok', account: null,
+      status: 'error', limits: [], updatedAt: 0, diagnostics: [{ view: 'credits', reason: 'http', httpStatus: 401 }] }])
+    expect(host.querySelector('.usage-account')?.textContent).toContain('Starting a Grok session refreshes the saved credentials')
+  })
   it.each(['unavailable', 'error'] as const)('keeps Claude %s distinct from a Grok failure', async (status) => {
     await open(snapshot(status), [{ provider: 'grok', account: null,
       status: 'error', limits: [], updatedAt: 0, diagnostics: [{ view: 'credits', reason: 'network' }] }])
