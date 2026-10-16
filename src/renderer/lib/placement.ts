@@ -16,6 +16,26 @@ export interface Box {
   h: number
 }
 
+/** How far a bounded placement steps down-right off a node whose top-left it would share (#1140):
+ *  enough to leave that node's header row showing above the new one. */
+export const CASCADE_STEP = 32
+const CASCADE_MAX_HOPS = 64
+
+/** `p`, moved down-right by `CASCADE_STEP` until no box in `existing` starts within a step of it. */
+function cascadeOff(existing: Box[], p: { x: number; y: number }): { x: number; y: number } {
+  let { x, y } = p
+  for (
+    let hop = 0;
+    hop < CASCADE_MAX_HOPS &&
+    existing.some((b) => Math.abs(b.x - x) < CASCADE_STEP && Math.abs(b.y - y) < CASCADE_STEP);
+    hop++
+  ) {
+    x += CASCADE_STEP
+    y += CASCADE_STEP
+  }
+  return { x, y }
+}
+
 /**
  * The nearest position (to `preferred`) where a `size` box does not overlap any of `existing`,
  * searched outward on a grid stepped by the node size. Returns `preferred` unchanged when it's
@@ -30,8 +50,14 @@ export interface Box {
  * from a shortcut never lands somewhere the user cannot see. Inside it the search runs on a half-step
  * grid (a view is only a few nodes wide), and when nothing in view is clear it takes the in-view
  * spot covered LEAST, nearest first: a busy view gets a visible, partly overlapping node rather than
- * a clear one off screen, and two made in a row do not stack exactly. A `preferred` box that does not
- * fit inside `bounds` at all (zoomed in past the node's size) is returned unchanged.
+ * a clear one off screen. The search starts from `preferred` pulled inside `bounds` (a pinned panel
+ * can push the view centre's box past the visible edge), and a node too big for `bounds` at all
+ * (zoomed in past the node's size) stays at `preferred`.
+ *
+ * Whatever the bounded branch answers is CASCADED off any node whose top-left it would share
+ * (`CASCADE_STEP` down-right per hit, like stacked windows): a view under about two node-widths has
+ * no other in-view cell, and without this every node made in a row landed exactly on the last one —
+ * invisible, the very pile this function exists to prevent.
  */
 export function freeSpot(
   existing: Box[],
@@ -52,9 +78,15 @@ export function freeSpot(
   if (clear(preferred.x, preferred.y)) return preferred
 
   if (bounds) {
+    // "Does it fit at all" is size against bounds, never where the centred box happens to sit.
+    if (size.w > bounds.w || size.h > bounds.h) return cascadeOff(existing, preferred)
     const inside = (x: number, y: number): boolean =>
       x >= bounds.x && y >= bounds.y && x + size.w <= bounds.x + bounds.w && y + size.h <= bounds.y + bounds.h
-    if (!inside(preferred.x, preferred.y)) return preferred
+    const start = {
+      x: Math.min(Math.max(preferred.x, bounds.x), bounds.x + bounds.w - size.w),
+      y: Math.min(Math.max(preferred.y, bounds.y), bounds.y + bounds.h - size.h)
+    }
+    if (clear(start.x, start.y)) return start
     const covered = (x: number, y: number): number =>
       existing.reduce((sum, b) => {
         const w = Math.min(x + size.w, b.x + b.w) - Math.max(x, b.x)
@@ -64,13 +96,13 @@ export function freeSpot(
     const sx = (size.w + gap) / 2
     const sy = (size.h + gap) / 2
     const rings = Math.min(200, Math.ceil(Math.max(bounds.w / sx, bounds.h / sy)) + 1)
-    let best = { x: preferred.x, y: preferred.y, area: covered(preferred.x, preferred.y) }
+    let best = { x: start.x, y: start.y, area: covered(start.x, start.y) }
     for (let ring = 1; ring <= rings; ring++) {
       for (let dy = -ring; dy <= ring; dy++) {
         for (let dx = -ring; dx <= ring; dx++) {
           if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue // perimeter only
-          const x = preferred.x + dx * sx
-          const y = preferred.y + dy * sy
+          const x = start.x + dx * sx
+          const y = start.y + dy * sy
           if (!inside(x, y)) continue
           if (clear(x, y)) return { x, y }
           const area = covered(x, y)
@@ -78,7 +110,7 @@ export function freeSpot(
         }
       }
     }
-    return { x: best.x, y: best.y }
+    return cascadeOff(existing, { x: best.x, y: best.y })
   }
 
   const stepX = size.w + gap

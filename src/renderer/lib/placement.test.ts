@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  CASCADE_STEP,
   emptySpotCenter,
   freeSpot,
   placeBelowSource,
@@ -241,9 +242,42 @@ describe('emptySpotCenter (issue #1140)', () => {
     expect(insideView(second)).toBe(true)
   })
 
-  it('a view smaller than the node keeps the node centred on it', () => {
+  it('a view smaller than the node keeps the node centred on it, stepped off an exact overlap', () => {
     const tiny: Box = { x: -20, y: -20, w: 40, h: 40 }
-    expect(emptySpotCenter([{ x: -50, y: -50, w: 100, h: 100 }], tiny, { x: 0, y: 0 }, size)).toEqual({ x: 0, y: 0 })
+    expect(emptySpotCenter([], tiny, { x: 0, y: 0 }, size)).toEqual({ x: 0, y: 0 })
+    // Exactly where an existing node already sits: cascaded down-right, never stacked on it.
+    expect(emptySpotCenter([{ x: -50, y: -50, w: 100, h: 100 }], tiny, { x: 0, y: 0 }, size)).toEqual({
+      x: CASCADE_STEP,
+      y: CASCADE_STEP
+    })
+  })
+
+  // The review's reproduction: a 1440x864 canvas (top bar 32 px, dock 52 px, optionally a pinned
+  // 308 px sidebar), one default-sized node already centred, then shortcut creates in a row. A view
+  // under about two node-widths has no other in-view cell, so before the cascade every create
+  // landed EXACTLY on the previous one — at zoom 1.38, where goToNode's framing lands, every time.
+  it.each([
+    [1.0, 0],
+    [1.0, 308],
+    [1.2, 0],
+    [1.38, 0],
+    [1.38, 308]
+  ])('creates in a row never share a top-left (zoom %s, pinned %s px)', (zoom, pinned) => {
+    const node = { w: 640, h: 440 }
+    const toFlow = (x: number, y: number) => ({ x: x / zoom, y: y / zoom })
+    const a = toFlow(pinned, 32)
+    const b = toFlow(1440, 864 - 52)
+    const bounds: Box = { x: a.x, y: a.y, w: b.x - a.x, h: b.y - a.y }
+    const center = toFlow(720, 432)
+    const boxes: Box[] = [{ x: center.x - node.w / 2, y: center.y - node.h / 2, ...node }]
+    for (let i = 0; i < 4; i++) {
+      const c = emptySpotCenter(boxes, bounds, center, node)
+      const at = { x: c.x - node.w / 2, y: c.y - node.h / 2 }
+      for (const prev of boxes) {
+        expect(Math.abs(prev.x - at.x) >= CASCADE_STEP || Math.abs(prev.y - at.y) >= CASCADE_STEP).toBe(true)
+      }
+      boxes.push({ ...at, ...node })
+    }
   })
 
   it('without a view it is the old unbounded search, in centre terms', () => {
