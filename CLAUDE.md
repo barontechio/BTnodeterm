@@ -119,10 +119,12 @@ whole envelope in its composer and never submitted it, so the delivery reported 
 separate Enter moments later sent it. A pane that never shows the envelope gets no Enter at all.
 **Both Windows owner reads get a longer budget than the 2 s `PANE_PROBE_TIMEOUT_MS`.** The session
 host's `messageOwnerV1` and `NativeWindowsPane.owner()` run the same PowerShell console/CIM probe
-(`readWindowsConsoleOwner`, its own child bounded at 4 s), measured at ~2.4 s on a loaded Windows 11
-machine — so under the 2 s bound every Windows target read `unknown` and refused as
-`targetPaneUnreadable`, permanently, behind an error that invites a retry. `PtyManager.
-paneProbeTimeoutMs` answers `WINDOWS_PANE_PROBE_TIMEOUT_MS` (8 s) for exactly the backends
+(`readWindowsConsoleOwner`), measured at ~2.4 s one-shot on a loaded Windows 11 machine — so under
+the 2 s bound every Windows target read `unknown` and refused as `targetPaneUnreadable`, behind an
+error that invites a retry (#1211). The #1206 probe worker is fast only once WARM and exits after
+60 s idle, so a message sent minutes after the last meets its 6 s first-request deadline plus the 4 s
+one-shot fallback. `PtyManager.paneProbeTimeoutMs` answers `WINDOWS_PANE_PROBE_TIMEOUT_MS` — DERIVED
+from those two deadlines + 1 s (`session-host/windows-probe-budget.ts`; never a literal) — for exactly the backends
 `paneOwner` routes to that probe, and both shells forward it as the optional
 `AgentMessagingDeps.paneProbeTimeoutMs` through ONE helper, `ptyPaneProbeDeps`, which binds the read
 and its budget together (an optional dep that is not forwarded fails silently). SSH and tmux keep 2 s: that bound exists because

@@ -63,8 +63,10 @@ Do not replace that read with a stored `agentId` or the restart heuristic's deep
 An interpreter such as `node` is named by its script's package `bin` entry, never as `node`, so
 npm-installed CLIs such as Codex are recognized. A session released by park expiry or offscreen
 release is still messageable: existence and routing ask the backend, not the attached client.
-Both Windows owner reads (session host and direct ConPTY) shell out to PowerShell and take ~2.4 s, so
-they get their own `WINDOWS_PANE_PROBE_TIMEOUT_MS` through `PtyManager.paneProbeTimeoutMs`; ssh and
+Both Windows owner reads (session host and direct ConPTY) go through a PowerShell probe that takes
+seconds when cold, so they get their own `WINDOWS_PANE_PROBE_TIMEOUT_MS` through
+`PtyManager.paneProbeTimeoutMs`, derived from the probe's own deadlines
+(`session-host/windows-probe-budget.ts`) — change a probe deadline there, not a literal; ssh and
 tmux keep the 2 s bound. A shell that wires agent messaging must forward that optional dep.
 Never put the submitting Enter in the same write as a message paste: `core/settled-submit.ts`
 pastes, waits for the envelope to render, then submits separately, on every backend.
