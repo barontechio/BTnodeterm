@@ -2967,10 +2967,21 @@ else, and its context links must keep classifying across restarts).
   file is KEPT and listed in Settings, bounded at 20 — legacy blocks, our hook scripts);
   **undecided** = nothing either way. Server `installHooks: false` is a hard veto. Rules a refactor
   must not undo:
-  - **Grandfathering is decided at boot from OUR files only** (non-empty `~/.nodeterm/agent-hooks/`
-    or the userData shims), before `settingsStore.registerIpc()` and before any install: an existing
-    install gets every agent + `hostDefault` enabled and a one-time notice; a new install gets NO
-    record and a banner (Enable all / Choose… / Not now — "Not now" declines all, so it asks once).
+  - **Grandfathering is decided at boot from OUR files only** (a non-empty `~/.nodeterm/agent-hooks/`),
+    before `settingsStore.registerIpc()` and before any install: an existing install gets every
+    agent + `hostDefault` enabled and a one-time notice; a new install gets NO record and a banner
+    (Enable all / Choose… / Not now — "Not now" declines all, so it asks once). **Evidence must be a
+    file only a pre-consent build wrote** — the userData canvas/context shims are written on EVERY
+    boot, consent or not, and counting them grandfathered every fresh install on its second boot
+    (issue #1149: a systemd restart, the update timer, a desktop quit before the banner was
+    answered — 11 hook entries in `~/.claude/settings.json`, Codex `trusted_hash` pre-approvals).
+    And the decision is made ONCE: the first boot that finds no evidence writes
+    `<userData>/integration-consent-fresh-install` (`FRESH_INSTALL_MARKER`), after which no boot of
+    that install grandfathers — so a sibling install sharing `~/.nodeterm` (desktop + Server Edition)
+    enabling ITS hooks cannot grandfather this one either. A marker FILE, not a settings key:
+    `SettingsStore.init` reads an unreadable settings.json as the defaults, and a boot-time save of
+    a "not answered yet" record would overwrite the user's file. Same function, same call, both
+    shells.
   - **No caller reaches an installer by omission.** `installManagedAgentHooks(agents)` takes a
     REQUIRED set; `RemoteHooks` takes a REQUIRED plan (`NO_REMOTE_INTEGRATION` = fail-closed);
     account add/link asks `currentIntegrationLifecycle()` and writes nothing when none is registered.

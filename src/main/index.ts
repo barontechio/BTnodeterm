@@ -1596,8 +1596,9 @@ app.whenReady().then(async () => {
     console.warn('[model-gateway] could not migrate the legacy API key to secret storage', error)
   }
   // Agent-integration consent (issue #744): an install from before this feature (our own hook
-  // scripts / shims are on disk) is grandfathered as enabled, so nobody's badges or canvas control
-  // silently stop on upgrade. Decided BEFORE the renderer can load settings and before any install.
+  // scripts are on disk) is grandfathered as enabled, so nobody's badges or canvas control silently
+  // stop on upgrade. Decided BEFORE the renderer can load settings and before any install, and once
+  // per install: a first boot without evidence is marked fresh and never grandfathered later (#1149).
   try {
     const grandfathered = resolveIntegrationConsentAtBoot(
       settingsStore.get(),

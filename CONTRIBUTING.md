@@ -1183,7 +1183,10 @@ for an agent the user ENABLED in `settings.agentIntegrations`, removed when they
 alone while they have not answered. Do not add a direct call to an installer; add the artifact to
 the lifecycle (local) or to the `RemoteHooks` artifact plan (SSH), and give it a removal that
 deletes only what nodeterm wrote. `src/core/agent-integrations-wiring.test.ts` fails on a new call
-site. Do not merge text into `AGENTS.md` / `GEMINI.md` — agents get skills (progressive disclosure)
+site. **A file nodeterm writes at every boot is never evidence of a pre-consent install** — the
+grandfathering check (`detectExistingIntegrations`) counted the always-written userData shims and
+silently enabled every agent on a fresh install's second boot (#1149). Only a non-empty
+`~/.nodeterm/agent-hooks/` counts, and only on an install's first boot (the fresh-install marker). Do not merge text into `AGENTS.md` / `GEMINI.md` — agents get skills (progressive disclosure)
 instead; the old blocks crowded codex's 32 KiB instruction budget.
 
 Claude/Gemini settings must go through the guarded transactions in
