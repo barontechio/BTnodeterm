@@ -854,6 +854,25 @@ Lifecycle, by intent:
   The refusal is **only** in `spawnNew` — a co-attach JOIN to a live session for that node id is
   still correct. An offline node reports itself to `SshReconnector`, so the canvas heals itself;
   `retryNow` (banner Reconnect / node Reconnect) skips the backoff and clears the refuse window.
+  **Whether a node is remote comes from its PROJECT, never from its own fields** (issue #1186,
+  `@shared/ssh-project-nodes`). `requireRemote`/`sshRemoteTmux` used to be stamped only by this
+  machine's node factories, but an SSH project's `project.json` lives on the host and other writers
+  put nodes into it — above all the host's own desktop, which opens the same folder as a LOCAL
+  project (`cwd: "."`, no `ssh` fields). Such a node ran on the VIEWING machine in an unrelated
+  folder, under the id the host was running. Three layers: (1) `fileToProject` routes every session
+  node of an SSH project to the project's host (`routeSshProjectNodes`: `ssh` = the project server,
+  `sshRemoteTmux`, cwd resolved POSIX-style against `remoteCwd`; editor/video/files get `sshFs`),
+  and `persistedCanvases` / `getNodeResolved` read the cache the same way; (2) `projectToFile`
+  writes the SSH mirror NEUTRAL (`neutralSshProjectNodes` drops those fields, cwd back to `./x`),
+  because the file is shared LAYOUT — a node stamped "runs over ssh on <host>" cannot run on the
+  host's own desktop at all; (3) core refuses a local spawn whose `ownerProjectId` is an SSH project
+  (`PtyManager.setSshProjectCheck`, wired in BOTH shells from the index) even without
+  `requireRemote`. Kept as written: a plain `ssh <host>` terminal (`ssh` without `sshRemoteTmux` —
+  `shell: 'ssh'` at the spawn) and a foreign host ATTACHMENT (`sshRemoteTmux` + another host). The one
+  local terminal an SSH canvas may hold is a LOCAL-account login node, marked in memory only
+  (`renderer/lib/localOnSshCanvas.ts` → `localOnSshCanvas` on the create; a scoped relay guest's is
+  deleted); after a restart it routes to the host like any other node. **Downgrade:** a build older
+  than this one reads the neutral file's nodes as local (the bug it already had for host-made nodes).
   **The phone's relay `pty.attach` is the other way in, and it is closed the same way**
   (`PtyManager.prepareRelayAttach`, pure routing in `core/relay-attach-plan.ts`). It used to call
   `attachDetached(nodeId)` → `tmux new-session -A` on the LOCAL socket for whatever id the phone

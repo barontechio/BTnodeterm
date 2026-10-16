@@ -611,6 +611,15 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   SSH node became a local shell in this machine's `$HOME`. CLAUDE.md, "A remote node is NEVER
   spawned locally".
 
+- **An SSH project's node runs on the project's host — ask the project, not the node.** Node
+  fields like `sshRemoteTmux` arrive through a shared `project.json` that the host's own desktop and
+  teammates also write, so a node without them must still never become a local shell (issue #1186).
+  `fileToProject` derives the routing from the project's SSH record, the file written back to the
+  host stays neutral, and core refuses a local spawn owned by an SSH project
+  (`PtyManager.setSshProjectCheck`). A new path that turns stored nodes into live ones or spawns a
+  terminal goes through those, not through the node's fields alone. CLAUDE.md, "A remote node is
+  NEVER spawned locally".
+
 - **Phone keys and store links are platform-neutral.** New paired keys are stamped
   `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
   existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
