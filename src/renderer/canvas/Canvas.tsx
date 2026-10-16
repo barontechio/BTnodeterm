@@ -413,7 +413,13 @@ import {
 import { NODE_MAXIMIZE_MARGIN_PX, maximizeTargetRect } from '../lib/nodeMaximize'
 import { measurePinnedInsets, type ScreenInsets } from '../lib/pinnedInsets'
 import { measureMaximizeInsets, MAXIMIZE_CHROME_SELECTOR } from '../lib/maximizeInsets'
-import { ZONE_GUTTER_PX, zoneTargetRect, type ZoneId } from '../lib/nodeZones'
+import {
+  ZONES,
+  ZONE_COMMANDS,
+  ZONE_GUTTER_PX,
+  zoneTargetRect,
+  type ZoneId
+} from '../lib/nodeZones'
 import {
   recordBreadcrumb,
   stepBreadcrumb,
@@ -10148,10 +10154,10 @@ export function Canvas() {
       'node.focusUp': () => moveNodeFocus('up'),
       'node.focusDown': () => moveNodeFocus('down'),
       'node.maximize': toggleMaximizeCommand,
-      'node.zoneLeft': () => snapNodeToZone('left-half'),
-      'node.zoneRight': () => snapNodeToZone('right-half'),
-      'node.zoneUp': () => snapNodeToZone('top-half'),
-      'node.zoneDown': () => snapNodeToZone('bottom-half')
+      // Every zone, halves through quarters, from the one table (issue #1169).
+      ...Object.fromEntries(
+        ZONES.map((z) => [ZONE_COMMANDS[z.id], () => snapNodeToZone(z.id)])
+      )
       // node.close / node.toggleMarkdown: main-process intercepted on desktop; deliberately
       // no renderer handler here. The browser owns ⌘W in the Server Edition (see
       // bridge/stubs.ts); ⌘/Ctrl+M there is matched by the bridge's OWN window listener
