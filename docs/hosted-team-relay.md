@@ -798,11 +798,6 @@ it is a new way to use it.
   client's baseline and is never cast, so on a governed project it never reaches disk: every load
   derives it again. The repairs are deterministic, so this costs nothing visible, but a repair that
   must persist on a shared project has to be cast.
-- **The issue summary modal's "Agent runs" on a relay tab** (`GitHubIssueSummaryModal` →
-  `BoardLogPanel`) still pairs the LOCAL api with the relay project's id: `KanbanView` renders under
-  App's local provider, and unlike the card modal this modal is not wrapped in
-  `ProjectSessionScope`, so the history is read from this machine's core, not the host's. It is
-  pre-existing; a follow-up.
 
 ## Status and troubleshooting
 
@@ -1174,6 +1169,11 @@ are unchanged.
   leaves. Past 8 MB its output is dropped (redrawn later) and the pause is handed back
   (`ui-sink-registry.ts`).
 - **Shared canvas edits:** see [Known limits](#known-limits) under Shared canvas authority.
+- **The issue summary modal's "Agent runs" on a relay tab** (`GitHubIssueSummaryModal` →
+  `BoardLogPanel`) still pairs the LOCAL api with the relay project's id: `KanbanView` renders under
+  App's local provider, and unlike the card modal this modal is not wrapped in
+  `ProjectSessionScope`, so the history is read from this machine's core, not the host's. It is
+  pre-existing; a follow-up.
 - **No git for Viewers in a subfolder of a larger repository.** Viewers and Commenters get the git
   panel only for a project that is the top folder of its own repository (or a worktree's). A
   monorepo subfolder shows its files but refuses every git read (see [Roles](#roles)).

@@ -5642,7 +5642,10 @@ export function Canvas() {
             // The fresh session is now bound to the tab (openRelayTab rebound the SAME project id),
             // so it is finally safe to drop the stale offline session it replaced. Disposing only
             // AFTER a successful rebind is what keeps a FAILED reconnect reconnectable: if approval
-            // never lands, the offline session stays bound and the tab stays greyed-clickable.
+            // never lands, the stale session stays bound, so the next attempt still finds it
+            // (`boundSessionForProject` in reconnectRelay) and a hosted remount still finds the tabs
+            // it served (`projectIdsBoundToSession` in placeProjects). The tab stays greyed either
+            // way: an unbound remote tab resolves to the offline relay session.
             if (staleSessionId) {
               disposeSession(staleSessionId)
               if (hosted) useHostedTeams.getState().forget(staleSessionId)

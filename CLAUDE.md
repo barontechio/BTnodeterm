@@ -572,9 +572,10 @@ project's nodes only.** The contract:
   `sshRemoteTmux` onto them — the host's core would then refuse its own sessions (`requireRemote`
   with no master of its own: `held-elsewhere` for a live one, a refused spawn otherwise). Three
   layers besides the keying above:
-  (1) `sessionForProject` resolves a REMOTE project (`remote` in the store, or bound while remote in
-  this run) with no live binding to the OFFLINE relay session (`OFFLINE_RELAY_SESSION_ID`,
-  `session/offline-relay-session.ts`: `source 'relay'`, `status 'offline'`), never the local one.
+  (1) `sessionForProject` resolves a REMOTE project (`remote` in the store; once the store no longer
+  holds it, bound while remote in this run) with no live binding to the OFFLINE relay session
+  (`OFFLINE_RELAY_SESSION_ID`, `session/offline-relay-session.ts`: `source 'relay'`, `status
+  'offline'`), never the local one.
   Its core-bound calls (pty, fs, git, workspace, …) reject, so no terminal can be created here; it
   is not a wall around this machine, since its api spreads `...local` like a live relay tab's (the
   local namespaces — contextLink, transcripts, handoff, media — still act here, and its `boardLog`
@@ -9911,8 +9912,9 @@ under one `$HOME`, with different bytes; the last writer wins.
 `context:update` metadata (deploy one core per team); a viewer's socket backlog over 1 MB still
 pauses the shared pty through Stage 2 backpressure; the canvas authority's own limits (a project's
 non-content fields stay last writer wins between tabs, the share-time window, oversized nodes, board
-edits to another core, load-time repairs that are never cast, the GitHub issue summary modal's
-"Agent runs" log on a relay tab) are under "Known limits" in the doc.
+edits to another core, load-time repairs that are never cast) are under "Known limits" in the doc;
+the GitHub issue summary modal reading its "Agent runs" log from this machine on a relay tab is under
+"Limitations (v1)".
 
 **Surfaces:** Desktop is full (joiner, plus approval and invite code in an owner's hosted tab, plus
 Share with team from any desktop OS onto a Linux host). Server Edition is the host (the `team` CLI,
