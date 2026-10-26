@@ -104,6 +104,17 @@ describe('patchShrinkTrim', () => {
     expect(term.buffer.active.getLine(0)!.translateToString(true)).toBe('x'.repeat(100))
   })
 
+  it('a wide character cut by the new edge does not break the trim or the find', async () => {
+    const { term, search } = open(130)
+    patchShrinkTrim(term)
+    // '日' is two cells wide and lands on columns 99–100: the narrowing to 100 cuts through it.
+    await write(term, ALT_SCREEN + 'x'.repeat(99) + '日 s')
+    term.resize(100, 5)
+    expect(() => find(search, 's')).not.toThrow()
+    expect(find(search, '日')).toBe(1)
+    expect(term.buffer.active.getLine(0)!.length).toBe(100)
+  })
+
   it('is idempotent and fails open on a terminal without the expected internals', async () => {
     const { term, search } = open(130)
     expect(patchShrinkTrim(term)).toBe(true)

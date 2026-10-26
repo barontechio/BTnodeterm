@@ -69,7 +69,9 @@ export function patchShrinkTrim(term: Terminal): boolean {
       if (!narrowed) return
       try {
         // Only the alternate buffer: the normal one reflows whenever it has scrollback, which
-        // xterm trims itself, and walking up to 50k scrollback lines per resize would be waste.
+        // xterm trims itself. Our terminals never set `scrollback: 0` or `windowsPty` (the two
+        // things that turn reflow off), so walking the normal buffer here would only be waste.
+        // `onResize` fires synchronously right after `buffers.resize`, before any render.
         trimBuffer(core.buffers?.alt, next)
       } catch {
         // Fail open: an untrimmed line is the stock behavior, never worse.
