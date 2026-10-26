@@ -5,6 +5,7 @@ import { isLocalOnSshCanvas } from '../../lib/localOnSshCanvas'
 import { ptyRefusal } from '@shared/pty-refusal'
 
 import { patchImeModeSwitch } from '../../terminal/ime-mode-switch'
+import { patchShrinkTrim } from '../../terminal/shrink-trim'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -315,6 +316,8 @@ export function ModalTerminal({
     // Renderer-parity with the canvas terminals (see char-size-quantize): the modal co-views
     // the same session, so its column math must match what the canvas draws.
     quantizeCharSize(term)
+    // The card's find bar crashes on an untrimmed alternate buffer, same as the canvas node.
+    patchShrinkTrim(term)
     fit.fit()
 
     let sessionId: string | null = null

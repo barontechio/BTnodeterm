@@ -128,6 +128,7 @@ import {
 import { quantizeCharSize } from '../terminal/char-size-quantize'
 import { resyncDomRendererSpacing } from '../terminal/dom-renderer-spacing'
 import { patchViewportScrollSync } from '../terminal/viewport-scroll-sync'
+import { patchShrinkTrim } from '../terminal/shrink-trim'
 import {
   parkCap,
   parkWindowMs,
@@ -3250,6 +3251,9 @@ export function TerminalNode({
       // grant/release swaps renderers without the text visibly reflowing (see the helper).
       quantizeCharSize(term)
       patchViewportScrollSync(term)
+      // Before the first fit: a narrowing resize must trim the alternate buffer, or the find bar
+      // can crash this node (see the helper).
+      patchShrinkTrim(term)
       applyFit()
       // Reads the STORE, not the component's focusedRef: a parked terminal keeps the closure
       // from the instance that created it, and a ref from a dead instance never updates — the
