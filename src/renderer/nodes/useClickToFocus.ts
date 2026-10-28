@@ -125,6 +125,7 @@ export function useClickToFocus(host: ClickToFocusHost): void {
       if (h().reparenting()) return
       const outcome = focusLossOutcome({
         nodeRoot: root,
+        nodeChrome: root.closest('.react-flow__node'),
         lost: e.target,
         gained: e.relatedTarget,
         activeElement: document.activeElement,

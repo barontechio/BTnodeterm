@@ -100,6 +100,7 @@ describe('terminal focus mode (#757)', () => {
     const ev = (over: Partial<Parameters<typeof focusLossOutcome>[0]>) =>
       focusLossOutcome({
         nodeRoot,
+        nodeChrome: null,
         lost,
         gained: null,
         activeElement: body,
@@ -109,6 +110,22 @@ describe('terminal focus mode (#757)', () => {
         lostIsCoveredXterm: false,
         ...over
       })
+
+    it('keeps when focus moved into a field beside the root but inside the node (comments flyout)', () => {
+      const composer = { id: 'comments-composer' }
+      // The wrapper is the chrome: a header press focuses the very element passed as nodeChrome.
+      const nodeChrome: { id: string; contains: (n: unknown) => boolean } = {
+        id: 'react-flow-node-wrapper',
+        contains: (n) => n === nodeChrome || n === composer || nodeRoot.contains(n)
+      }
+      // The press landed in the node's wrapper, which used to read as "own chrome" → reclaim → the
+      // xterm took the keyboard back and the composer could never be typed into.
+      expect(ev({ nodeChrome, gained: composer, activeElement: composer, pressedInOwnNode: true })).toBe('keep')
+      // A press on the header/border still sends focus to the wrapper itself, and that still reclaims.
+      expect(ev({ nodeChrome, gained: nodeChrome, activeElement: nodeChrome, pressedInOwnNode: true })).toBe('reclaim')
+      // Another card is still elsewhere.
+      expect(ev({ nodeChrome, gained: elsewhere, activeElement: elsewhere })).toBe('release')
+    })
 
     it('releases when focus moved to something outside the node (another card, a field)', () => {
       expect(ev({ gained: elsewhere, activeElement: elsewhere })).toBe('release')

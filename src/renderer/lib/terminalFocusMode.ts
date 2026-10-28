@@ -89,6 +89,9 @@ export interface NodeRootLike {
 export interface FocusLossEvent {
   /** The node's root (`.term-node`), or null if it is gone. */
   nodeRoot: NodeRootLike | null
+  /** The node's React Flow wrapper (`.react-flow__node`), which also holds the root's SIBLINGS —
+   *  the 💬 comments flyout sits outside the root (overflow:hidden would clip it) but inside this. */
+  nodeChrome: NodeRootLike | null
   /** The element that lost focus (`focusout`'s target). */
   lost: unknown
   /** Where focus went (`focusout`'s `relatedTarget`); null for "nowhere" AND for a window blur. */
@@ -129,7 +132,7 @@ export type FocusLossOutcome =
  * a real move from its look-alikes:
  *
  * - **Focus stayed inside the node** (the header's rename field, a header button, the ⌘M view's
- *   composer). The user is still working HERE → `keep`.
+ *   composer, the 💬 comments flyout beside the root). The user is still working HERE → `keep`.
  * - **The window lost focus** (Cmd+Tab, a click on another app). Chromium fires `blur`/`focusout`
  *   on the focused element, but that element remains `document.activeElement` and is focused
  *   again on return — the terminal never stopped owning the keyboard → `keep`.
@@ -157,6 +160,11 @@ export function focusLossOutcome(e: FocusLossEvent): FocusLossOutcome {
   if (e.lostIsCoveredXterm) return 'keep'
   if (e.activeElement === e.lost) return 'keep'
   if (e.gained && e.nodeRoot.contains(e.gained)) return 'keep'
+  // Focus went to a field this node renders beside its root (the comments composer). The wrapper
+  // ITSELF is excluded: that is where a header/border press sends focus, and it must still reclaim.
+  // Without this the press read as "own chrome" and `reclaim` put the keyboard back in the xterm
+  // a tick later — the composer's caret blinked once and nothing could be typed.
+  if (e.gained && e.nodeChrome && e.gained !== e.nodeChrome && e.nodeChrome.contains(e.gained)) return 'keep'
   if (e.pressedInOwnNode) return e.pressedInReadableText ? 'reclaim-on-release' : 'reclaim'
   return 'release'
 }
