@@ -211,16 +211,24 @@ async function call(path: string, body: unknown): Promise<MintReply> {
   }
 }
 
+/** What the device-bound status poll answers. `answered` is true only for a 2xx: it is the one
+ * reply that may state "this device is not entitled". A 429 from our rate limiter, a 5xx, or a
+ * keygen outage relayed as an error is the server failing to answer, not answering "no". */
+interface StatusReply extends MintReply {
+  active?: boolean
+  answered?: boolean
+}
+
 // GET helper for the device-bound status poll.
-async function getJson(path: string): Promise<MintReply & { active?: boolean }> {
+async function getJson(path: string): Promise<StatusReply> {
   if (!allowed()) return { error: 'disabled' }
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
   try {
     const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal })
-    const json = (await res.json().catch(() => ({}))) as MintReply & { active?: boolean }
+    const json = (await res.json().catch(() => ({}))) as StatusReply
     if (!res.ok) return { error: json.error ?? 'network' }
-    return json
+    return { ...json, answered: true }
   } catch {
     return { error: 'offline' }
   } finally {
@@ -429,14 +437,19 @@ export function initLicense(onChange?: () => void): void {
         const next = withToken(stored, r)
         await save(next)
         broadcast(statusOf(next))
-      } else if (r.error === 'offline' || r.error === 'network' || r.error === 'disabled') {
-        // Couldn't reach the server → offline grace: keep the last valid token.
-        if (stored.token) broadcast(statusOf(stored))
-      } else {
-        // Server responded: this device is no longer entitled (canceled / suspended / expired)
-        // → drop Pro and clear the cached token, even though it hasn't expired yet.
+      } else if (r.answered && r.active === false) {
+        // The server ANSWERED (2xx) that this device is no longer entitled (canceled / suspended /
+        // expired) → drop Pro and clear the cached token, even though it hasn't expired yet.
         if (stored.token) await save({ ...stored, token: undefined, termEndsAt: undefined })
         broadcast(statusFrom(undefined))
+      } else {
+        // Anything else is a status read that did not run — offline, a 429 from the rate limiter,
+        // a 5xx, a keygen outage, an unusable body. Not evidence of cancellation: keep the last
+        // valid token (offline grace, the same rule the key-paste branch above follows). It still
+        // expires on its own clock, so a real cancellation is never held open past the token.
+        // This used to be an allowlist of offline/network/disabled with every other error read as
+        // "canceled", which deleted a paying customer's Pro on a single 429.
+        if (stored.token) broadcast(statusOf(stored))
       }
     }
   }

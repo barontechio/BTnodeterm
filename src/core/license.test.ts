@@ -145,6 +145,31 @@ describe('license entitlement refresh', () => {
     expect(sent().at(-1)!.active).toBe(false)
   })
 
+  // A status read that did not run is not a cancellation. The server rate-limits 30/min per IP
+  // (a few users behind one NAT, or the Upgrade screen's 4s poll, is enough to trip it) and relays a
+  // keygen outage as an error; either used to delete a still-valid 7-day token on the spot.
+  it.each([
+    ['a 429 from the rate limiter', { ok: false, status: 429, json: async () => ({ error: 'rate_limited' }) }],
+    ['a keygen outage relayed as 502', { ok: false, status: 502, json: async () => ({ error: 'unavailable' }) }],
+    ['a 5xx with no body', { ok: false, status: 503, json: async () => { throw new Error('not json') } }],
+    ['a 2xx that states nothing', { ok: true, status: 200, json: async () => ({}) }]
+  ])('a periodic refresh that gets %s keeps Pro and the stored token', async (_label, reply) => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ active: true, token: mint(7 * 24 * 60 * 60) })
+    )
+    const { initLicense } = await import('./license')
+    initLicense()
+    await refreshed()
+    expect(sent().at(-1)!.active).toBe(true)
+
+    fetchMock.mockResolvedValue(reply)
+    await vi.advanceTimersByTimeAsync(24 * HOUR)
+    await refreshed()
+    expect(sent().at(-1)!.active).toBe(true)
+    const onDisk = JSON.parse(readFileSync(path.join(h.userData, 'license.json'), 'utf8')) as { token?: string }
+    expect(onDisk.token).toBeTruthy()
+  })
+
   it('rejects a token minted for a different device (copied license.json)', async () => {
     // Simulates copying license.json + a foreign token onto this machine.
     fetchMock.mockResolvedValue(
