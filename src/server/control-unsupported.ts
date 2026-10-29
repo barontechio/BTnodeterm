@@ -74,6 +74,7 @@ export interface ServerEditionControlActions {
   reportIssue(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   showVideo(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  showWeb(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
@@ -182,6 +183,8 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.showImage(nodeId, command.args, verified)
       case 'show-video':
         return actions.showVideo(nodeId, command.args, verified)
+      case 'show-web':
+        return actions.showWeb(nodeId, command.args, verified)
       case 'spawn-team':
       case 'verify':
         return actions.orchestrate(verb, nodeId, command.args, verified)

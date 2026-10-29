@@ -5,6 +5,7 @@ import {
   buildClaudeAccountsApi,
   buildControlApi,
   buildMediaApi,
+  buildWebPreviewApi,
   buildTranscriptSearchApi,
   buildBoardCommentDeliveryApi,
   buildFilesApi,
@@ -44,6 +45,20 @@ describe('Server media protocol', () => {
       { kind: 'request', method: IPC.mediaAllowScoped, args: ['/clip.mp4', { projectId: 'p', nodeId: 'v' }] },
       { kind: 'request', method: IPC.mediaRenew, args: ['opaque'] },
       { kind: 'request', method: IPC.mediaRelease, args: ['opaque'] }
+    ])
+  })
+})
+
+describe('isolated web preview protocol', () => {
+  it('issues by saved-node scope and passes only the opaque token when renewing or releasing', async () => {
+    const c = fakeClient(); const api = buildWebPreviewApi(c as never).webPreview!
+    await api.allow({ projectId: 'p', nodeId: 'web' })
+    await api.renew('https://preview.example.test/web-preview?ref=one')
+    await api.release('https://preview.example.test/web-preview?ref=one')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.webPreviewAllow, args: [{ projectId: 'p', nodeId: 'web' }] },
+      { kind: 'request', method: IPC.webPreviewRenew, args: ['one'] },
+      { kind: 'request', method: IPC.webPreviewRelease, args: ['one'] }
     ])
   })
 })

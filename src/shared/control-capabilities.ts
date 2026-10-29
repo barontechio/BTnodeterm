@@ -13,7 +13,7 @@ export const CONTROL_SUPPORT = {
   'open-agent': 'partial',
   'show-image': 'partial',
   'show-video': 'partial',
-  'show-web': 'unsupported',
+  'show-web': 'partial',
   'open-browser': 'unsupported',
   group: 'supported',
   ungroup: 'supported',
@@ -53,6 +53,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  'show-web': 'External HTTP(S) URLs use a sandboxed iframe; static local HTML requires a distinct configured HTTPS preview hostname. Local scripts and network resource loads are disabled.',
   'show-video': 'Local audio/video files; authenticated owner streaming with browser-dependent codec support. No SSH fallback.',
   'open-worktree': 'Local projects only; prepares shared paths and successful trust-gated setup before binding.',
   'close-worktree': 'Unbind keeps an existing checkout; removal requires owner confirmation and missing checkouts require recovery.',

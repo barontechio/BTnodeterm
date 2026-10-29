@@ -14,6 +14,8 @@ import { sameOriginRequest } from './origin'
 import { handleDownload } from './download'
 import { handleMedia } from './media'
 import type { MediaReferences } from '../core/media-references'
+import type { WebPreviews } from '../core/web-previews'
+import { handleWebPreview, previewHost } from './web-preview'
 import type { DownloadTickets } from '../core/download-tickets'
 
 export const SESSION_COOKIE = 'nt_session'
@@ -70,6 +72,7 @@ export interface HttpHandlerOpts {
    *  exercise it — the route then simply doesn't exist. */
   downloadTickets?: DownloadTickets
   mediaReferences?: MediaReferences
+  webPreviews?: WebPreviews
   /**
    * NODETERM_PUBLIC_ORIGIN (an https origin, normalized). When set the session cookie is always
    * `Secure`, every response carries HSTS, and an `Origin` equal to it passes the same-origin check
@@ -413,7 +416,8 @@ async function serveStatic(
       )
       return raw
     }
-    return Buffer.from(html.replace(marker, "default-src 'self'; connect-src 'self';"))
+    return Buffer.from(html.replace(marker, "default-src 'self'; connect-src 'self';")
+      .replace("frame-src 'self' blob:", "frame-src 'self' blob: https: http:"))
   }
 
   const enc =
@@ -443,7 +447,7 @@ async function serveStatic(
 export function createHttpHandler(
   opts: HttpHandlerOpts
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
-  const { auth, rendererDir, trustProxy, downloadTickets, mediaReferences, publicOrigin } = opts
+  const { auth, rendererDir, trustProxy, downloadTickets, mediaReferences, webPreviews, publicOrigin } = opts
   let warnedNoPublicOrigin = false
 
   return function handler(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -469,7 +473,12 @@ export function createHttpHandler(
     const pathname = url.pathname
     const method = req.method || 'GET'
 
-    // Every response, before any route can answer (S6, S5).
+    if (webPreviews && previewHost(req, webPreviews.origin)) {
+      await handleWebPreview(req, res, webPreviews)
+      return
+    }
+
+    // Every application response (S6, S5); the isolated preview host sets its own policy above.
     res.setHeader('X-Frame-Options', 'DENY')
     res.setHeader('Content-Security-Policy', FRAME_CSP)
     res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -481,6 +490,8 @@ export function createHttpHandler(
         `[nodeterm-server] requests are arriving for a non-loopback host name but NODETERM_PUBLIC_ORIGIN is not set: the session cookie is marked Secure only when your proxy sends X-Forwarded-Proto: https, and no HSTS header is sent. Set NODETERM_PUBLIC_ORIGIN to the https address you open in the browser (for example https://term.example.com). See docs/SERVER.md.`
       )
     }
+
+    if (pathname === '/web-preview') { res.writeHead(404); res.end(); return }
 
     const decision =
       trustProxy !== undefined ? proxyAuthDecision(trustProxy, req.headers, req.socket.remoteAddress) : 'none'

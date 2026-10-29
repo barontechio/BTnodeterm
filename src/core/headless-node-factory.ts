@@ -1,5 +1,7 @@
 import { mediaMime, VIDEO_NODE_SIZE, videoNodeData } from '../shared/media'
 import { matchesMediaSignature } from './media-references'
+import { externalPreviewUrl, webNodeData, WEB_NODE_SIZE } from '../shared/web-preview'
+import type { WebPreviews } from './web-previews'
 import type { TextDeliveryResult } from '../shared/text-delivery'
 import { isBusyAgentState, parseForceFlag, type ControlScope } from '../shared/control-scope'
 import { isLaunchShell } from '../shared/agents/pane'
@@ -177,6 +179,7 @@ export interface HeadlessNodeFactoryDeps {
   projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
   requestAgentsTrust?(projectId: string): unknown
   worktrees?: WorktreeControlBackend
+  webPreviews?: Pick<WebPreviews, 'readHtml' | 'writeHtml'>
   /** Desktop keeps only backend sessions after a headless operation; Server retains its synthetic client. */
   releaseHeadlessAfterWork?: boolean
   /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
@@ -301,7 +304,7 @@ function token(): string {
   return randomBytes(4).toString('hex')
 }
 
-function nextId(prefix: 'term' | 'sticky' | 'group' | 'editor' | 'video'): string {
+function nextId(prefix: 'term' | 'sticky' | 'group' | 'editor' | 'video' | 'web'): string {
   return `${prefix}-${Date.now().toString(36)}-${token()}`
 }
 
@@ -1249,6 +1252,62 @@ export class HeadlessNodeFactory {
       } catch (error) {
         return { ok: false, error: editStarted ? `${verb}-save-uncertain: inspect list before repeating; ${String(error)}` : String(error) }
       }
+    })
+  }
+
+  showWeb(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) return { ok: false, error: 'show-web-identity-refused: verified source required' }
+      const flags = unsupportedFlags(args, new Set(['url', 'file', 'html']))
+      if (flags) return { ok: false, error: `show-web: ${flags}` }
+      if (['url', 'file', 'html'].filter((flag) => args[flag] !== undefined).length !== 1) return { ok: false, error: 'show-web: provide exactly one of --url, --file or --html' }
+      const source = sourceProject(await this.readWorkspace(), sourceNodeId)
+      if (!source || !sourceCanControl(source.node, this.deps.agentIdOf) || source.project.ssh || source.project.unavailable || isRemoteSessionNode(source.node)) {
+        return { ok: false, error: 'show-web-source-refused: requires one available local project and control-capable source' }
+      }
+      let preview: { url?: string; filePath?: string }
+      const resolveFile = (project: Project, node: CanvasNodeState) => {
+        const raw = expandHomePath(args.file ?? '')
+        const cwd = node.cwd || project.cwd
+        return path.isAbsolute(raw) ? path.normalize(raw) : cwd && path.isAbsolute(cwd) ? path.resolve(cwd, raw) : undefined
+      }
+      if (args.url !== undefined) {
+        const url = externalPreviewUrl(args.url)
+        if (!url) return { ok: false, error: 'show-web-url-refused: use an external HTTP(S) URL without credentials; host localhost requires a preview gateway' }
+        preview = { url }
+      } else {
+        if (!this.deps.webPreviews) return { ok: false, error: 'show-web-isolation-required: configure NODETERM_PREVIEW_ORIGIN on a distinct HTTPS hostname before previewing HTML' }
+        try {
+          const filePath = args.html !== undefined ? await this.deps.webPreviews.writeHtml(args.html) : resolveFile(source.project, source.node)
+          if (!filePath) return { ok: false, error: 'show-web-path-refused: an absolute local HTML path is required' }
+          await this.deps.webPreviews.readHtml(filePath)
+          preview = { filePath }
+        } catch (error) { return { ok: false, error: `show-web-file-refused: ${String(error)}` } }
+      }
+      const id = nextId('web')
+      let editing = false
+      try {
+        const edited = await this.contentWriter.edit((workspace): ServerControlReply => {
+          const fresh = sourceProject(workspace, sourceNodeId)
+          if (!fresh || fresh.project.id !== source.project.id || fresh.project.ssh || fresh.project.unavailable || isRemoteSessionNode(fresh.node) ||
+            !sourceCanControl(fresh.node, this.deps.agentIdOf) || (args.file !== undefined && resolveFile(fresh.project, fresh.node) !== preview.filePath)) {
+            return { ok: false, error: 'show-web-source-changed: inspect the source before retrying' }
+          }
+          storedGeometryNodes(fresh.project.nodes)
+          const size = resolveDefaultNodeSize(this.deps.settings().defaultNodeSizes?.web, WEB_NODE_SIZE, NODE_MIN_SIZES.web)
+          fresh.project.nodes.push({ id, kind: 'web', position: placeRight(fresh.project, fresh.node, size), size,
+            ...webNodeData(preview), ...(args.html !== undefined ? { title: 'HTML preview' } : {}), openedBy: sourceNodeId })
+          fresh.project.ropes = [...(fresh.project.ropes ?? [])]
+          addEdge(fresh.project.ropes, sourceNodeId, id, 'ctrl')
+          editing = true
+          return { ok: true, message: `showing web preview ${id}`, result: { id } }
+        })
+        if (edited.saved) {
+          this.ownership.record(id, { sourceNodeId, projectId: source.project.id })
+          await this.publishPersisted([source.project.id])
+        }
+        return edited.value
+      } catch (error) { return { ok: false, error: `show-web-${editing ? 'save-uncertain: inspect list before repeating' : 'refused'}: ${String(error)}` } }
     })
   }
 

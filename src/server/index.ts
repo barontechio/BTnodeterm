@@ -35,6 +35,8 @@ import {
 } from '../core/model-gateway-credentials'
 import { DownloadTickets } from '../core/download-tickets'
 import { registerServerMedia } from './media-ipc'
+import { WebPreviews } from '../core/web-previews'
+import { registerWebPreviewIpc } from './web-preview-ipc'
 import { registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
 import { ProjectTrustStore } from '../core/project-trust-store'
 import { ProjectSetupService } from '../core/project-setup-service'
@@ -386,6 +388,9 @@ export async function startServer(
   // ticket minted over the socket is redeemable by the GET that follows it.
   const downloadTickets = new DownloadTickets()
   const mediaReferences = registerServerMedia(platform, workspaceStore)
+  const webPreviews = config.previewOrigin && config.publicOrigin ?
+    new WebPreviews(config.previewOrigin, config.publicOrigin, workspaceStore, platform.userDataDir) : undefined
+  registerWebPreviewIpc(platform, webPreviews)
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
     onSettingsChange: (cb) => settingsStore.onChange(cb),
@@ -865,6 +870,7 @@ export async function startServer(
         requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
         worktrees: makeWorktreeControlBackend(workspaceStore, gitService, projectSetupService,
           (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id)),
+        webPreviews,
         reportIssue: {
           contextForProject: async (id) => {
             const context = await github.controller.contextForProject(id)
@@ -1025,6 +1031,7 @@ export async function startServer(
   const dropUiClient = (uiId: number): void => {
     workspaceStore.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
+    webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
     github.service.dropClient(uiId)
   }
@@ -1245,6 +1252,7 @@ export async function startServer(
       port: 0, // nothing bound
       async close() {
         mediaReferences.dispose()
+        webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
@@ -1289,12 +1297,14 @@ export async function startServer(
       trustProxy: config.trustProxy,
       publicOrigin: config.publicOrigin,
       downloadTickets,
-      mediaReferences
+      mediaReferences,
+      webPreviews
     })
   )
   // A closed browser tab is the NORMAL way to leave the Server Edition and sends no `pty:kill`,
   // so the WS close hook is what unsubscribes that client from the sessions it was watching.
   const wsServer = attachWsServer(server, {
+    previewOrigin: config.previewOrigin,
     platform,
     auth,
     onClientGone: dropUiClient,
@@ -1317,6 +1327,7 @@ export async function startServer(
     port,
     async close() {
       mediaReferences.dispose()
+      webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()

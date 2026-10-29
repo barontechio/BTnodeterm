@@ -43,6 +43,15 @@ streams from that checked descriptor with backpressure and cancellation. Format 
 counts and pending I/O are bounded. HTTP session authentication is mandatory even with a valid
 reference. Desktop's native media protocol is unchanged; relay and SSH playback stay refused here.
 
+Browser web nodes use `BrowserWebNode` with an opaque-origin iframe and an external-open fallback.
+Local HTML requires `NODETERM_PREVIEW_ORIGIN` plus a distinct `NODETERM_PUBLIC_ORIGIN` hostname;
+ports do not isolate cookies. `core/web-previews.ts` issues immutable, bounded, owner-client-scoped
+snapshots for saved local web nodes. The preview virtual host serves only snapshots, never app,
+auth or application WS routes, and the app origin never serves snapshots. Local HTML is static:
+resource CSP cannot block a script's self-navigation, so both response and iframe keep scripts
+disabled, retaining sandbox automatic-feature restrictions. Generated files are owner-only,
+content-addressed and preserved while referenced. Native Desktop retains its existing adapter.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

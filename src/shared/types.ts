@@ -4597,6 +4597,7 @@ export interface NodeTerminalApi {
   shell: ShellApi
   fs: FsApi
   media: MediaApi
+  webPreview?: import('./web-preview').WebPreviewApi
   browser: BrowserApi
   files: FilesApi
   updates: UpdateApi

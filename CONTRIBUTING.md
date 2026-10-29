@@ -227,6 +227,13 @@ never reuse one-shot download tickets or accept filesystem paths in the HTTP URL
 canonical path and inode before serving. Keep issuance, reference count, streams and byte-range
 parsing bounded; destroy streams on cancellation/revocation. Native Desktop keeps `nt-media://`.
 
+Browser web previews use `shared/web-preview.ts` and `BrowserWebNode`. Local HTML uses the optional
+`core/web-previews.ts` service and a distinct HTTPS virtual host; serve no app/auth/WS routes there,
+and never serve snapshots on the app origin. Keep local HTML static: resource CSP does not stop a
+script from navigating its own frame. Both the response sandbox and iframe omit script permission.
+References require owner issuance and a current saved local web node. Bound files, snapshots,
+pending reads/writes and reference lifetimes; preserve referenced generated files across restart.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

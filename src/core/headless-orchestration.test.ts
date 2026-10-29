@@ -11,6 +11,7 @@ import { DEFAULT_SETTINGS, type CanvasMutation, type CanvasNodeState } from '../
 import type { AgentState } from '../shared/agents/normalize'
 import { isWaitRope } from '../shared/canvas-lineage'
 import { accountConfigDir } from './claude-accounts-core'
+import { WebPreviews } from './web-previews'
 
 describe('host team execution without a renderer', () => {
   let store: WorkspaceStore
@@ -234,5 +235,21 @@ describe('host team execution without a renderer', () => {
     expect(await factory.showVideo('src', { path: file }, true)).toMatchObject({ ok: false, error: expect.stringContaining('type-refused') })
     expect(await factory.showVideo('src', { path: file }, false)).toMatchObject({ ok: false })
     expect((await read()).nodes.filter((n) => n.kind === 'video')).toHaveLength(1)
+  })
+
+  it('creates external web previews and requires the configured isolation service for local HTML', async () => {
+    expect(await factory.showWeb('src', { url: 'https://example.com/page' }, true)).toMatchObject({ ok: true })
+    expect(await factory.showWeb('src', { html: '<h1>Local</h1>' }, true)).toMatchObject({ ok: false, error: expect.stringContaining('isolation-required') })
+    expect(await factory.showWeb('src', { url: 'http://localhost:3000' }, true)).toMatchObject({ ok: false })
+    const previews = new WebPreviews('https://preview.example.test', 'https://term.example.test', store, path.join(dir, 'data'))
+    factory.stop(); factory = new HeadlessNodeFactory({ ...deps, webPreviews: previews })
+    try {
+      const reply = await factory.showWeb('src', { html: '<h1>Local</h1>' }, true)
+      expect(reply).toMatchObject({ ok: true })
+      const node = (await read()).nodes.find((n) => n.id === (reply.result as { id: string }).id)!
+      expect(node).toMatchObject({ kind: 'web', title: 'HTML preview', openedBy: 'src' })
+      expect(fs.readFileSync(node.filePath!, 'utf8')).toBe('<h1>Local</h1>')
+      expect(pty.creates).toEqual([])
+    } finally { previews.dispose() }
   })
 })

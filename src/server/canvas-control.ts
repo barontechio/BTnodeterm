@@ -54,6 +54,7 @@ import { contextLinkShimPath } from '../core/context-link'
 import type { ProjectLaunchInfo } from '../shared/project-settings'
 import type { HostLaunchReply } from '../shared/headless-launch'
 import type { WorktreeControlBackend } from '../core/worktree-control'
+import type { WebPreviews } from '../core/web-previews'
 import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
 import { reportIssueFromControl } from '../core/github/control-report-issue'
@@ -88,6 +89,7 @@ export interface ServerCanvasControlDeps {
   projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
   requestAgentsTrust?(projectId: string): unknown
   worktrees?: WorktreeControlBackend
+  webPreviews?: Pick<WebPreviews, 'readHtml' | 'writeHtml'>
   /**
    * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
    * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
@@ -222,6 +224,7 @@ export async function initServerCanvasControl(
     projectLaunchInfo: deps.projectLaunchInfo,
     requestAgentsTrust: deps.requestAgentsTrust,
     worktrees: deps.worktrees,
+    webPreviews: deps.webPreviews,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
     outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
     handedOver: (nodeId) => stationHandovers.isHandedOver(nodeId),
@@ -324,6 +327,7 @@ export async function initServerCanvasControl(
     }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),
     showImage: (sourceNodeId, args, verified) => factory.showImage(sourceNodeId, args, verified),
     showVideo: (sourceNodeId, args, verified) => factory.showVideo(sourceNodeId, args, verified),
+    showWeb: (sourceNodeId, args, verified) => factory.showWeb(sourceNodeId, args, verified),
     board: (sourceNodeId, args) => factory.board(sourceNodeId, args),
     assign: (sourceNodeId, args) => factory.assign(sourceNodeId, args),
     geometry: (verb, sourceNodeId, args) => factory.geometry(verb, sourceNodeId, args),

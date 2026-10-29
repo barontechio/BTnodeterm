@@ -265,7 +265,18 @@ export function buildMediaApi(client: RpcClient): Pick<NodeTerminalApi, 'media'>
     renew: (url) => client.request(IPC.mediaRenew, tokenOf(url)) as Promise<boolean>,
     release: (url) => client.request(IPC.mediaRelease, tokenOf(url)) as Promise<void>,
     allowSsh: async () => ({ ok: false, error: 'Playing media from an SSH host is not available in the browser.' }),
-    writeHtml: async () => { throw new Error('HTML previews require an isolated content origin configured on this host.') }
+    writeHtml: (html) => client.request(IPC.mediaWriteHtml, html) as Promise<string>
+  } }
+}
+
+export function buildWebPreviewApi(client: RpcClient): Pick<NodeTerminalApi, 'webPreview'> {
+  const token = (url: string) => {
+    try { const parsed = new URL(url); return parsed.pathname === '/web-preview' ? parsed.searchParams.get('ref') ?? '' : '' } catch { return '' }
+  }
+  return { webPreview: {
+    allow: (scope) => client.request(IPC.webPreviewAllow, scope) as Promise<string>,
+    renew: (url) => client.request(IPC.webPreviewRenew, token(url)) as Promise<boolean>,
+    release: (url) => client.request(IPC.webPreviewRelease, token(url)) as Promise<void>
   } }
 }
 
@@ -1520,6 +1531,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...stubApi,
     ...buildControlApi(client),
     ...buildMediaApi(client),
+    ...buildWebPreviewApi(client),
     ...buildTranscriptSearchApi(client),
     ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),

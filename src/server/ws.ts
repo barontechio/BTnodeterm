@@ -22,6 +22,7 @@ import { sameOriginRequest } from './origin'
 import { parseRpcMessage } from '../shared/rpc'
 import { presenceHub } from '../core/presence/hub'
 import { WS_CLIENT_FRAME_MAX } from '../shared/ws-frame'
+import { previewHost } from './web-preview'
 
 /**
  * Heartbeat period. Every WS_HEARTBEAT_MS the server pings each socket; a socket that answered
@@ -79,6 +80,7 @@ export interface WsServerOpts {
   trustProxy?: TrustProxyConfig
   /** NODETERM_PUBLIC_ORIGIN — an `Origin` equal to it passes the same-origin check (see origin.ts). */
   publicOrigin?: string
+  previewOrigin?: string
 }
 
 /**
@@ -108,7 +110,7 @@ function upgradeAllowed(
 }
 
 export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSocketServer {
-  const { platform, auth, onClientGone, heartbeatMs = WS_HEARTBEAT_MS, trustProxy, publicOrigin } = opts
+  const { platform, auth, onClientGone, heartbeatMs = WS_HEARTBEAT_MS, trustProxy, publicOrigin, previewOrigin } = opts
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD })
 
   // The session each cookie-authenticated socket rides on (S3). A socket used to be checked once at
@@ -179,7 +181,7 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
     const pathname = new URL(req.url || '/', 'http://x').pathname
     if (pathname !== '/ws') return
 
-    const allowed = upgradeAllowed(req, auth, trustProxy, publicOrigin)
+    const allowed = previewOrigin && previewHost(req, previewOrigin) ? { ok: false as const } : upgradeAllowed(req, auth, trustProxy, publicOrigin)
     if (!allowed.ok) {
       // Guard the raw socket: writing to an already-dead peer emits 'error', and an
       // unhandled 'error' on a socket (EventEmitter) throws → crashes the process.

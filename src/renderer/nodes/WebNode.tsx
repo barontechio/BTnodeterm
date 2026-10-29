@@ -15,6 +15,8 @@ import { WebviewLoadingBar } from './WebviewLoadingBar'
 import { useWebviewKeepAlive } from '../state/webviewKeepAlive'
 import { WebviewZoomControls } from '../components/WebviewZoomControls'
 import type { ZoomableWebview } from '@shared/webview-zoom'
+import { isBrowserRuntime } from '../bridge/runtime'
+import BrowserWebNode from './BrowserWebNode'
 
 /**
  * A web view node. When `data.url` is set it loads that live URL; otherwise it serves the
@@ -22,7 +24,11 @@ import type { ZoomableWebview } from '@shared/webview-zoom'
  * `media.allow`). Rendered in an Electron `<webview>` kept locked down (no `nodeintegration`).
  * The frame/header mirror {@link VideoNode}/EditorNode for consistent drag/resize/close behavior.
  */
-export default function WebNode({ id, data, selected }: NodeProps<CanvasNode>) {
+export default function WebNode(props: NodeProps<CanvasNode>) {
+  return isBrowserRuntime() ? <BrowserWebNode {...props} /> : <NativeWebNode {...props} />
+}
+
+function NativeWebNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const { deleteElements } = useReactFlow()
   const [src, setSrc] = useState('')
   /** We never got as far as handing the guest a source: an unusable scheme, or a media grant that

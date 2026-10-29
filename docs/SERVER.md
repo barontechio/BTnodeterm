@@ -80,6 +80,33 @@ access and pinned file identity; removed nodes and replaced or redirected files 
 Only recognized media formats are served. Playback depends on the viewer's available codecs.
 Relay peers and SSH media remain unavailable on this path.
 
+`show-web --url <external-http(s)-url>` creates a browser preview with an external-open fallback.
+The iframe respects the site's embedding policy and keeps an opaque sandbox origin. Host
+`localhost` URLs require the development preview gateway; they are not opened against the viewer's
+own machine. `--file <local-html>` and `--html <markup>` require the optional isolation setup below.
+
+### Optional static HTML previews
+
+Set `NODETERM_PUBLIC_ORIGIN=https://term.example.com` and
+`NODETERM_PREVIEW_ORIGIN=https://preview.example.com` (or `--preview-origin`). The preview hostname
+must differ; ports alone do not separate cookies. Route both HTTPS hosts to the same Server
+listener, preserving the **preview Host header**. The preview virtual host serves only opaque
+`/web-preview?ref=…` references; it exposes no application, login or application WebSocket routes.
+The application origin never serves those snapshots. No extra listener or browser worker starts.
+
+Local previews display self-contained static HTML, inline CSS and embedded data assets, up to
+1 MiB. Scripts, forms, automatic refresh and network resource loads are disabled. In particular,
+resource CSP alone cannot make script-enabled HTML offline: a script can navigate its own frame.
+The sandbox therefore retains its script/automatic-feature restrictions; see the
+[HTML sandbox and refresh rules](https://html.spec.whatwg.org/multipage/semantics.html#attr-meta-http-equiv-refresh).
+Interactive application execution belongs to the optional isolated browser work, not this surface.
+Native Desktop previews retain their existing adapter.
+
+Owner references expire, renew while mounted and revoke on disconnect or node removal. Snapshots
+are immutable and bounded in memory. Generated HTML uses owner-only content-addressed files;
+referenced files survive restart, and unused staging files age out on the next write. Existing
+browser HTML modals that do not have a saved web-node scope remain unsupported by this API.
+
 ## Quickstart
 
 ```bash
@@ -144,6 +171,7 @@ Precedence: **CLI flag > environment variable > default.**
 | `--trust-proxy-nets <list>` | `NODETERM_TRUST_PROXY_NETS` | `127.0.0.0/8, ::1/128` | Comma-separated IPs/CIDRs (IPv4+IPv6) whose requests may use the trust header. Only meaningful with the header set. |
 | — | `NODETERM_TRUST_PROXY_SECRET` | — | Shared secret your proxy sends as `X-Nodeterm-Proxy-Secret` (at least 32 printable characters). **Required** when the trusted nets include loopback. Environment only: a command-line flag is refused, because argv is readable by every local user. |
 | `--public-origin <url>` | `NODETERM_PUBLIC_ORIGIN` | — | The https origin you open in the browser, e.g. `https://term.example.com`. Forces the `Secure` cookie flag, sends HSTS, and lets that `Origin` pass the same-origin checks when the proxy rewrites `Host`. See [TLS](#tls-reverse-proxy). |
+| `--preview-origin <url>` | `NODETERM_PREVIEW_ORIGIN` | — | Optional distinct HTTPS hostname for scoped static HTML previews. Requires `NODETERM_PUBLIC_ORIGIN`; preserve its Host header through the proxy. |
 
 Binding a **non-loopback** host (anything other than `127.0.0.1` / `localhost` /
 `::1`) **without** `--insecure-http` is refused at startup — plain HTTP on a public

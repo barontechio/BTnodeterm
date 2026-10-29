@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import http from 'node:http'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { testTmpDir } from '../core/test-tmp'
 import { fakePlatform, type FakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
@@ -43,7 +43,7 @@ describe('authenticated Server media streaming', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   })
-  afterEach(async () => { refs.dispose(); await new Promise<void>((resolve) => server.close(() => resolve())); resetPlatformForTests() })
+  afterEach(async () => { refs.dispose(); await new Promise<void>((resolve) => server.close(() => resolve())); vi.restoreAllMocks(); resetPlatformForTests() })
 
   it('streams and seeks repeatedly using the same opaque reference, with correct MIME and no path exposure', async () => {
     const url = await allow()
@@ -78,7 +78,9 @@ describe('authenticated Server media streaming', () => {
   })
 
   it('refuses guest issuance, another project, forged paths and remote or removed nodes', async () => {
+    const issue = vi.spyOn(refs, 'issue')
     await expect(allow(2)).rejects.toThrow('owner')
+    expect(issue).not.toHaveBeenCalled()
     await expect(allow(1, file, { ...scope, projectId: 'another' })).rejects.toThrow('refused')
     await expect(allow(1, '/etc/passwd')).rejects.toThrow('refused')
     const url = await allow()

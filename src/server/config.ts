@@ -85,6 +85,8 @@ export type ServerConfig = {
    * `X-Forwarded-Proto`), with a one-time warning when a non-loopback Host arrives.
    */
   publicOrigin?: string
+  /** Optional isolated HTTPS hostname for self-contained HTML previews. */
+  previewOrigin?: string
   /**
    * TEST ONLY: an in-process relay transport for each hosted-team listener, in place of the real
    * WebSocket to the relay. Passed straight to `createHostedService`'s `transport`.
@@ -147,12 +149,12 @@ export function trustProxyRefusedMessage(nets: string): string {
 
 /** Validate `NODETERM_PUBLIC_ORIGIN` into a normalized https origin. Throws (never echoing more than
  *  the value the operator typed) on anything that is not exactly an https origin. */
-function parsePublicOrigin(value: string): string {
+function parsePublicOrigin(value: string, label = 'NODETERM_PUBLIC_ORIGIN'): string {
   let url: URL
   try {
     url = new URL(value)
   } catch {
-    throw new Error(`NODETERM_PUBLIC_ORIGIN must be an https origin such as https://term.example.com (got "${value}").`)
+    throw new Error(`${label} must be an https origin such as https://term.example.com (got "${value}").`)
   }
   if (
     url.protocol !== 'https:' ||
@@ -163,7 +165,7 @@ function parsePublicOrigin(value: string): string {
     url.hash !== ''
   ) {
     throw new Error(
-      `NODETERM_PUBLIC_ORIGIN must be an https origin with no path, query or credentials, such as https://term.example.com (got "${value}").`
+      `${label} must be an https origin with no path, query or credentials, such as https://term.example.com (got "${value}").`
     )
   }
   return url.origin
@@ -291,6 +293,11 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
 
   const publicOriginRaw = pick('public-origin', 'NODETERM_PUBLIC_ORIGIN', '')
   const publicOrigin = publicOriginRaw !== '' ? parsePublicOrigin(publicOriginRaw) : undefined
+  const previewRaw = pick('preview-origin', 'NODETERM_PREVIEW_ORIGIN', '')
+  const previewOrigin = previewRaw ? parsePublicOrigin(previewRaw, 'NODETERM_PREVIEW_ORIGIN') : undefined
+  if (previewOrigin && (!publicOrigin || new URL(previewOrigin).hostname === new URL(publicOrigin).hostname)) {
+    throw new Error('NODETERM_PREVIEW_ORIGIN requires NODETERM_PUBLIC_ORIGIN and a distinct hostname; changing only the port does not isolate cookies.')
+  }
 
   return {
     port,
@@ -302,6 +309,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     trustProxy,
     ...(trustProxyRefused !== undefined ? { trustProxyRefused } : {}),
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
+    ...(previewOrigin !== undefined ? { previewOrigin } : {}),
     headless,
     canvasControl,
     controlScope

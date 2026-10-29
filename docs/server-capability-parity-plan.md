@@ -30,6 +30,17 @@ The PR 08 snapshot passes all 24,288 tests (109 skipped) and both builds. Local 
 streaming and `show-video` are connected through scoped, expiring owner references and authenticated
 HTTP Range responses. PR 09 is sequenced with host execution coordination before enabling it:
 the existing renderer `/branch` flow has no exclusion against restart/account changes.
+The PR 10 snapshot passes all 24,302 tests (109 skipped) and both builds. External URL previews
+and optional isolated static HTML previews are now connected. Static HTML intentionally keeps
+scripts disabled: resource CSP alone cannot contain a script's self-navigation. Script-enabled
+interactive application execution remains part of the isolated worker track (PRs 18/19).
+
+Two independent exports are proposed upstream, each based directly on `upstream/main` and passing
+24,164 tests (109 skipped), typecheck and both builds: [geometry #1320](https://github.com/eneskirca/nodeterm/pull/1320)
+and [media definitions #1321](https://github.com/eneskirca/nodeterm/pull/1321). Their remote CI/Security
+workflow runs report `action_required`; the upstream maintainer must authorize those fork runs.
+The integration through `be86cd38` is pushed to the fork as `up/server-media-streaming`. Upstream
+acceptance is tracked separately from local implementation and validation.
 
 Baseline inspected on 2026-10-29:
 
