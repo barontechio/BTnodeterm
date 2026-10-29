@@ -1,3 +1,4 @@
+import { editorNodeData, EDITOR_NODE_SIZE } from '@shared/editor-node'
 export * from '@shared/canvas-geometry'
 import {
   nodeW, nodeH, groupBox, groupsFirst, isDescendant, fitAncestorChain,
@@ -76,7 +77,7 @@ const GROUP_SIZE = { width: 520, height: 360 }
  *  GROUP_SIZE (520×360) is smaller than a single terminal (600×400) — a dropped-in terminal would
  *  overflow the frame. Open it large enough for one terminal with margin, and room to add another. */
 export const WORKTREE_GROUP_SIZE = { width: 760, height: 540 }
-const EDITOR_SIZE = { width: 660, height: 460 }
+const EDITOR_SIZE = EDITOR_NODE_SIZE
 const DIFF_SIZE = { width: 860, height: 500 }
 const DINO_SIZE = { width: 600, height: 200 }
 const TRIGGER_SIZE = { width: 300, height: 170 }
@@ -1166,13 +1167,7 @@ export function createEditorNode(
     id: nextId('editor'),
     type: 'editor',
     ...placeSized('editor', center, index),
-    data: {
-      title: filePath.split('/').pop() || 'untitled',
-      color: '#6ac4dc',
-      group: null,
-      filePath,
-      ...(sshFs ? { sshFs: true } : {})
-    }
+    data: editorNodeData(filePath, sshFs)
   }
 }
 

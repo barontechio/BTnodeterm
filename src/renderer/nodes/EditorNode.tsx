@@ -1,3 +1,4 @@
+import { IMAGE_MIME } from '@shared/image-preview'
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
 import { IconClose } from '../components/icons'
@@ -21,18 +22,6 @@ import { chipFor, commandTooltip } from '../lib/keybindingOverrides'
 import { pdfBlobUrl } from '../lib/pdfBlob'
 import { MaximizeButton } from './MaximizeButton'
 
-// Image extensions get a visual preview instead of the Monaco text editor.
-const IMAGE_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  svg: 'image/svg+xml',
-  avif: 'image/avif'
-}
 
 /**
  * A code editor node backed by Monaco. Reads the file on mount, auto-detects the language

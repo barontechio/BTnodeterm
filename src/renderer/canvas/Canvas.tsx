@@ -1,5 +1,6 @@
 import { planGeometryCommand } from '@shared/geometry-command'
 import { planBoardAssignment } from '@shared/board-assignment'
+import { controlOpenAgent } from '@shared/control-open-agent'
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
 import { markLocalOnSshCanvas } from '../lib/localOnSshCanvas'
@@ -14931,7 +14932,7 @@ export function Canvas() {
           case 'open-agent': {
             // open-claude is the legacy fixed-agent form; open-agent takes any builtin or custom
             // agent id — resolveAgent is the single registry/base-harness resolver for both.
-            const agentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
+            const agentId = controlOpenAgent(verb, args).agent as AgentId
             const count = Math.max(1, Math.min(5, parseInt(args.count || '1', 10) || 1))
             // --group parents the new node(s) into an existing group frame; a worktree-bound
             // group also hands its worktree path down as the cwd (same inheritance as
