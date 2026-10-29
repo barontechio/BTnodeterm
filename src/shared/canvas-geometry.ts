@@ -1251,3 +1251,50 @@ export function reparentNode<N extends GeometryNode>(
   if (updated === node) return nodes // target group missing / not a group
   return groupsFirst(nodes.map((n) => (n.id === nodeId ? updated : n)))
 }
+
+/** Wrap sibling nodes, preserving root coordinates; the host owns frame identity and metadata. */
+export function wrapGeometryNodes<N extends GeometryNode>(
+  nodes: N[],
+  ids: string[],
+  makeGroup: (box: Rect) => N,
+  grid = 0
+): N[] {
+  const set = new Set(ids)
+  const members = nodes.filter((n) => set.has(n.id))
+  if (members.length === 0 || new Set(members.map((n) => n.parentId ?? null)).size !== 1) {
+    return nodes
+  }
+  if (
+    members.some((member) =>
+      members.some((other) => other.id !== member.id && isDescendant(nodes, other.id, member.id))
+    )
+  ) {
+    return nodes
+  }
+
+  const minX = Math.min(...members.map((n) => n.position.x))
+  const minY = Math.min(...members.map((n) => n.position.y))
+  const maxX = Math.max(...members.map((n) => n.position.x + nodeW(n)))
+  const maxY = Math.max(...members.map((n) => n.position.y + nodeH(n)))
+
+  const parentId = members[0].parentId
+  const box = groupBox(nodes, parentId, { minX, minY, maxX, maxY }, grid)
+  const group = makeGroup(box)
+  if (parentId) {
+    group.parentId = parentId
+    group.extent = 'parent'
+  }
+
+  const updated = nodes.map((n) =>
+    set.has(n.id)
+      ? {
+          ...n,
+          parentId: group.id,
+          extent: 'parent' as const,
+          position: { x: n.position.x - box.x, y: n.position.y - box.y },
+          selected: false
+        }
+      : n
+  )
+  return fitAncestorChain(groupsFirst([group, ...updated]), parentId, grid)
+}

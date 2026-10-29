@@ -1,5 +1,5 @@
 import type { CanvasNodeState } from './types'
-import type { GeometryNode } from './canvas-geometry'
+import { wrapGeometryNodes, type GeometryNode } from './canvas-geometry'
 import { COLLAPSED_HEIGHT } from './node-sizing'
 
 /** Persisted sizes are expanded sizes, exactly as Desktop's load/save boundary defines them. */
@@ -55,4 +55,14 @@ export function applyStoredGeometry(original: readonly CanvasNodeState[], planne
     else delete next.premaxRect
     return next
   })
+}
+
+/** The same wrapping transform as Desktop, retaining every persisted field of the members. */
+export function wrapStoredNodes(nodes: readonly CanvasNodeState[], ids: string[], frame: CanvasNodeState, grid = 0): CanvasNodeState[] | null {
+  if (frame.kind !== 'group' || nodes.some((node) => node.id === frame.id)) throw new Error('geometry-invalid-frame')
+  const live = storedGeometryNodes(nodes)
+  const next = wrapGeometryNodes(live, ids, (box) => ({
+    id: frame.id, type: 'group', position: { x: box.x, y: box.y }, width: box.width, height: box.height, data: {}
+  }), grid)
+  return next === live ? null : applyStoredGeometry([...nodes, frame], next)
 }

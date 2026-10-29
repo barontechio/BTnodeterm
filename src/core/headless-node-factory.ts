@@ -12,7 +12,7 @@ import { NODE_MIN_SIZES } from '../shared/node-sizing'
 
 import { CanvasContentWriter, type NodePatch, type PatchSave } from './canvas-content-writer'
 import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
-import { applyStoredGeometry, storedGeometryNodes } from '../shared/stored-canvas-geometry'
+import { applyStoredGeometry, storedGeometryNodes, wrapStoredNodes } from '../shared/stored-canvas-geometry'
 import { stableStringify } from '../shared/canvas-mutations'
 import { boardCard } from '../shared/board-card'
 import { boardVerbReply } from '../shared/board-verb'
@@ -515,57 +515,17 @@ function groupPersistedNodes(
   label: string | undefined,
   color: NodeColor | undefined
 ): { nodes: CanvasNodeState[]; groupId: string; changed: CanvasNodeState[] } | null {
-  const selected = new Set(ids)
-  const members = nodes.filter((node) => selected.has(node.id))
-  if (!members.length || new Set(members.map((node) => node.parentId ?? null)).size !== 1) {
-    return null
-  }
-  if (
-    members.some((member) =>
-      members.some(
-        (other) => other.id !== member.id && isDescendant(nodes, other.id, member.id)
-      )
-    )
-  ) {
-    return null
-  }
-
-  const minX = Math.min(...members.map((node) => node.position.x))
-  const minY = Math.min(...members.map((node) => node.position.y))
-  const maxX = Math.max(...members.map((node) => node.position.x + node.size.width))
-  const maxY = Math.max(...members.map((node) => node.position.y + node.size.height))
-  const x = minX - GROUP_PAD
-  const y = minY - GROUP_PAD - GROUP_HEADER
-  const parentId = members[0].parentId
   const group: CanvasNodeState = {
-    id: nextId('group'),
-    kind: 'group',
-    position: { x, y },
-    size: {
-      width: maxX - minX + GROUP_PAD * 2,
-      height: maxY - minY + GROUP_PAD * 2 + GROUP_HEADER
-    },
+    id: nextId('group'), kind: 'group', position: { x: 0, y: 0 }, size: { width: 200, height: 140 },
     title: label || `Group ${groupIndex + 1}`,
-    color: color ?? SYSTEM_NODE_COLORS[groupIndex % SYSTEM_NODE_COLORS.length],
-    group: null,
-    ...(parentId ? { parentId } : {})
+    color: color ?? SYSTEM_NODE_COLORS[groupIndex % SYSTEM_NODE_COLORS.length], group: null
   }
+  const next = wrapStoredNodes(nodes, ids, group)
+  if (!next) return null
   const before = new Map(nodes.map((node) => [node.id, node]))
-  const updated = nodes.map((node) =>
-    selected.has(node.id)
-      ? {
-          ...node,
-          parentId: group.id,
-          position: { x: node.position.x - x, y: node.position.y - y }
-        }
-      : node
-  )
-  const next = groupsFirst(fitAncestorChain(groupsFirst([group, ...updated]), parentId))
-  return {
-    nodes: next,
-    groupId: group.id,
-    changed: next.filter((node) => !before.has(node.id) || before.get(node.id) !== node)
-  }
+  return { nodes: next, groupId: group.id,
+    changed: next.filter((node) => stableStringify(before.get(node.id)) !== stableStringify(node)) }
+
 }
 
 function rootPosition(

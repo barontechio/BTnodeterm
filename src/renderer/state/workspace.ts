@@ -1,7 +1,8 @@
+import { wrapGeometryNodes } from '@shared/canvas-geometry'
 import { editorNodeData, EDITOR_NODE_SIZE } from '@shared/editor-node'
 export * from '@shared/canvas-geometry'
 import {
-  nodeW, nodeH, groupBox, groupsFirst, isDescendant, fitAncestorChain,
+  groupsFirst, fitAncestorChain,
   repositionForParent, reparentNode
 } from '@shared/canvas-geometry'
 import type { Node } from '@xyflow/react'
@@ -1475,54 +1476,10 @@ export function createProject(
  *
  * `grid` (0 = snapping off) puts the frame on the grid immediately — see `groupBox`.
  */
-export function groupSelectedNodes(
-  nodes: CanvasNode[],
-  ids: string[],
-  groupIndex: number,
-  grid = 0
-): CanvasNode[] {
-  const set = new Set(ids)
-  const members = nodes.filter((n) => set.has(n.id))
-  if (members.length === 0 || new Set(members.map((n) => n.parentId ?? null)).size !== 1) {
-    return nodes
-  }
-  if (
-    members.some((member) =>
-      members.some((other) => other.id !== member.id && isDescendant(nodes, other.id, member.id))
-    )
-  ) {
-    return nodes
-  }
-
-  const minX = Math.min(...members.map((n) => n.position.x))
-  const minY = Math.min(...members.map((n) => n.position.y))
-  const maxX = Math.max(...members.map((n) => n.position.x + nodeW(n)))
-  const maxY = Math.max(...members.map((n) => n.position.y + nodeH(n)))
-
-  const parentId = members[0].parentId
-  const box = groupBox(nodes, parentId, { minX, minY, maxX, maxY }, grid)
-  const group = createGroupNode(
-    { x: box.x, y: box.y },
-    { width: box.width, height: box.height },
-    groupIndex
-  )
-  if (parentId) {
-    group.parentId = parentId
-    group.extent = 'parent'
-  }
-
-  const updated = nodes.map((n) =>
-    set.has(n.id)
-      ? {
-          ...n,
-          parentId: group.id,
-          extent: 'parent' as const,
-          position: { x: n.position.x - box.x, y: n.position.y - box.y },
-          selected: false
-        }
-      : n
-  )
-  return fitAncestorChain(groupsFirst([group, ...updated]), parentId, grid)
+export function groupSelectedNodes(nodes: CanvasNode[], ids: string[], groupIndex: number, grid = 0): CanvasNode[] {
+  return wrapGeometryNodes(nodes, ids, (box) => createGroupNode(
+    { x: box.x, y: box.y }, { width: box.width, height: box.height }, groupIndex
+  ), grid)
 }
 
 /** Returns a copy of a node with a fresh id, offset position, and top-level placement. */
