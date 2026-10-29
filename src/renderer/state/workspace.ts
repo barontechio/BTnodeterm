@@ -59,6 +59,7 @@ export { applyCanvasMutation, applyOwnCanvasMutation } from '@shared/canvas-muta
 export { accountNodeColor, agentAccountColor } from '@shared/agents/account-color'
 import { mutationTrustsLaunch, sanitizeInboundNode } from '@shared/node-exec'
 import { SYSTEM_NODE_COLORS } from '@shared/node-colors'
+import { WEB_NODE_SIZE, webNodeData } from '@shared/web-preview'
 import {
   NODE_SIZE_MAX,
   STICKY_NODE_SIZE,
@@ -84,7 +85,7 @@ const DIFF_SIZE = { width: 860, height: 500 }
 const DINO_SIZE = { width: 600, height: 200 }
 const TRIGGER_SIZE = { width: 300, height: 170 }
 const VIDEO_SIZE = VIDEO_NODE_SIZE
-const WEB_SIZE = { width: 720, height: 520 }
+const WEB_SIZE = WEB_NODE_SIZE
 const BROWSER_SIZE = { width: 800, height: 560 }
 // Tall and narrow: a file manager is a LIST, and the thing that runs out first is vertical room
 // for entries, not horizontal room for names (which ellipsize).
@@ -1173,20 +1174,11 @@ export function createWebNode(
   src: { url?: string; filePath?: string },
   center?: { x: number; y: number }
 ): CanvasNode {
-  const title = src.url
-    ? src.url.replace(/^https?:\/\//, '').slice(0, 40)
-    : src.filePath?.split('/').pop() || 'web'
   return {
     id: nextId('web'),
     type: 'web',
     ...placeSized('web', center, index),
-    data: {
-      title,
-      color: '#6ac4dc',
-      group: null,
-      ...(src.url ? { url: src.url } : {}),
-      ...(src.filePath ? { filePath: src.filePath } : {})
-    }
+    data: webNodeData(src)
   }
 }
 
