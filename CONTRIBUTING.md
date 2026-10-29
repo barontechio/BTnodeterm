@@ -55,6 +55,11 @@ The repo is split by Electron process boundary and the split is enforced, not ad
 `src/core/no-electron.test.ts` and `src/server/no-electron.test.ts` fail if `src/core` or
 `src/server` import `electron` or `../main/*`.
 
+Canvas automation shares `shared/geometry-command.ts`, `shared/board-assignment.ts` and the board
+projections between Desktop and Server. Host commands authorize every affected node before the
+serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
+lazy defaults; assignment changes never launch or type into a session.
+
 **Put new service logic in `src/core` behind `CorePlatform`, not inline in `src/main`.** That is the
 seam the Server Edition boots from; logic left in `src/main` silently does not exist there, and the
 boundary tests cannot tell you a feature is *missing*. This keeps happening to the same subsystem:

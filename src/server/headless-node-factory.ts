@@ -8,6 +8,10 @@ import { CanvasContentWriter, type NodePatch, type PatchSave } from '../core/can
 import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
 import { applyStoredGeometry, storedGeometryNodes } from '../shared/stored-canvas-geometry'
 import { stableStringify } from '../shared/canvas-mutations'
+import { boardCard } from '../shared/board-card'
+import { boardVerbReply } from '../shared/board-verb'
+import { planBoardAssignment } from '../shared/board-assignment'
+import { boardLogEvents } from '../shared/board-log-diff'
 import { groupsFirst } from '../shared/node-order'
 import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
@@ -1184,6 +1188,67 @@ export class HeadlessNodeFactory {
           ? `linked one-way: ${from} reads ${plan.linked.join(', ')}${note}`
           : `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
         result: { from, linked: plan.linked, skipped: plan.skipped }
+      }
+    })
+  }
+
+  async board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
+    const flagError = unsupportedFlags(args, new Set(['project']))
+    if (flagError) return { ok: false, error: `board: ${flagError}` }
+    const workspace = await this.readWorkspace()
+    const source = sourceProject(workspace, sourceNodeId)
+    if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+    if (!sourceCanControl(source.node, this.deps.agentIdOf)) return { ok: false, error: 'source node is not a control-capable agent' }
+    if (args.project !== undefined && args.project !== source.project.id) {
+      return { ok: false, error: `board-project-refused: Server Edition reads only the caller's own project (${source.project.id})` }
+    }
+    const cards = source.project.nodes.filter((n) => this.inCallerProject(sourceNodeId, n.id, workspace, source.project) &&
+      (n.id === sourceNodeId || this.ownsMutation(sourceNodeId, n.id, workspace, source.project)))
+      .flatMap((n) => { const card = boardCard(n); return card ? [card] : [] })
+    return { ok: true, ...boardVerbReply(source.project.kanban, cards) }
+  }
+
+  assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      const flagError = unsupportedFlags(args, new Set(['node', 'column', 'before']))
+      if (flagError) return { ok: false, error: `assign: ${flagError}` }
+      let projectId: string | undefined
+      let events: Array<{ nodeId?: string; event: NonNullable<BoardLogEntry['event']> }> = []
+      let editStarted = false
+      try {
+        const edited = await this.contentWriter.edit((workspace): ServerControlReply => {
+          const source = sourceProject(workspace, sourceNodeId)
+          if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+          if (!sourceCanControl(source.node, this.deps.agentIdOf)) return { ok: false, error: 'source node is not a control-capable agent' }
+          if (source.project.ssh || source.project.unavailable) return { ok: false, error: 'assign-project-refused: requires an available local project' }
+          const id = (args.node ?? '').trim()
+          const target = source.project.nodes.find((n) => n.id === id)
+          const card = target && boardCard(target)
+          if (!card) return { ok: false, error: `assign: --node names no session card (${id || 'missing'})` }
+          const permitted = (nodeId: string) => this.inCallerProject(sourceNodeId, nodeId, workspace, source.project) &&
+            (nodeId === sourceNodeId || this.ownsMutation(sourceNodeId, nodeId, workspace, source.project))
+          if (!permitted(id)) return this.ownershipRefusal('assign', sourceNodeId, id)
+          const before = (args.before ?? '').trim()
+          if (before && !permitted(before)) return this.ownershipRefusal('assign', sourceNodeId, before)
+          const plan = planBoardAssignment(source.project.kanban, source.project.id, id, args)
+          if (!plan.ok) return plan
+          events = boardLogEvents(plan.previous, plan.next, (nodeId) => {
+            const node = source.project.nodes.find((n) => n.id === nodeId)
+            return node && boardCard(node) ? boardCard(node)!.title || 'Untitled' : ''
+          })
+          projectId = source.project.id
+          editStarted = true
+          source.project.kanban = plan.next
+          const where = plan.columnId ? plan.next.columns.find((c) => c.id === plan.columnId)!.title : 'Ungrouped'
+          return { ok: true, message: `moved ${card.title || id} to ${where}`, result: { node: id, column: plan.columnId } }
+        })
+        if (edited.saved && projectId) {
+          await this.publishPersisted([projectId])
+          for (const { nodeId, event } of events) await this.logRun(projectId, { nodeId: nodeId ?? args.node, event })
+        }
+        return edited.value
+      } catch (error) {
+        return { ok: false, error: editStarted ? `assign-save-uncertain: inspect board before repeating; ${String(error)}` : String(error) }
       }
     })
   }

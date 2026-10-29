@@ -177,7 +177,7 @@ function issueBindingDocLines(): string[] {
     '  - Posting to GitHub is outward-facing and PUBLIC. Post an issue comment or open a pull request ONLY when',
     '    the user asked for it in this session; otherwise end with a proposed comment the user can post.',
     '  - The end of a turn moves nothing: your card moves only when you `assign` it or the user drags it.',
-    '  - The Server Edition has no `assign` verb — skip the card moves there.'
+    '  - Check `capabilities` before moving cards; the host still enforces project and creator scope.'
   ]
 }
 

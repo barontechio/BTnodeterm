@@ -1,5 +1,15 @@
 # CLAUDE.md
 
+Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
+planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,
+ordering, card membership and audit diffs also live in shared modules. Renderer compatibility
+exports keep old imports stable. Host writes use `core/canvas-content-writer.ts` and the existing
+WorkspaceStore queue (`docs/workspace-save-concurrency.md`), publishing reflected content mutations
+before authority overlays persist them. Authorize explicit targets and every indirectly affected
+frame/descendant before applying geometry. Preserve stored metadata and expanded collapsed sizes.
+Server `board` sees only its source project and scope-visible cards; `assign` can move the caller's
+own card or its permitted cards, and never starts work or touches a PTY. Reads keep defaults lazy.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

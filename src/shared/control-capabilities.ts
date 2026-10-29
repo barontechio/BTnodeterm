@@ -33,8 +33,8 @@ export const CONTROL_SUPPORT = {
   write: 'unsupported',
   close: 'partial',
   run: 'partial',
-  board: 'unsupported',
-  assign: 'unsupported',
+  board: 'partial',
+  assign: 'supported',
   send: 'supported',
   reply: 'supported',
   notify: 'supported',
@@ -53,6 +53,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  board: 'Reads only the caller project; creator scope shows the caller and its created cards.',
   'open-project': 'Only an exact, already registered local project can be opened.',
   'open-terminal': 'Local persistent sessions only; the host validates supported launch flags.',
   'open-agent': 'Local persistent sessions only; the host validates supported launch flags.',

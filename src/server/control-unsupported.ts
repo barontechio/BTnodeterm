@@ -68,6 +68,8 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   openProject(
     sourceNodeId: string,
@@ -175,6 +177,10 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.link(nodeId, command.args, verified)
       case 'group':
         return actions.group(nodeId, command.args)
+      case 'board':
+        return actions.board(nodeId, command.args)
+      case 'assign':
+        return actions.assign(nodeId, command.args)
       case 'ungroup':
       case 'move':
       case 'resize':

@@ -28,6 +28,11 @@ retain the caller's project and respect creator/project scope for every affected
 They preserve non-geometry metadata and never activate a tab. After an uncertain save, inspect
 `nodeterm.sh list --geometry on` before repeating a relative move.
 
+`board` reads the caller's columns and scope-visible cards; `assign --node <id> --column <id|title>`
+moves the caller's own card or another permitted card. `--before <id>` positions it before a
+visible card, and `--column ungrouped` removes its assignment. The first assignment materializes
+the normal default board. These commands preserve provider lanes and metadata and do not launch work.
+
 ## Quickstart
 
 ```bash

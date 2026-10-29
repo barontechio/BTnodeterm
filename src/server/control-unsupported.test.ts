@@ -220,6 +220,8 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     })
   })
   const actions = () => ({
+    board: vi.fn(async () => ({ ok: true as const })),
+    assign: vi.fn(async () => ({ ok: true as const })),
     geometry: vi.fn(async () => ({ ok: true as const })),
     openProject: vi.fn(async () => ({ ok: true as const, result: { projectId: 'project-loop' } })),
     openTerminal: vi.fn(async () => ({ ok: true as const, result: { id: 'term-new' } })),
@@ -559,6 +561,8 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       openProject: vi.fn(),
       openTerminal: vi.fn(),
       openAgent,
+      board: vi.fn(),
+      assign: vi.fn(),
       geometry: vi.fn(),
       close: vi.fn(),
       link: vi.fn(),
