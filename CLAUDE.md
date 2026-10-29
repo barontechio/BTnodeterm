@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+Canvas geometry and sizing algorithms live in `shared/canvas-geometry.ts` and
+`shared/node-sizing.ts`; renderer modules retain compatibility exports. The transforms accept a
+structural node shape and preserve its other fields. Keep opener/wait-rope interpretation in
+`shared/canvas-lineage.ts` so layout and team progress agree. Host callers supply stored dimensions
+and apply geometry fields without renderer hydration/serialization.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
