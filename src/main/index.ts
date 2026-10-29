@@ -177,10 +177,9 @@ import { fetchCheck } from '../core/check'
 import {
   hookServer,
   OPEN_PROJECT_CONTROL_REFUSAL,
-  REPORT_ISSUE_CONTROL_REFUSAL,
   GITHUB_READ_CONTROL_REFUSAL
 } from '../core/agents/hook-server'
-import { reportIssue } from '../core/github/report-issue-service'
+import { reportIssueFromControl } from '../core/github/control-report-issue'
 import { ReportLedgerStore } from '../core/github/report-ledger'
 import { projectCapabilityGrantedFor } from '../shared/project-capability-consent'
 import { askpassServer, ensureAskpassScript } from './remote-ssh/ssh-askpass'
@@ -4512,61 +4511,19 @@ app.whenReady().then(async () => {
    *     answer — read per call off the store, exactly as messaging's switch is, so revoking it
    *     stops the next report rather than the one after a restart.
    */
-  const handleReportIssueVerb = async (
-    nodeId: string,
-    args: Record<string, string>,
-    verified: boolean
-  ): Promise<{ ok: boolean; message?: string; error?: string }> => {
-    const refuse = (error: string) => ({ ok: false, error, message: error })
-    if (!verified) return refuse(REPORT_ISSUE_CONTROL_REFUSAL)
-    const projectId = projectIdOfNode(nodeId)
-    // Unresolved caller ⇒ fail closed, the same rule the project gates above follow: we cannot
-    // name the repository a report belongs to, and guessing one is the failure mode this whole
-    // feature is shaped around.
-    if (!projectId) {
-      return refuse(
-        'report-no-project: this node is not in a saved project, so there is no repository to ' +
-        'report to. Do not retry.'
-      )
-    }
-    return reportIssue(
-      {
+  const handleReportIssueVerb = (nodeId: string, args: Record<string, string>, verified: boolean) =>
+    reportIssueFromControl({ nodeId, args, verified }, {
+      projectIdsForNode: (id) => workspaceStore.projectIdsForNode(id),
+      service: {
         contextForProject: async (id) => {
           const context = await github.controller.contextForProject(id)
           return { repository: context.repository, client: context.client }
         },
-        granted: () =>
-          projectCapabilityGrantedFor(
-            workspaceStore.capabilityProjectFor(projectId),
-            'agentIssueReporting',
-            settingsStore.get()
-          ),
-        loadLedger: (id) => reportLedger.load(id),
-        saveLedger: (id, ledger) => reportLedger.save(id, ledger),
+        granted: (id) => projectCapabilityGrantedFor(workspaceStore.capabilityProjectFor(id), 'agentIssueReporting', settingsStore.get()),
+        loadLedger: (id) => reportLedger.load(id), saveLedger: (id, ledger) => reportLedger.save(id, ledger),
         env: { version: app.getVersion(), os: process.platform, edition: 'desktop' }
-      },
-      {
-        projectId,
-        dryRun: dryRunRequested(args),
-        input: {
-          kind: args.kind ?? '',
-          title: args.title ?? '',
-          detail: args.body ?? '',
-          ...(args.output ? { excerpt: args.output } : {}),
-          ...(args.agent ? { agent: args.agent } : {})
-        }
       }
-    ).then((result) =>
-      result.ok
-        ? {
-            ok: true,
-            message: result.action === 'dry-run' && result.preview
-              ? `${result.message}\n\n${result.preview}`
-              : result.message
-          }
-        : { ok: false, error: result.error, message: result.message }
-    )
-  }
+    })
   const readControlCapabilities = registerControlCapabilities('desktop', () => true)
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker

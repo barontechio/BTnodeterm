@@ -49,6 +49,11 @@ to agent sessions. Delivery uses the existing messaging capability grant, runtim
 queue, receipts and deduplication. Relay comments and comments loaded from history remain display-only.
 An interrupted RPC shows an uncertain delivery outcome; check the session before sending again.
 
+`report-issue` uses the shared GitHub reporting service, disabled until the owner grants issue
+reporting for that project. It targets only the caller's unambiguous project repository and retains
+redaction, preview, fingerprint deduplication and rate limits. `--dry-run` composes the preview without
+publishing. Concurrent reports for one project receive a busy result instead of a queued publication.
+
 ## Quickstart
 
 ```bash

@@ -42,7 +42,7 @@ export const CONTROL_SUPPORT = {
   browser: 'unsupported',
   'open-project': 'partial',
   settings: 'partial',
-  'report-issue': 'unsupported',
+  'report-issue': 'supported',
   'report-outcome': 'supported',
   issues: 'partial',
   prs: 'partial'

@@ -69,6 +69,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  reportIssue(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
@@ -205,6 +206,8 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.run(nodeId, command.args, verified)
       case 'report-outcome':
         return actions.reportOutcome(nodeId, command.args, verified)
+      case 'report-issue':
+        return actions.reportIssue(nodeId, command.args, verified)
       case 'list':
         return actions.list(nodeId, command.args)
       case 'issues':

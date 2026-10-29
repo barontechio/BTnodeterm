@@ -52,6 +52,8 @@ import { HeadlessNodeFactory } from './headless-node-factory'
 import { sendSettledEnvelope } from './settled-envelope'
 import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
+import { reportIssueFromControl } from '../core/github/control-report-issue'
+import type { ReportIssueDeps } from '../core/github/report-issue-service'
 import {
   answerGitHubRead,
   resolveGitHubReadProject,
@@ -78,6 +80,7 @@ export interface ServerCanvasControlDeps {
   /** The GitHub service's cache reads behind `issues` / `prs` (core/github/control-read.ts).
    *  Absent = those verbs answer that the GitHub lane is unavailable here. */
   githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'dispatch'>
+  reportIssue?: ReportIssueDeps
   /**
    * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
    * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
@@ -297,6 +300,9 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {
+      projectIdsForNode: (id) => deps.workspaceStore.projectIdsForNode(id), service: deps.reportIssue
+    }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),
     showImage: (sourceNodeId, args, verified) => factory.showImage(sourceNodeId, args, verified),
     board: (sourceNodeId, args) => factory.board(sourceNodeId, args),
     assign: (sourceNodeId, args) => factory.assign(sourceNodeId, args),

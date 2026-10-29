@@ -57,6 +57,8 @@ import { registerControlCapabilities } from '../core/control-capabilities'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
 import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
 import { registerBoardCommentDeliveryIpc } from '../core/agents/board-comment-ipc'
+import { ReportLedgerStore } from '../core/github/report-ledger'
+import { projectCapabilityGrantedFor } from '../shared/project-capability-consent'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
 import { registerStationHandoverIpc } from '../core/station-handover'
@@ -846,12 +848,22 @@ export async function startServer(
 
   if (config.canvasControl === true) {
     try {
+      const reportLedger = new ReportLedgerStore(config.dataDir)
       canvasControl = await initServerCanvasControl({
         controlScope: config.controlScope ?? 'creator',
         workspaceStore,
         ptyManager,
         settings: () => settingsStore.get(),
         boardLog,
+        reportIssue: {
+          contextForProject: async (id) => {
+            const context = await github.controller.contextForProject(id)
+            return { repository: context.repository, client: context.client }
+          },
+          granted: (id) => projectCapabilityGrantedFor(workspaceStore.capabilityProjectFor(id), 'agentIssueReporting', settingsStore.get()),
+          loadLedger: (id) => reportLedger.load(id), saveLedger: (id, ledger) => reportLedger.save(id, ledger),
+          env: { version: platform.appVersion, os: process.platform, edition: 'server' }
+        },
         // `open-agent --issue #N` means the repository this project's board syncs with — the same
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>

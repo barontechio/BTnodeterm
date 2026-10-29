@@ -14,7 +14,10 @@ the serialized writer with behavioral coverage for ownership, metadata, concurre
 overlays. Board projection/assignment rules are shared in `8cc2444a`; Server `board` and `assign`
 now use those rules and the queued writer (`581704e4`). Image editor data and the fixed Claude alias
 are shared in `b9b670b7`; Server supports local image creation and the alias through its existing
-launch path. Later delivery items below remain planned work.
+launch path (`12ae2baa`). Naming is integrated from the existing `a7ed3062` change as `90e429b3`;
+owner transcript search is shared in `52e83d0f`, with account-path identity and shutdown coverage.
+Owner board-comment delivery is shared in `6f1ed10f`, and issue reporting uses the same verified,
+project-scoped entrance in both shells. Later delivery items below remain planned work.
 
 Baseline inspected on 2026-10-29:
 
