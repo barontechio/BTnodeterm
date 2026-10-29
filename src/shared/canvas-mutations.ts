@@ -394,14 +394,11 @@ export function applyEdgeMutationToScene(
 }
 
 /** Stable JSON stringify (keys sorted) so deep-equality is order-independent. */
-function stableStringify(value: unknown): string {
+export function stableStringify(value: unknown): string {
   return JSON.stringify(value, (_key, val) => {
     if (val && typeof val === 'object' && !Array.isArray(val)) {
-      const sorted: Record<string, unknown> = {}
-      for (const k of Object.keys(val as Record<string, unknown>).sort()) {
-        sorted[k] = (val as Record<string, unknown>)[k]
-      }
-      return sorted
+      return Object.fromEntries(Object.keys(val as Record<string, unknown>).sort()
+        .map((k) => [k, (val as Record<string, unknown>)[k]]))
     }
     return val
   })

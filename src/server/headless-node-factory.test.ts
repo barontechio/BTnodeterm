@@ -1299,7 +1299,7 @@ describe('HeadlessNodeFactory', () => {
   })
 
   it('saves manual recovery intent before sending, including a successful send whose clearing save fails', async () => {
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const typeInto = pty.writeHeadless.bind(pty)
     // The headless write is synchronous, so the durable read starts at the first typed byte and is
     // awaited afterwards. Nothing reaches the disk in between: the next save is the one failed here.
@@ -1835,7 +1835,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --run-now with --after on open-terminal before anything is created, saved or sent (#925)', async () => {
     states['term-upstream'] = 'working'
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const reply = await factory.openTerminal(
       'term-source',
       { cwd: projectDir, cmd: 'printf hi', after: 'term-upstream', 'run-now': '' },
@@ -1851,7 +1851,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --run-now with --after on open-agent in the same words (#925)', async () => {
     states['term-upstream'] = 'working'
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const reply = await factory.openAgent(
       'term-source',
       { agent: 'claude', prompt: 'brief', after: 'term-upstream', 'run-now': '1' },
@@ -1865,7 +1865,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --after-pr by name: the Server Edition keeps no pull request watch', async () => {
     // A silent drop would open the node and start it at once — before the PR the caller named.
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     for (const reply of [
       await factory.openAgent('term-source', { agent: 'claude', prompt: 'brief', 'after-pr': '7:merged' }, true),
       await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'make', 'after-pr': '7:merged' }, true)
@@ -2465,7 +2465,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
   it('once canvas control stopped, a verb still mid-launch neither casts nor saves (and says so)', async () => {
     const factory = new HeadlessNodeFactory(deps())
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     let castAtStop = -1
     let savesAtStop = -1
     const create = pty.createHeadless.bind(pty)
@@ -2485,7 +2485,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
 
   it('a verb that stops before its FIRST save writes nothing either', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     let factory: HeadlessNodeFactory | null = null
     factory = new HeadlessNodeFactory({
       ...deps(),
@@ -2752,7 +2752,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
 
   it('refreshArmed with nothing ready deep-copies nothing and saves nothing', async () => {
     const factory = new HeadlessNodeFactory(deps())
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const clone = vi.spyOn(globalThis, 'structuredClone')
     // Armed, but its dependency is not done: nothing changes.
     await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })

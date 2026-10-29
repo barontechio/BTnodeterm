@@ -49,6 +49,7 @@ import { clampProjectName, folderName } from '../shared/project-name'
 import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
 import { codedError } from './relay/admin-error'
 import { createLaunchClaimLedger } from './launch-claim-ledger'
+import { mergeWorkspaceSave, sameWorkspaceSave } from '../shared/workspace-save-merge'
 
 /** What `WorkspaceStore.adoptFolder` did: the project now holding the folder, and whether this call
  *  added it (`created: false` = an existing project already held the same real directory). */
@@ -65,6 +66,8 @@ export interface AdoptFolderResult {
  * loads still carry everything else, so both are passed through it.
  */
 export interface ContentAuthorityHooks {
+  /** Optional for older adapters; the authority owns these projects' content operations. */
+  governs?(projectId: string): boolean
   /** Rewrite governed projects' content fields just before a save is split and written. */
   overlaySave(ws: Workspace): Promise<Workspace>
   /** Rewrite governed projects' content fields in a load result. */
@@ -413,20 +416,22 @@ export class WorkspaceStore {
 
   registerIpc(): void {
     platform().handleWithSender(IPC.workspaceLoad, async (senderId: number) => {
-      const workspace = await this.load()
-      // The renderer now holds these, so from here on its saves speak for them. Only the ids this
-      // load actually returned: an adoption that landed while the load was in flight stays pending.
-      // And only for a client that CAN save: a relay peer or a hosted-team guest reaches this same
-      // handler but is refused `workspace:save`, so its load proves nothing about the owner's tabs,
-      // and clearing on it let the first teammate to join hand a stale owner tab the right to drop
-      // the shared project. A platform that cannot tell (a test double) counts every caller.
-      if (platform().isOwnerClient?.(senderId) !== false) {
-        for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
-      }
-      return workspace
+      const run = this.saveChain.then(async () => {
+        const workspace = await this.load()
+        // Only a client's returned projects become its baseline. A relay peer cannot save,
+        // so its load must not give a stale owner tab permission to drop an adopted project.
+        if (platform().isOwnerClient?.(senderId) !== false) {
+          for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+          this.clientBaselines.set(senderId, { workspace: structuredClone(workspace) })
+        }
+        return workspace
+      })
+      this.saveChain = run.catch(() => {})
+      return run
     })
-    platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>
-      this.saveFromRenderer(workspace, opts?.localOnly === true))
+    platform().handleWithSender(IPC.workspaceSave,
+      (senderId: number, workspace: Workspace, opts?: WorkspaceSaveOptions) =>
+        this.saveFromRenderer(senderId, workspace, opts?.localOnly === true))
     platform().handleWithSender(IPC.workspaceClaimLaunch,
       (senderId: number, nodeId: unknown, command: unknown, manual: unknown) =>
         this.launchClaims.claim(nodeId as string, command as string, manual === true, senderId))
@@ -1228,6 +1233,54 @@ export class WorkspaceStore {
    *  used to interleave their file writes and land their indexes out of call order — the "both
    *  projects went blank after tab switching" wipe. */
   private saveChain: Promise<unknown> = Promise.resolve()
+  /** Last snapshot each owner loaded or submitted. Not shared and discarded on disconnect. */
+  private clientBaselines = new Map<number, { workspace: Workspace }>()
+
+  forgetClient(clientId: number): void {
+    this.clientBaselines.delete(clientId)
+  }
+
+  /** Merge only this writer's changes inside the existing FIFO; never queue save() from here. */
+  saveChanges(base: Workspace, requested: Workspace,
+    beforeSave?: (current: Workspace, next: Workspace) => void,
+    opts: WorkspaceSaveOptions = {}): Promise<Workspace> {
+    const original = structuredClone(base)
+    const wanted = structuredClone(requested)
+    // Core commands publish their rebased diff before saving. Unlike an owner tab's save,
+    // their content has not already travelled through the reflector and must be merged here.
+    return this.updateWorkspace((current) => mergeWorkspaceSave(original, wanted, current), beforeSave, opts)
+      .then((result) => result.workspace)
+  }
+
+  /** A short synchronous edit inside the same disk queue as browser saves and authority flushes. */
+  updateWorkspace(edit: (fresh: Workspace) => Workspace,
+    beforeSave?: (current: Workspace, next: Workspace) => void,
+    opts: WorkspaceSaveOptions = {}): Promise<{ saved: boolean; workspace: Workspace }> {
+    const run = this.saveChain.then(() => this.updateWorkspaceNow(edit, beforeSave, opts))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async updateWorkspaceNow(edit: (fresh: Workspace) => Workspace,
+    beforeSave: ((current: Workspace, next: Workspace) => void) | undefined,
+    opts: WorkspaceSaveOptions): Promise<{ saved: boolean; workspace: Workspace }> {
+    const current = await this.load({ sideline: false })
+    const next = edit(structuredClone(current))
+    const changed = new Set(next.projects.filter((p) => {
+      const old = current.projects.find((x) => x.id === p.id)
+      return !old || !sameWorkspaceSave({ version: 2, activeProjectId: '', projects: [old] },
+        { version: 2, activeProjectId: '', projects: [p] })
+    }).map((p) => p.id))
+    for (const p of current.projects) {
+      if (p.unavailable && changed.has(p.id)) {
+        throw new Error(`workspace-save-unavailable: ${p.id}; resolve the project file before saving`)
+      }
+    }
+    beforeSave?.(current, next)
+    if (sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
+    await this.saveNow(next, opts.localOnly === true, changed)
+    return { saved: true, workspace: next }
+  }
 
   /**
    * Resolves once every write queued on `saveChain` so far (saves, content writes, reconciles) has
@@ -1259,9 +1312,22 @@ export class WorkspaceStore {
    * pending-adoption rule (see `pendingAdoptions`). The merge runs inside the chain step, never
    * before the enqueue: an await ahead of it would let a later save overtake this one.
    */
-  private saveFromRenderer(workspace: Workspace, localOnly: boolean): Promise<void> {
-    const run = this.saveChain.then(async () =>
-      this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace, localOnly))
+  private saveFromRenderer(senderId: number, workspace: Workspace, localOnly: boolean): Promise<void> {
+    const submitted = structuredClone(workspace)
+    const ownerLoad = this.clientBaselines.get(senderId)
+    const run = this.saveChain.then(async () => {
+      if (this.clientBaselines.get(senderId) !== ownerLoad) {
+        throw new Error('workspace-save-stale-client: the owner loaded again or disconnected; load before retrying')
+      }
+      if (ownerLoad) {
+        await this.updateWorkspaceNow((current) => mergeWorkspaceSave(ownerLoad.workspace, submitted, current,
+          (id) => this.contentAuthority?.governs?.(id) === true), undefined, { localOnly })
+        // Disconnect and a newer load cannot have their baseline recreated by a late save.
+        if (this.clientBaselines.get(senderId) === ownerLoad) ownerLoad.workspace = submitted
+      } else {
+        await this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(submitted) : submitted, localOnly)
+      }
+    })
     this.saveChain = run.catch(() => {})
     return run
   }
@@ -1439,7 +1505,8 @@ export class WorkspaceStore {
     return true
   }
 
-  private async saveNow(workspace: Workspace, localOnly = false): Promise<void> {
+  private async saveNow(workspace: Workspace, localOnly = false,
+    strictProjectWrites: ReadonlySet<string> = new Set()): Promise<void> {
     if (!workspace.projects.length && !this.index) {
       // A store that never read the index may not replace a populated one with "no projects":
       // that is the boot-save wipe — load() failed transiently, the renderer hydrated zero
@@ -1570,7 +1637,10 @@ export class WorkspaceStore {
         this.lastWritten.set(file, content)
         this.revs.set(projectId, next.rev)
         folderFilesWritten.add(file)
-      } catch { /* folder gone (unmounted disk): the entry simply stays stale → unavailable next load */ }
+      } catch (error) {
+        if (strictProjectWrites.has(projectId)) throw error
+        // Legacy saves keep their folder-gone behavior; acknowledged deltas must report failure.
+      }
     }
 
     // A folder project moving its canvas from app data INTO its folder (issue #1145) whose folder
@@ -1621,7 +1691,12 @@ export class WorkspaceStore {
       this.lastWritten.delete(file)
       this.lastWrittenParsed.delete(file)
     }
-    for (const [projectId, candidate] of dataFiles) await this.writeDataFile(projectId, candidate)
+    for (const [projectId, candidate] of dataFiles) {
+      const result = await this.writeDataFile(projectId, candidate)
+      if (strictProjectWrites.has(projectId) && result !== 'written' && result !== 'unchanged') {
+        throw new Error(`workspace-save-not-written: ${projectId}`)
+      }
+    }
 
     // ssh caches: bump rev on change so a later remote write can win; mirror write in Task 8.
     for (const e of index.entries) {

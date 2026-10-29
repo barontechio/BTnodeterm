@@ -2,6 +2,7 @@
 // transaction; WorkspaceStore owns disk serialization. Reflected ops precede authority overlays.
 import { publishCanvasMutation } from './canvas-sync'
 import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
+import { stableStringify } from '../shared/canvas-mutations'
 import type { CanvasMutation, CanvasNodeState, Project, Workspace } from '../shared/types'
 import type { WorkspaceStore } from './workspace-store'
 
@@ -23,7 +24,8 @@ export interface PatchSave {
 }
 
 export interface CanvasContentWriterDeps {
-  workspaceStore: Pick<WorkspaceStore, 'load' | 'save'>
+  workspaceStore: Pick<WorkspaceStore, 'load' | 'save'> &
+    Partial<Pick<WorkspaceStore, 'saveChanges' | 'updateWorkspace'>>
   isStopped?(): boolean
   publishMutation?(projectId: string, mutation: CanvasMutation): void
   publishProject?(project: Project): void
@@ -40,6 +42,8 @@ function snapshotContent(workspace: Workspace): Map<string, CanvasContent> {
 
 export class CanvasContentWriter {
   private baselines = new WeakMap<Workspace, Map<string, CanvasContent>>()
+  private workspaceBaselines = new WeakMap<Workspace, Workspace>()
+  private readonly stoppedWrite = new Error('canvas-write-stopped')
 
   constructor(private readonly deps: CanvasContentWriterDeps) {}
 
@@ -56,7 +60,22 @@ export class CanvasContentWriter {
   async loadForEdit(): Promise<Workspace> {
     const workspace = structuredClone(await this.readWorkspace())
     this.baselines.set(workspace, snapshotContent(workspace))
+    this.workspaceBaselines.set(workspace, structuredClone(workspace))
     return workspace
+  }
+
+  private publishChanges(before: Workspace, next: Workspace): number {
+    if (this.deps.isStopped?.()) throw this.stoppedWrite
+    const previous = snapshotContent(before)
+    const cast = this.deps.publishMutation ?? publishCanvasMutation
+    let count = 0
+    for (const p of next.projects) {
+      for (const mutation of diffContent(previous.get(p.id) ?? EMPTY_CONTENT, contentOf(p), p.id)) {
+        cast(p.id, structuredClone(mutation))
+        count++
+      }
+    }
+    return count
   }
 
   /**
@@ -77,6 +96,35 @@ export class CanvasContentWriter {
     if (this.deps.isStopped?.()) {
       console.warn('[headless-node-factory] canvas control stopped: a pending canvas write was skipped')
       return false
+    }
+    const workspaceBase = this.workspaceBaselines.get(workspace)
+    if (this.deps.workspaceStore.saveChanges && workspaceBase) {
+      let count = 0
+      try {
+        const committed = await this.deps.workspaceStore.saveChanges(workspaceBase, workspace, (current, next) => {
+          count = this.publishChanges(current, next)
+        })
+        for (const p of workspace.projects) {
+          const before = workspaceBase.projects.find((x) => x.id === p.id)
+          const saved = committed.projects.find((x) => x.id === p.id)
+          if (!saved) {
+            if (stableStringify(before) === stableStringify(p)) continue
+            return false
+          }
+          const oldNodes = new Map(before?.nodes.map((n) => [n.id, n]))
+          const savedIds = new Set(saved.nodes.map((n) => n.id))
+          for (const n of p.nodes) {
+            const old = oldNodes.get(n.id)
+            if (old && stableStringify(old) !== stableStringify(n) && !savedIds.has(n.id)) return false
+          }
+        }
+      } catch (error) {
+        if (error === this.stoppedWrite) return false
+        throw error
+      }
+      this.workspaceBaselines.set(workspace, structuredClone(workspace))
+      this.baselines.set(workspace, snapshotContent(workspace))
+      return opts.onlyIfChanged ? count > 0 : true
     }
     const before = this.baselines.get(workspace)
     const after = snapshotContent(workspace)
@@ -109,6 +157,30 @@ export class CanvasContentWriter {
    */
   async savePatches(patches: readonly NodePatch[]): Promise<PatchSave> {
     if (!patches.length) return { saved: false, applied: [] }
+    if (this.deps.isStopped?.()) {
+      console.warn('[headless-node-factory] canvas control stopped: a pending canvas write was skipped')
+      return { saved: false, applied: patches.map(() => false) }
+    }
+    if (this.deps.workspaceStore.updateWorkspace) {
+      let applied = patches.map(() => false)
+      try {
+        const result = await this.deps.workspaceStore.updateWorkspace((fresh) => {
+          if (this.deps.isStopped?.()) throw this.stoppedWrite
+          applied = patches.map((patch) => {
+            const node = fresh.projects.find((p) => p.id === patch.projectId)?.nodes.find((n) => n.id === patch.nodeId)
+            return node ? patch.apply(node) : false
+          })
+          return fresh
+        }, (current, next) => { this.publishChanges(current, next) })
+        return { saved: result.saved, applied }
+      } catch (error) {
+        if (error === this.stoppedWrite) {
+          console.warn('[headless-node-factory] canvas control stopped: a pending canvas write was skipped')
+          return { saved: false, applied: patches.map(() => false) }
+        }
+        throw error
+      }
+    }
     const workspace = await this.loadForEdit()
     const applied = patches.map((patch) => {
       const node = workspace.projects.find((p) => p.id === patch.projectId)?.nodes.find((n) => n.id === patch.nodeId)

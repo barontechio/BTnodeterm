@@ -986,6 +986,7 @@ export async function startServer(
   // the two lists cannot drift: its pty subscriptions (a leaked one can strand a session it paused)
   // and its GitHub issue subscriptions.
   const dropUiClient = (uiId: number): void => {
+    workspaceStore.forgetClient(uiId)
     ptyManager.dropClient(uiId)
     github.service.dropClient(uiId)
   }

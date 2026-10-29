@@ -183,6 +183,12 @@ publish its content mutations before an authority-overlay save, and re-read the 
 before notifying browsers. After a slow external effect, apply only its still-valid patches to a
 fresh read. The writer does not authorize commands or replace the workspace's write queue.
 
+Owner workspace saves carry a per-connection baseline and merge inside the store's write queue.
+Use `WorkspaceStore.saveChanges` for a command's private snapshot or `updateWorkspace` for a
+short edit that must inspect fresh state under that queue. Do not call a queued `save()` from
+inside either callback. Keep governed content on the existing authority path and forget client
+baselines on renderer/socket departure. See [workspace save concurrency](docs/workspace-save-concurrency.md).
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

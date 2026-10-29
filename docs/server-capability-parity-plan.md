@@ -6,6 +6,11 @@ This is an implementation proposal. Work proceeds by the acceptance gates below,
 
 ## Baseline and upstream delivery
 
+Implementation status: capability discovery and the explicit Server CI build are committed in
+`dfc22a47`; its fixed snapshot passes 24,188 tests with 109 skipped. The shared content writer is
+extracted in `2c9c7235`. Workspace-save concurrency is the next implementation gate before new
+geometry and board commands. The remaining delivery items below are planned work.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

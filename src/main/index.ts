@@ -1351,7 +1351,10 @@ function createWindow(): BrowserWindow {
   presenceHub.join(presenceId, 'desktop')
   // The GitHub board's subscriptions, released on every way this page can go: closed, crashed,
   // or replaced by a reload (which reuses this webContents id with nothing subscribed).
-  releaseOnRendererDeparture(win, win.webContents, () => dropGitHubClient?.(presenceId))
+  releaseOnRendererDeparture(win, win.webContents, () => {
+    workspaceStore.forgetClient(presenceId)
+    dropGitHubClient?.(presenceId)
+  })
   win.on('closed', () => {
     presenceHub.leave(presenceId)
     // This webContents is a pty SUBSCRIBER (co-attach: one pty, N subscribers, keyed by the
