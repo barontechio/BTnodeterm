@@ -368,8 +368,9 @@ setup, the process-boundary rules, and the house rules that come up in review.
 you work with an AI coding agent). Questions or bug reports are also happy at
 [nodeterm.dev/support](https://nodeterm.dev/support) / support@nodeterm.dev. nodeterm is licensed under the
 [Business Source License 1.1](https://mariadb.com/bsl11/) — you can use, modify,
-and redistribute it freely, including in production, except offering it as a
-competing product or service (see [License](#-license)).
+and redistribute it, including in production, except offering it as a competing
+product or service or running a copy whose license or usage-limit checks were removed
+or bypassed (see [License](#-license)).
 
 By submitting a contribution (pull request, patch, or code snippet), you agree
 that it is licensed under the same [BUSL-1.1](./LICENSE) terms as the rest of
@@ -380,9 +381,11 @@ the project, and that the project may continue to relicense future versions
 
 **[BUSL-1.1](./LICENSE)** ([Business Source License](https://mariadb.com/bsl11/)): you may
 copy, modify, redistribute, and — under the Additional Use Grant — make **production
-use** of nodeterm; the one thing you may not do is offer it (hosted, embedded, or as a
+use** of nodeterm, with two exceptions: you may not offer it (hosted, embedded, or as a
 standalone product/service) in a way that **competes** with nodeterm or with the
-Licensor's products built on it. Each release automatically becomes plain **MIT** four
+Licensor's products built on it, and you may not use in production a copy whose license
+key, entitlement or usage-limit checks have been **removed, disabled or bypassed**
+(changing that code to develop, test or contribute to nodeterm is fine). Each release automatically becomes plain **MIT** four
 years after it is published. See [`LICENSE`](./LICENSE) for the full terms and
 [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md) for the bundled open-source
 components. For a commercial license beyond the grant, contact eneskirca@gmail.com.

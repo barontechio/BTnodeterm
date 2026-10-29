@@ -6,7 +6,9 @@ its invariants — lives in `CLAUDE.md` at the repo root, which is also loaded a
 work with an AI coding agent.
 
 nodeterm is licensed **BUSL-1.1** (converts to MIT after four years — see `LICENSE`). Contributions
-are accepted under that license.
+are accepted under that license. Its Additional Use Grant does not cover production use of a build
+whose license or usage-limit checks were removed or bypassed; changing that code in a PR here is
+ordinary work.
 
 ## Getting set up
 

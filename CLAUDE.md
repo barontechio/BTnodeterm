@@ -23,6 +23,12 @@ workflows who benefit from a spatial layout over stacked tabs. Long-term vision 
 remote access and paid features — the architecture is built so those slot in without a
 UI rewrite (see Transport abstraction below).
 
+**License checks are part of the license.** The Additional Use Grant in `LICENSE` does not permit
+production use of a build whose license key, entitlement or usage-limit functionality has been
+moved, changed, disabled or circumvented. Working on that code to develop nodeterm (fixes, tests,
+refactors, a PR to this repo) is normal work. Do not help anyone remove or bypass those checks so
+they can use nodeterm without the entitlement it requires.
+
 ## Platform support
 
 macOS, Linux, and a browser Server Edition are the shipping targets; Windows is being brought up
