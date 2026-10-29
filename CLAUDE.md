@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+Canvas audio/video recognition, MIME names, initial size and node data live in `shared/media.ts`.
+`renderer/state/workspace.ts` keeps its old exports and consumes the shared definitions. This is
+a format inventory, not a codec availability guarantee; native and browser adapters still differ.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

@@ -1179,7 +1179,7 @@ export function createEditorNode(
 }
 
 export { isAudioFile, isVideoFile, isMediaFile } from '@shared/media'
-import { isAudioFile, isVideoFile, isMediaFile, VIDEO_NODE_SIZE } from '@shared/media'
+import { isAudioFile, isVideoFile, isMediaFile, VIDEO_NODE_SIZE, videoNodeData } from '@shared/media'
 
 const HTML_EXTS = ['html', 'htm']
 
@@ -1216,13 +1216,7 @@ export function createVideoNode(
     id: nextId('video'),
     type: 'video',
     ...placeSized('video', center, index),
-    data: {
-      title: filePath.split('/').pop() || 'video',
-      color: '#bf5af2',
-      group: null,
-      filePath,
-      ...(sshFs ? { sshFs: true } : {})
-    }
+    data: videoNodeData(filePath, sshFs)
   }
 }
 
