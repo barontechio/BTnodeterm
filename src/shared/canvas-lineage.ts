@@ -69,3 +69,41 @@ export function waitRopeId(dep: string, node: string): string {
 export function isWaitRope(rope: { id?: unknown; source: string; target: string }): boolean {
   return rope.id === waitRopeId(rope.source, rope.target)
 }
+
+/**
+ * Canvases saved before waits were marked: every rope into a node AFTER the first one is a wait
+ * (the append-order rule above), so it is re-minted with `waitRopeId` — once, at load, BEFORE the
+ * prune can delete the opener's rope and erase the only evidence of which one it was. A marked
+ * rope and the first unmarked rope into each node are left alone. A re-minted id that already
+ * exists (the same pair twice) is dropped rather than duplicated — React Flow renders two edges
+ * with one id as one, and the next removal breaks. Returns the same array when nothing changed.
+ *
+ * Residual: a canvas that was pruned AND saved before this ran has already lost its opener rope;
+ * its first surviving wait still reads as the opener, and nothing left in the file can say
+ * otherwise.
+ */
+export function markLegacyWaitRopes<R extends { id: string; source: string; target: string }>(
+  ropes: readonly R[]
+): R[] {
+  const opened = new Set<string>()
+  const ids = new Set(ropes.map((r) => r.id))
+  let changed = false
+  const out: R[] = []
+  for (const r of ropes) {
+    if (isWaitRope(r)) {
+      out.push(r)
+      continue
+    }
+    if (!opened.has(r.target)) {
+      opened.add(r.target)
+      out.push(r)
+      continue
+    }
+    const id = waitRopeId(r.source, r.target)
+    changed = true
+    if (ids.has(id)) continue
+    ids.add(id)
+    out.push({ ...r, id })
+  }
+  return changed ? out : (ropes as R[])
+}
