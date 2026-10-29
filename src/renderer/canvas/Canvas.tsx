@@ -1,4 +1,5 @@
 import { planGeometryCommand } from '@shared/geometry-command'
+import { planBoardAssignment } from '@shared/board-assignment'
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
 import { markLocalOnSshCanvas } from '../lib/localOnSshCanvas'
@@ -16257,20 +16258,14 @@ export function Canvas() {
             // Read prev fresh so the board-log diff below has the SAME base the write mutates —
             // a lazy-default board is materialized here (as the first UI edit would) so the
             // resolved column ids are stable across the write and the diff.
-            const prev = store.getProject(pid)?.kanban ?? defaultKanban(pid)
+            const assignment = planBoardAssignment(store.getProject(pid)?.kanban, pid, nodeId, args)
             // Resolve --column by id or (case-insensitive) title; empty / "ungrouped" → null
             // (unassign). `undefined` = no such column, so report what IS available.
-            const rawCol = (args.column ?? '').trim()
-            const columnId = resolveColumnRef(prev, rawCol)
-            if (columnId === undefined) {
-              reply({
-                ok: false,
-                error: `assign: no column "${rawCol}" — columns: ${prev.columns.map((c) => c.title).join(', ') || '(none)'}`
-              })
+            if (!assignment.ok) {
+              reply({ ok: false, error: assignment.error })
               return
             }
-            const before = (args.before ?? '').trim() || null
-            const next = assignNode(prev, nodeId, columnId, before)
+            const { previous: prev, next, columnId } = assignment
             store.setProjectKanban(pid, next)
             markDirty()
             // Board-log the move through the same diff funnel the UI uses (card-moved), so the
