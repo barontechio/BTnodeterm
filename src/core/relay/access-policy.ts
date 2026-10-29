@@ -434,6 +434,9 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.gitWorktreeMerge,
   IPC.gitWorktreeRemove,
   IPC.gitSetActiveRemote,
+  // ✦ Name with AI runs an agent CLI on the host, under a host Claude account the caller names.
+  IPC.ptyGenerateName,
+  IPC.ptyGenerateGroupName,
   // Agent context, the host debug log, GitHub (host token) and agent control.
   IPC.contextEnsure,
   IPC.logSnapshot,
