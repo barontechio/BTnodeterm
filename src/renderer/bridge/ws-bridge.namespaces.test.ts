@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
+  buildControlApi,
   buildFilesApi,
   buildRealApi,
   buildSessionMemoryApi,
@@ -27,6 +28,17 @@ function fakeClient() {
     }
   }
 }
+
+describe('buildControlApi', () => {
+  it('reads the host report and reports unknown on an older or unreachable host', async () => {
+    const c = fakeClient()
+    expect(await buildControlApi(c as never).control!.capabilities()).toBe('R')
+    expect(c.calls).toEqual([{ kind: 'request', method: IPC.controlCapabilities, args: [] }])
+    const old = { request: () => Promise.reject(new Error('no handler')) }
+    expect(await buildControlApi(old as never).control!.capabilities()).toBeNull()
+    expect(await buildStubApi().control!.capabilities()).toBeNull()
+  })
+})
 
 describe('buildFilesApi', () => {
   it('fs/git/files members are request-shaped with the right channels', async () => {

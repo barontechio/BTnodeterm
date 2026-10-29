@@ -253,6 +253,15 @@ const AI_NAMING_UNAVAILABLE = {
 /** Build the real `pty` / `workspace` / `projectSettings` / `settings` namespaces (plus the
  *  top-level `userDataDir`) over an RpcClient, mirroring the preload's
  *  invoke(→request)/send(→cast) split exactly. */
+export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'control'> {
+  return {
+    control: {
+      capabilities: () => client.request(IPC.controlCapabilities).catch(() => null) as
+        ReturnType<NonNullable<NodeTerminalApi['control']>['capabilities']>
+    }
+  }
+}
+
 export function buildRealApi(
   client: RpcClient
 ): Pick<
@@ -1463,6 +1472,7 @@ export async function installWsBridge(): Promise<boolean> {
   const stubApi = buildStubApi()
   const api: NodeTerminalApi = {
     ...stubApi,
+    ...buildControlApi(client),
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),

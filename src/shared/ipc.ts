@@ -351,6 +351,7 @@ export const IPC = {
   appCheckForUpdates: 'app:check-for-updates',
   appGetVersion: 'app:get-version',
   appUserDataDir: 'app:user-data-dir',
+  controlCapabilities: 'control:capabilities',
   appUpdatePolicy: 'app:update-policy',
   // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
   appUpdatePrepInspect: 'app:update-prep-inspect',

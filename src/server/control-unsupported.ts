@@ -1,4 +1,6 @@
 import { parseControlRequest } from '../core/canvas-control-core'
+import { controlCapabilitiesReply } from '../core/control-capabilities'
+import { controlCapabilities, serverSupportsControl } from '../shared/control-capabilities'
 import type { ServerControlReply } from './headless-node-factory'
 
 /**
@@ -55,11 +57,12 @@ export function controlUnsupportedMessage(verb: string): string {
  * OFF. This preserves the pre-Phase-1 response byte-for-byte, which is both the safe upgrade
  * default and the explicit rollback path.
  */
-export async function serverEditionControlHandler({ verb }: { verb: string }): Promise<{
-  ok: false
-  error: string
-  message: string
-}> {
+export async function serverEditionControlHandler({ verb, args = {}, verified = false }: {
+  verb: string
+  args?: Record<string, string>
+  verified?: boolean
+}): Promise<ServerControlReply> {
+  if (verb === 'capabilities') return controlCapabilitiesReply(controlCapabilities('server', false), args, verified)
   return { ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: controlUnsupportedMessage(verb) }
 }
 
@@ -113,26 +116,6 @@ export interface ServerEditionControlActions {
   }): Promise<ServerControlReply>
 }
 
-const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
-  'open-project',
-  'open-terminal',
-  'open-agent',
-  'close',
-  'link',
-  'group',
-  'rename',
-  'color',
-  'send',
-  'reply',
-  'notify',
-  'sticky',
-  'settings',
-  'run',
-  'report-outcome',
-  'issues',
-  'prs',
-  'list'
-])
 
 /** A permanent, verb-specific refusal used only while canvas control itself is enabled. */
 export function unsupportedServerVerbMessage(verb: string): string {
@@ -156,7 +139,7 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
   verified: boolean
 }) => Promise<ServerControlReply> {
   return async ({ verb, nodeId, args, verified }) => {
-    if (!SERVER_V1_VERBS.has(verb)) {
+    if (!serverSupportsControl(verb)) {
       return {
         ok: false,
         error: CONTROL_UNSUPPORTED_ERROR,
@@ -175,7 +158,9 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       }
     }
 
-    switch (command.verb) {
+    switch (verb) {
+      case 'capabilities':
+        return controlCapabilitiesReply(controlCapabilities('server', true), command.args, verified)
       case 'open-project':
         return actions.openProject(nodeId, command.args, verified)
       case 'open-terminal':
@@ -204,23 +189,23 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.list(nodeId, command.args)
       case 'issues':
       case 'prs':
-        return actions.githubRead(command.verb, nodeId, command.args)
+        return actions.githubRead(verb, nodeId, command.args)
       case 'send':
       case 'reply':
       case 'notify':
         return actions.deliver({
-          verb: command.verb,
+          verb,
           sourceNodeId: nodeId,
           targetNodeId: command.args.node,
-          body: command.verb === 'notify' ? '' : command.args.text
+          body: verb === 'notify' ? '' : command.args.text
         })
       default:
-        // `SERVER_V1_VERBS` and this switch are kept separate on purpose: the parser's wider
-        // ControlVerb union can grow without silently making a new server action reachable.
+        // Adding a supported command requires an implementation here as well as its manifest.
+        const unreachable: never = verb
         return {
           ok: false,
           error: CONTROL_UNSUPPORTED_ERROR,
-          message: unsupportedServerVerbMessage(verb)
+          message: unsupportedServerVerbMessage(unreachable)
         }
     }
   }

@@ -56,6 +56,9 @@ jobs:
       - name: Build (electron-vite)
         run: npm run build
 
+      - name: Build Server Edition
+        run: npm run server:build
+
   # Windows is becoming a supported target (extraction from #276). The full suite still contains
   # POSIX-shaped fixtures (/bin/sh, AF_UNIX binds), so this job runs the suites whose behaviour is
   # platform-dependent and worth proving on the real platform — the atomic-write retry exists FOR

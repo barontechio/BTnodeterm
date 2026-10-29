@@ -4564,6 +4564,10 @@ export interface OpenLinkApi {
 }
 
 export interface NodeTerminalApi {
+  /** Optional for older hosts; null means this connection cannot describe the host's support. */
+  control?: {
+    capabilities(): Promise<import('./control-capabilities').ControlCapabilityReport | null>
+  }
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi

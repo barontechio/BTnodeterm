@@ -148,6 +148,7 @@ export function buildStubApi(): Omit<
   | 'speech'
 > {
   const api = {
+    control: { capabilities: async () => null },
     ssh: {
       list: U('ssh.list'),
       save: U('ssh.save'),

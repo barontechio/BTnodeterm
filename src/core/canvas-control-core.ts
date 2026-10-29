@@ -474,53 +474,15 @@ function browserVerbDocLines(): string[] {
   ]
 }
 
-export type ControlVerb =
-  | 'list'
-  | 'open-terminal'
-  | 'open-claude'
-  | 'open-agent'
-  | 'show-image'
-  | 'show-video'
-  | 'show-web'
-  | 'open-browser'
-  | 'group'
-  | 'ungroup'
-  | 'move'
-  | 'arrange'
-  | 'align'
-  | 'resize'
-  | 'place'
-  | 'link'
-  | 'verify'
-  | 'spawn-team'
-  | 'open-worktree'
-  | 'close-worktree'
-  | 'branch'
-  | 'rename'
-  | 'color'
-  | 'write'
-  | 'close'
-  | 'run'
-  | 'board'
-  | 'assign'
-  | 'send'
-  | 'reply'
-  | 'notify'
-  | 'sticky'
-  | 'browser'
-  | 'open-project'
-  | 'settings'
-  | 'report-issue'
-  | 'report-outcome'
-  | 'issues'
-  | 'prs'
-
+export type { ControlVerb } from '../shared/control-verb'
+import type { ControlVerb } from '../shared/control-verb'
 export interface ControlCommand {
   verb: ControlVerb
   args: Record<string, string>
 }
 
 const VERBS: ControlVerb[] = [
+  'capabilities',
   'list',
   'open-terminal',
   'open-claude',
@@ -917,6 +879,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     ...serverControlScopeDocLines(),
     '',
     'Verbs:',
+    '- `capabilities` — report the host edition and implemented commands; support does not grant permission.',
     '- `list [--geometry on|off]` — current nodes (id, kind, title; the JSON rows also carry each node\'s',
     '  place and size — see `list --geometry` below). Start here when you need a node id.',
     '  On the Server Edition it lists your own node and the nodes you opened during this server run.',
@@ -1486,6 +1449,8 @@ applies) and \`run\` reaches only nodes you opened during this server run.
 ${serverControlScopeDocLines().join('\n')}
 
 Verbs:
+- \`capabilities\` — report this host edition, whether canvas control is enabled, and supported commands.
+  Support describes implementation; identity, ownership, backend and consent checks still apply.
 - \`list [--geometry on|off]\` — list current nodes (id, kind, title; the JSON rows also carry each node's
   place and size — see \`list --geometry\` below). Start here when you need a node id.
   On the Server Edition it lists your own node and the nodes you opened during this server run.

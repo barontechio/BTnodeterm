@@ -173,6 +173,11 @@ Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
 forces you to *declare* every member, but a no-op stub compiles fine while doing nothing.
 
+Canvas-command implementation support is described by `shared/control-capabilities.ts` and
+available through the authenticated `capabilities` command and `control:capabilities` owner RPC.
+Keep the manifest and handler in the same change. Support is not authorization: identity,
+project scope, capability consent and backend checks still run when the command executes.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

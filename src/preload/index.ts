@@ -925,6 +925,7 @@ const api: NodeTerminalApi = {
   // Absolute path of a dropped/picked File (File.path was removed in Electron 30+).
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   userDataDir: () => ipcRenderer.invoke(IPC.appUserDataDir),
+  control: { capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities) },
   notify: (payload) => ipcRenderer.invoke(IPC.appNotify, payload),
   openNotificationSettings: () => ipcRenderer.invoke(IPC.appOpenNotificationSettings),
   onFocusNode: (listener) => {

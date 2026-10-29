@@ -52,6 +52,7 @@ import os from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { serverEditionControlHandler } from './control-unsupported'
+import { registerControlCapabilities } from '../core/control-capabilities'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
@@ -552,6 +553,7 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  registerControlCapabilities('server', () => canvasControl !== null)
   // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
   // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a
   // creator ledger, so only it has stations to report.

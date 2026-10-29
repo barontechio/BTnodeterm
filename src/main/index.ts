@@ -356,6 +356,7 @@ import { contextLinkShimPath, initContextLink, setNodeTranscript } from '../core
 import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, canvasControlShimPath } from './canvas-control'
+import { registerControlCapabilities, controlCapabilitiesReply } from '../core/control-capabilities'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
 import { browserFlagRefusal, issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
@@ -4596,10 +4597,12 @@ app.whenReady().then(async () => {
         : { ok: false, error: result.error, message: result.message }
     )
   }
+  const readControlCapabilities = registerControlCapabilities('desktop', () => true)
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker
     // stamps the new work with it, so a turn the typed text starts is always later.
     const requestAt = Date.now()
+    if (verb === 'capabilities') return controlCapabilitiesReply(readControlCapabilities(), args, verified)
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`

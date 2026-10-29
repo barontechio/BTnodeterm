@@ -1,4 +1,4 @@
-# nodeterm Server Edition (Phase 2)
+# nodeterm Server Edition
 
 Run nodeterm's canvas in a browser, backed by a headless Node server on your own
 machine or box. The server serves the **same** built renderer the desktop app uses
@@ -7,8 +7,20 @@ shim (`src/renderer/bridge/`) stands in for the Electron preload, so the React U
 unchanged. It boots the same Electron-free core services (`src/core/`) through a
 `ServerPlatform`, so terminals get the same tmux session continuity as the desktop app.
 
-> **Phase 2 scope: terminals only.** This is a real, usable terminal canvas over the
-> network, but it is deliberately narrow — see [Limitations](#phase-2-limitations).
+Server Edition includes terminals, files, editor/diff, Git, agent status and transcripts,
+speech, triggers, run configuration, Claude accounts and optional canvas automation. The phase
+sections below record how those features arrived; Phase 2's terminal-only restrictions are
+historical. [The capability implementation plan](server-capability-parity-plan.md) tracks the
+remaining Desktop parity work.
+
+### Discover canvas automation support
+
+An agent can run `nodeterm.sh capabilities` through its normal authenticated control endpoint.
+The response names this edition, whether canvas control is enabled and the implementation status
+of each verb, including partial support such as read-only `settings`. Discovery works even with
+Server canvas control disabled; it requires verified node identity and does not grant permission
+to execute an action. A browser can read the same report through `nodeTerminal.control.capabilities()`.
+Older hosts do not expose this optional API; a browser bridge returns `null` when support is unknown.
 
 ## Quickstart
 
@@ -472,6 +484,9 @@ Two intentional departures from `docs/superpowers/specs/2026-07-10-server-editio
    no native dependency to build/ship. Parameters follow the OWASP baseline.
 
 ## Phase 2 limitations
+
+These describe the original Phase 2 release. The later phase sections document the implemented
+file, Git, agent and flow-control features; they are not current terminal-only restrictions.
 
 - **Terminal-only.** Terminal nodes work (spawn, I/O, resize, tmux continuity). The
   git panel, source control, Monaco editor/diff nodes, SDK chat node, agent-status

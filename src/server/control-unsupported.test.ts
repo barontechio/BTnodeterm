@@ -59,6 +59,15 @@ afterAll(() => {
 })
 
 describe('the Server Edition refuses canvas control by name', () => {
+  it('lets a verified agent discover support while control is disabled', async () => {
+    const res = await control('capabilities', 'n-caps', 'application/json', nodeAuthToken(SECRET, 'n-caps'))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      ok: true, result: { version: 1, edition: 'server', enabled: false }
+    })
+    const unverified = await control('capabilities', 'n-caps-unknown', 'application/json')
+    expect(unverified.status).toBeGreaterThanOrEqual(400)
+  })
   it('answers every verb with the same machine-readable error, in JSON', async () => {
     // Verified, so what is measured is the EDITION's answer on either side of the identity cutoff
     // (an unverified mutation is refused by identity from 2026-10-13 — covered separately below).
@@ -202,6 +211,14 @@ describe('the Server Edition wires it at boot', () => {
 })
 
 describe('the enabled Server Edition handler parses and dispatches the v1 surface', () => {
+  it('describes enabled support without making unsupported commands executable', async () => {
+    const handler = createServerEditionControlHandler({} as never)
+    const discovery = await handler({ verb: 'capabilities', nodeId: 'n', args: {}, verified: true })
+    expect(discovery).toMatchObject({ ok: true, result: { edition: 'server', enabled: true } })
+    expect(await handler({ verb: 'browser', nodeId: 'n', args: {}, verified: true })).toMatchObject({
+      ok: false, error: CONTROL_UNSUPPORTED_ERROR
+    })
+  })
   const actions = () => ({
     openProject: vi.fn(async () => ({ ok: true as const, result: { projectId: 'project-loop' } })),
     openTerminal: vi.fn(async () => ({ ok: true as const, result: { id: 'term-new' } })),
