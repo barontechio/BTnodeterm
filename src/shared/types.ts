@@ -2656,6 +2656,9 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface SettingsApi {
   load(): Promise<Settings>
   save(settings: Settings): Promise<void>
+  /** Atomic owner edits; null means an older host has no patch handler. */
+  patch?(patch: Partial<Settings>): Promise<Settings | null>
+  onChanged?(listener: (settings: Settings) => void): () => void
 }
 
 /** Agent-integration consent status (issue #744). The CHOICE rides `settings.agentIntegrations`;

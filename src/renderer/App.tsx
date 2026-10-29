@@ -6,7 +6,7 @@ import { NodeIconDialogHost } from './components/NodeIconPicker'
 import { OwnerConfirmationHost } from './components/OwnerConfirmationHost'
 import { SessionProvider } from './session/session'
 import { localSession } from './session/localSession'
-import { useSettings } from './state/settings'
+import { useSettings, listenHostSettings } from './state/settings'
 import { useViewMode } from './state/viewMode'
 import { setWebglEnabled } from './terminal/webgl-budget'
 import { applyRendererMode } from './terminal/renderer-mode'
@@ -43,6 +43,7 @@ import { GlassRefraction } from './components/GlassRefraction'
 import { isLiquidGlass } from './lib/appTheme'
 
 export default function App() {
+  useEffect(() => listenHostSettings(), [])
   // Apply the terminal-rendering setting to the two GPU coordinators, live. 'auto' is
   // per-terminal WebGL on every platform (see `resolveTerminalRenderer` for the history of the
   // macOS branch and the evidence that collapsed it). 'off' reclaims every context; 'shared'

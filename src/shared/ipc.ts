@@ -690,6 +690,8 @@ export const IPC = {
   ownerConfirmationDecide: 'owner-confirmation:decide',
   ownerConfirmationRequest: 'owner-confirmation:request',
   ownerConfirmationDismiss: 'owner-confirmation:dismiss',
+  settingsPatch: 'settings:patch',
+  settingsChanged: 'settings:changed',
   mediaWriteHtml: 'media:write-html',
   browserRegister: 'browser:register',
   browserUnregister: 'browser:unregister',

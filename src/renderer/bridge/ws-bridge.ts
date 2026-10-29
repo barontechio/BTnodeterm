@@ -552,7 +552,12 @@ export function buildRealApi(
 
   const settings: SettingsApi = {
     load: () => client.request(IPC.settingsLoad) as Promise<Settings>,
-    save: (s: Settings) => client.request(IPC.settingsSave, s) as Promise<void>
+    save: (s: Settings) => client.request(IPC.settingsSave, s) as Promise<void>,
+    patch: (patch) => client.request(IPC.settingsPatch, patch).catch((error) => {
+      if ((error as { code?: string }).code === E_NO_HANDLER) return null
+      throw error
+    }) as Promise<Settings | null>,
+    onChanged: (listener) => client.subscribe(IPC.settingsChanged, listener as Listener)
   }
 
   // REAL: both shells boot the consent lifecycle (core/agent-integrations.ts) and register it.

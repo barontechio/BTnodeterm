@@ -257,7 +257,9 @@ const api: NodeTerminalApi = {
   },
   settings: {
     load: () => ipcRenderer.invoke(IPC.settingsLoad),
-    save: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings)
+    save: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings),
+    patch: (patch) => ipcRenderer.invoke(IPC.settingsPatch, patch),
+    onChanged: subscribe<[import('../shared/types').Settings]>(IPC.settingsChanged)
   },
   integrations: {
     status: () => ipcRenderer.invoke(IPC.integrationsStatus)

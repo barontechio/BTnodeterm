@@ -117,6 +117,11 @@ Two owner tabs can answer only once; relay peers cannot subscribe or approve. Re
 keyboard focus or accept an incidental Enter. This broker is infrastructure: `write`, settings
 changes and worktree removal remain unavailable until their command adapters are connected.
 
+Modern owner clients save settings as explicit field patches and receive host changes after
+durable persistence. Concurrent changes to other fields are preserved. Pending local edits stay
+visible during synchronization, and a lost acknowledgement never triggers a full-snapshot save.
+Older hosts negotiate the existing full-save behavior only when the patch RPC is absent.
+
 ## Quickstart
 
 ```bash

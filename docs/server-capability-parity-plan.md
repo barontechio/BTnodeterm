@@ -44,6 +44,9 @@ acceptance is tracked separately from local implementation and validation.
 The PR 11 snapshot passes all 24,324 tests (109 skipped) and both builds. The shared owner
 confirmation broker and both UI adapters are implemented, with target/policy revalidation at
 single-use permit consumption. Their command adapters (PR 13) remain the next delivery step.
+The PR 12 snapshot passes all 24,338 tests (109 skipped) and both builds. Settings persistence now
+has a serialized conditional-update seam, partial owner UI writes and durable owner-only pushes,
+preventing modern browser edits from replacing unrelated host changes before PR 13 enables CLI sets.
 
 Baseline inspected on 2026-10-29:
 

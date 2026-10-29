@@ -65,6 +65,15 @@ authoritative. The broker grants no waiver and does not alter the existing Serve
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
+Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
+`settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
+`settings:changed` pushes follow successful atomic persistence. `SettingsWriteQueue` overlays
+pending/in-flight UI edits on host snapshots and retains failed patches without resurrecting an
+older edit over a newer one. Only `E_NO_HANDLER` negotiates the legacy full-save path; uncertainty
+never falls back. Clean unloads write nothing. Explicit flush waits for earlier requests before
+the queued barrier. Legacy clients still perform whole-snapshot replacement; they do not gain
+field-level concurrency guarantees retroactively.
+
 **Contributors: start with `CONTRIBUTING.md`** — the short version (setup, boundaries, house rules,
 testing habits). This file is what you reach for when you need to know *why* a rule is the way it
 is, or you are changing a subsystem it describes. A change that other developers must know about

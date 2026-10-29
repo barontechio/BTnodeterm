@@ -36,6 +36,15 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('routes partial settings writes and host pushes without exposing native events', async () => {
+    await api.settings.patch!({ gridSize: 24 })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.settingsPatch, { gridSize: 24 })
+    const receive = vi.fn(); const off = api.settings.onChanged!(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.settingsChanged)![1] as (event: unknown, settings: unknown) => void
+    handler({ sender: 'native' }, { gridSize: 24 })
+    expect(receive).toHaveBeenCalledExactlyOnceWith({ gridSize: 24 })
+    off(); expect(h.removeListener).toHaveBeenCalledWith(IPC.settingsChanged, handler)
+  })
   it('routes owner confirmation epochs, decisions and dismissals without leaking event objects', async () => {
     const confirmation = api.ownerConfirmation!
     await confirmation.connect()

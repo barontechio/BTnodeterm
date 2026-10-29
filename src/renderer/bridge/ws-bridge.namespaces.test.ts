@@ -50,6 +50,20 @@ describe('Server media protocol', () => {
   })
 })
 
+describe('owner settings synchronization', () => {
+  it('negotiates legacy saves only for a missing patch handler', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    const api = buildRealApi(c as never).settings
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.patch!({ gridSize: 24 })).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.patch!({ gridSize: 32 })).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    expect(c.calls.some((call) => call.method === IPC.settingsSave)).toBe(false)
+    api.onChanged!(() => {})
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.settingsChanged, args: [] })
+  })
+})
+
 describe('isolated web preview protocol', () => {
   it('issues by saved-node scope and passes only the opaque token when renewing or releasing', async () => {
     const c = fakeClient(); const api = buildWebPreviewApi(c as never).webPreview!

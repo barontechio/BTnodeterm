@@ -91,6 +91,8 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.ownerConfirmationConnect,
   IPC.ownerConfirmationDisconnect,
   IPC.ownerConfirmationDecide,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   IPC.projectSetupRun,
   IPC.projectSetupCancel,
   IPC.projectSetupConsentSubmit,
