@@ -17,6 +17,7 @@ import { initPlatform } from '../core/platform'
 import { SettingsStore } from '../core/settings-store'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
+import { registerNamingIpc } from '../core/naming-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
@@ -356,12 +357,16 @@ export async function startServer(
   // tmux — the current screen — rather than replayed. See platform-server.ts dropOrDesync.
   platform.setResyncProvider((sid) => ptyManager.captureForResync(sid))
 
-  // Desktop's src/main/index.ts registers a few pty handlers outside PtyManager. Of those,
-  // ptyCapture delegates purely to core (ptyManager.captureSession), so it belongs here.
-  // The others (ptyGenerateName / ptyGenerateGroupName → commit-message.ts; ptyReadSessionName
-  // → transcript-reader.ts) depend on src/main-resident modules and are stubbed by the bridge
-  // in Task 8. readScrollback + sendText + paneCommand are already registered inside
-  // PtyManager.registerIpc().
+  // Desktop's src/main/index.ts registers a few pty handlers outside PtyManager. ptyCapture
+  // delegates purely to core (ptyManager.captureSession), so it belongs here; ✦ Name with AI is
+  // the shared core registration (naming-ipc.ts). The agent runs on THIS machine, under the
+  // node's managed Claude account when it has one. readScrollback + sendText + paneCommand are
+  // already registered inside PtyManager.registerIpc().
+  registerNamingIpc({
+    captureSession: (k) => ptyManager.captureSession(k),
+    sshRemoteForNode: (k) => ptyManager.sshRemoteForNode(k),
+    getSettings: () => settingsStore.get()
+  })
   platform.handle(IPC.ptyCapture, (persistKey: string, full?: boolean) =>
     ptyManager.captureSession(persistKey, full)
   )

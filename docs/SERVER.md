@@ -791,6 +791,16 @@ way to create (issue #313).
   (the folder picker browses the server's disk), but it is worth saying out loud here, because the
   dir a person is linking is usually one they created by hand and think of as "mine".
 
+### ✦ Name with AI
+
+The two naming channels (`pty:generate-name`, `pty:generate-group-name`) are ONE core
+registration shared with the desktop (`core/naming-ipc.ts`). The bridge used to answer both with a
+hard-coded "not available in the server edition yet", a stub left from when the naming module was
+main-resident. The agent (Settings → Commit messages) runs on the **server**, as the server user,
+under the node's managed Claude account when it has a usable one and the server's `~/.claude`
+otherwise. It must be installed and signed in there. Relay peers: Editor-only on a hosted team,
+refused to a project-scoped guest (the request names a host account).
+
 ### Managed Codex accounts (S6)
 
 The Server Edition **arms the Codex record-signing secret** but does **not** host the

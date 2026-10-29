@@ -169,12 +169,8 @@ import {
   MODEL_GATEWAY_SECRET_FILE,
   ModelGatewayCredentialService
 } from '../core/model-gateway-credentials'
-import {
-  claudeAccountEnv,
-  generateCommitMessage,
-  generateGroupName,
-  generateTerminalName
-} from '../core/commit-message'
+import { generateCommitMessage } from '../core/commit-message'
+import { registerNamingIpc } from '../core/naming-ipc'
 import { initUpdater, type UpdaterHandle } from './updater'
 import { requestRendererFlush } from './renderer-flush'
 import { fetchCheck } from '../core/check'
@@ -1819,39 +1815,10 @@ app.whenReady().then(async () => {
     if (nodeId) pushBrowserLeases(revokeBrowserNode(nodeId, browserRevocation, { userStopped: false }))
   })
 
-  // The naming agent runs LOCALLY on captured output, so it needs a cwd that exists on THIS
-  // machine. An SSH-project node's `data.cwd` is a path on the REMOTE host — spawning there fails
-  // (ENOENT) and the ✦ button silently did nothing. The cwd carries no meaning for naming (the
-  // terminal output is in the prompt), so a remote node falls back to '' → runAgent's os.homedir().
-  const localNamingCwd = (keys: string[], cwd: string): string =>
-    keys.some((k) => ptyManager.sshRemoteForNode(k)) ? '' : cwd
-
-  // The naming agent runs under the NODE's managed Claude account (same resolution as the pty
-  // spawn: a known, non-pending local account whose dir exists), else the system `~/.claude`.
-  // Without this every ✦ request went out as the system login — which may be logged out or
-  // expired even while the node's own account works fine.
-  const namingEnv = (accountId?: string): NodeJS.ProcessEnv | undefined => {
-    if (!accountId) return undefined
-    const acct = settingsStore.get().claudeAccounts.find((a) => a.id === accountId)
-    if (!acct || acct.pending || acct.host) return undefined
-    const dir = claudeConfigDirFor(accountId)
-    return existsSync(dir) ? claudeAccountEnv(process.env, dir) : undefined
-  }
-
-  corePlatform.handle(
-    IPC.ptyGenerateName,
-    async (persistKey: string, cwd: string, accountId?: string) =>
-      generateTerminalName(
-        await ptyManager.captureSession(persistKey),
-        localNamingCwd([persistKey], cwd),
-        settingsStore.get(),
-        namingEnv(accountId)
-      )
-  )
-
-  corePlatform.handle(IPC.ptyGenerateGroupName, async (memberKeys: string[], cwd: string) => {
-    const contents = await Promise.all(memberKeys.map((k) => ptyManager.captureSession(k)))
-    return generateGroupName(contents, localNamingCwd(memberKeys, cwd), settingsStore.get())
+  registerNamingIpc({
+    captureSession: (k) => ptyManager.captureSession(k),
+    sshRemoteForNode: (k) => ptyManager.sshRemoteForNode(k),
+    getSettings: () => settingsStore.get()
   })
 
   corePlatform.handle(IPC.ptyCapture, (persistKey: string, full?: boolean) =>

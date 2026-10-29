@@ -520,6 +520,11 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.ptyExecuteLaunch,
   // Types into a pane by node id; HOST_ONLY, and relay-api.ts stubs it.
   IPC.ptySendPaneKeys,
+  // ✦ Name with AI runs an agent CLI under the host Claude account the CALLER names (accountId) and
+  // in a cwd it chooses; the invite is not consent to the host's accounts. The tab shows the
+  // refusal as a failed naming (ws-bridge.ts).
+  IPC.ptyGenerateName,
+  IPC.ptyGenerateGroupName,
   // Project settings / setup / trust: relay-api.ts keeps these LOCAL; the setup ones are host-only.
   IPC.projectSettingsRead,
   IPC.projectSettingsWriteShared,
