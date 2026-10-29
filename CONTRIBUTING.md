@@ -926,7 +926,9 @@ creator ledger is process-local and must never be rebuilt from `.nodeterm/projec
 hook history, or a surviving tmux name: all are writable or stale. A restart therefore clears
 ownership, performs no node/session adoption, and leaves durable queued launches dormant. Metadata
 mutations and message delivery validate every target before writing anything; missing proof is a
-named refusal. Validate Server upgrades against a disposable data directory and port. Restarting a
+named refusal. The operator may widen the reach to the caller's whole project
+(`--control-scope project`, `src/server/control-scope.ts`): every ownership check goes through
+`ownsMutation`, and `creator` must stay byte-identical. Validate Server upgrades against a disposable data directory and port. Restarting a
 shared live service is
 an explicit operator action, never a test or an automatic repair step.
 

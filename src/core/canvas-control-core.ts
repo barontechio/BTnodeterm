@@ -865,6 +865,23 @@ export function mergeCanvasControlBlock(existing: string, block: string): string
  *  skills dir (core/agent-integrations.ts); older builds' copies of this block are stripped. Kept
  *  only until its parity tests move to the skill body (follow-up).
  *  Keep the verb list in sync with the skill template in canvas-control.ts. */
+/**
+ * The Server Edition's `project` control scope (src/server/control-scope.ts), in the words BOTH
+ * generated bodies render, so the skill and the marker block cannot describe different rules.
+ */
+export function serverControlScopeDocLines(): string[] {
+  return [
+    'If the server operator set `--control-scope project` (NODETERM_SERVER_CONTROL_SCOPE=project), your',
+    'reach is every node that is only in your own project, not just the ones you opened: `list` shows',
+    'them all, and rename/color/link/group/sticky/run/send/reply/close accept them. Two rules stay,',
+    'because nobody confirms a close on this edition: you never close your own node, and a node you',
+    'did not open whose agent is working or waiting on a person closes only with `--force yes` — that',
+    'ends its turn, so ask the user first. A message still needs the target pane to have been started',
+    'during this server run (`unproven-target-owner` otherwise). A refusal naming your reach tells you',
+    'which scope this server runs.'
+  ]
+}
+
 export function buildCanvasControlInstructions(shimPath: string): string {
   const agentChoices = `${BUILTIN_AGENT_IDS.join('|')}|<custom-id>`
   const statusAgents = AGENT_HOOK_TARGETS.join('/')
@@ -897,6 +914,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     'auto-adopted, relaunched, or controlled at boot. An unowned target receives a named refusal.',
     'On the Server Edition `--run-now` changes nothing else (opens start at once; the `--after`',
     'refusal still applies) and `run` reaches only nodes you opened during this server run.',
+    ...serverControlScopeDocLines(),
     '',
     'Verbs:',
     '- `list [--geometry on|off]` — current nodes (id, kind, title; the JSON rows also carry each node\'s',
@@ -1465,6 +1483,7 @@ the server clears that creator proof; persisted nodes and queued launches are ne
 relaunched, or controlled at boot. An unowned target receives a named refusal. On the Server
 Edition \`--run-now\` changes nothing else (opens start at once; the \`--after\` refusal still
 applies) and \`run\` reaches only nodes you opened during this server run.
+${serverControlScopeDocLines().join('\n')}
 
 Verbs:
 - \`list [--geometry on|off]\` — list current nodes (id, kind, title; the JSON rows also carry each node's
