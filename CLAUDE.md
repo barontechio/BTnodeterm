@@ -26,6 +26,15 @@ Desktop releases synthetic clients after the operation while preserving the pers
 SSH, Windows and non-headless agents keep their existing Desktop adapter. Missing selected
 accounts and prompt files hold the saved task instead of substituting credentials or a brief.
 
+`core/worktree-control.ts` is the local host create/unbind service. It shares the create/bind
+sequence with Desktop UI (`shared/worktree-create.ts`), uses Git's actual worktree list, and
+rechecks source/group/path claims under the workspace queue before binding. Preparation shares
+the validated materialization service and `ProjectSetupService.runAndWait`; no frame is exposed
+until setup succeeds. Failed setup or canvas persistence retains the successful checkout and
+returns its path. Unbind keeps files and sessions and refuses a missing/unreadable checkout until
+recovered. Removal still needs owner confirmation. `shared/cold-open.ts` supplies stored frame
+placement and cwd inheritance for both renderer and host opens.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

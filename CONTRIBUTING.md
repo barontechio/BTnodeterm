@@ -214,6 +214,13 @@ uses the owner-only `control:run-launch` claim path and must not fall back to te
 after an uncertain host reply. Desktop keeps its legacy adapters for SSH, Windows and agents
 without a local headless backend. A missing account or prompt file holds work for recovery.
 
+Worktree creation/binding uses `shared/worktree-create.ts`; host commands use
+`core/worktree-control.ts` with Git, workspace and setup adapters. Keep the successful checkout in
+every binding/preparation failure reply. Host preparation materializes only resolved project
+shared paths and awaits the existing setup trust gate before exposing the frame. Do not reinterpret
+a failed Git list as absence, adopt creator rights after restart, or delete a directory to undo a
+canvas save failure. Group opens use the shared stored-node placement and verify the checkout.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

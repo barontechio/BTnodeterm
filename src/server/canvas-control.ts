@@ -53,6 +53,7 @@ import { sendSettledEnvelope } from './settled-envelope'
 import { contextLinkShimPath } from '../core/context-link'
 import type { ProjectLaunchInfo } from '../shared/project-settings'
 import type { HostLaunchReply } from '../shared/headless-launch'
+import type { WorktreeControlBackend } from '../core/worktree-control'
 import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
 import { reportIssueFromControl } from '../core/github/control-report-issue'
@@ -86,6 +87,7 @@ export interface ServerCanvasControlDeps {
   reportIssue?: ReportIssueDeps
   projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
   requestAgentsTrust?(projectId: string): unknown
+  worktrees?: WorktreeControlBackend
   /**
    * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
    * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
@@ -219,6 +221,7 @@ export async function initServerCanvasControl(
     contextShimPath: contextLinkShimPath,
     projectLaunchInfo: deps.projectLaunchInfo,
     requestAgentsTrust: deps.requestAgentsTrust,
+    worktrees: deps.worktrees,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
     outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
     handedOver: (nodeId) => stationHandovers.isHandedOver(nodeId),
@@ -315,6 +318,7 @@ export async function initServerCanvasControl(
 
   const actions: ServerEditionControlActions = {
     orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),
+    worktree: (verb, nodeId, args, verified) => factory.worktree(verb, nodeId, args, verified),
     reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {
       projectIdsForNode: (id) => deps.workspaceStore.projectIdsForNode(id), service: deps.reportIssue
     }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),

@@ -62,6 +62,15 @@ require owner recovery through Run now. A removed account or missing prompt file
 Run now is serialized with automatic delivery and refuses a stale command. If a reply is lost,
 inspect the session before retrying; the browser does not fall back to sending terminal input.
 
+`open-worktree --branch <name> [--base <ref|station>] [--group <id>]` creates a local checkout and
+binds a frame after shared paths and the trust-gated setup have completed successfully. Its path
+and base defaults use the same project settings as Desktop. If setup or binding fails, the reply
+retains the successful Git result for recovery; it never deletes that checkout to hide the failure.
+`open-agent` and `open-terminal --group <id>` inherit a verified frame checkout and use the shared
+frame placement. `close-worktree --group <id>` unbinds a present checkout and keeps files and
+sessions. Missing or unreadable checkouts require recovery first. Directory removal remains
+unavailable until owner confirmation is wired.
+
 ## Quickstart
 
 ```bash

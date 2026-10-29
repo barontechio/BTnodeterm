@@ -148,6 +148,8 @@ import { HeadlessNodeFactory } from '../core/headless-node-factory'
 import { useHostTeamPlanner } from '../core/team-control-route'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
+import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
@@ -4538,6 +4540,8 @@ app.whenReady().then(async () => {
     contextShimPath: contextLinkShimPath,
     projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
     requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
+    worktrees: makeWorktreeControlBackend(workspaceStore, gitService, projectSetupService,
+      (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id)),
     outcomeOf: (id) => stationOutcomes.get(id), handedOver: (id) => stationHandovers.isHandedOver(id),
     handoverOf: (id) => stationHandovers.list().find((record) => record.nodeId === id),
     publishProject: (project) => sendToMain(IPC.workspaceServerChange, project)
@@ -4606,6 +4610,14 @@ app.whenReady().then(async () => {
     if (verb === 'browser') return handleBrowserVerb(nodeId, args, verified)
     // Answered in MAIN for the same reasons as `browser`; see handleReportIssueVerb.
     if (verb === 'report-issue') return handleReportIssueVerb(nodeId, args, verified)
+    if (coreTeams && (verb === 'open-worktree' || verb === 'close-worktree') && args.project === undefined &&
+      !(verb === 'close-worktree' && args.mode === 'remove')) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const projects = workspace.projects.filter((p) => p.nodes.some((n) => n.id === nodeId))
+      if (projects.length === 1 && !projects[0].ssh && !isRemoteSessionNode(projects[0].nodes.find((n) => n.id === nodeId))) {
+        return coreTeams.worktree(verb, nodeId, args, verified)
+      }
+    }
     if (coreTeams && (verb === 'spawn-team' || verb === 'verify')) {
       const workspace = await workspaceStore.load({ sideline: false })
       if (useHostTeamPlanner({ verb, sourceNodeId: nodeId, args, workspace, settings: settingsStore.get(),

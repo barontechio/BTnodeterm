@@ -25,8 +25,8 @@ export const CONTROL_SUPPORT = {
   link: 'supported',
   verify: 'partial',
   'spawn-team': 'partial',
-  'open-worktree': 'unsupported',
-  'close-worktree': 'unsupported',
+  'open-worktree': 'partial',
+  'close-worktree': 'partial',
   branch: 'unsupported',
   rename: 'partial',
   color: 'supported',
@@ -53,6 +53,8 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  'open-worktree': 'Local projects only; prepares shared paths and successful trust-gated setup before binding.',
+  'close-worktree': 'Unbind keeps an existing checkout; removal requires owner confirmation and missing checkouts require recovery.',
   verify: 'Local Claude, Codex and Gemini reviewers; automatic release requires verified current-session state.',
   'spawn-team': 'Local Claude, Codex and Gemini members; all roles are validated before creation.',
   'open-claude': 'Claude alias of open-agent; the same supported launch flags and local backend limits apply.',

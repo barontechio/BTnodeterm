@@ -69,6 +69,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  worktree(verb: 'open-worktree' | 'close-worktree', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   orchestrate(verb: 'spawn-team' | 'verify', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   reportIssue(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
@@ -181,6 +182,9 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       case 'spawn-team':
       case 'verify':
         return actions.orchestrate(verb, nodeId, command.args, verified)
+      case 'open-worktree':
+      case 'close-worktree':
+        return actions.worktree(verb, nodeId, command.args, verified)
       case 'close':
         return actions.close(nodeId, command.args, verified)
       case 'link':

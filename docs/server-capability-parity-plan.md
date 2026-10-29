@@ -21,7 +21,11 @@ project-scoped entrance in both shells. Team, review, placement, prompt and proj
 planning are extracted into shared modules; the host execution service is in core. Local
 `spawn-team`/`verify` now use that service in both editions, with complete-batch persistence,
 verified dependency release and serialized owner recovery. Later delivery items below remain
-planned work.
+planned work. Local worktree create/prepare/bind and non-destructive unbind are now connected to
+the same core service in both editions; grouped Server opens inherit a verified checkout. Removal
+and automatic recovery of missing checkout sessions remain dependent on the owner confirmation
+and execution coordination work below. The PR 07 snapshot passed 24,275 tests with one obsolete
+shutdown-order source assertion; retaining the expected cleanup order fixes that assertion.
 
 Baseline inspected on 2026-10-29:
 

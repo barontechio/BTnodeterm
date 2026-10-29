@@ -45,6 +45,7 @@ import {
 import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
+import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { LogBuffer } from '../core/log-buffer'
@@ -860,6 +861,8 @@ export async function startServer(
         boardLog,
         projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
         requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
+        worktrees: makeWorktreeControlBackend(workspaceStore, gitService, projectSetupService,
+          (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id)),
         reportIssue: {
           contextForProject: async (id) => {
             const context = await github.controller.contextForProject(id)

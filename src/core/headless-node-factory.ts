@@ -19,7 +19,8 @@ import { agentAccountColor } from '../shared/agents/account-color'
 import { parseTeamSpec } from '../shared/team-spec'
 import { planIndependentTeam, planVerification, type PlannedTeamRole } from '../shared/team-plan'
 import { launchPromptFor } from '../shared/prompt-spill'
-import { arrangeNodes } from '../shared/canvas-geometry'
+import { arrangeNodes, fitAncestorChain as fitGeometryAncestors } from '../shared/canvas-geometry'
+import { coldGroupCwd, coldResolveGroup, groupSlot, groupSizeFor } from '../shared/cold-open'
 import { placeBelowSource } from '../shared/placement'
 import { dryRunRequested } from '../shared/control-verbs'
 import { waitRopeId } from '../shared/canvas-lineage'
@@ -27,6 +28,7 @@ import { LOCAL_HEADLESS_AGENTS } from '../shared/headless-agents'
 import { LAUNCH_CLAIM_LEDGER_MAX } from './launch-claim-ledger'
 import { projectLaunchOverride } from '../shared/project-launch-policy'
 import type { ProjectLaunchInfo } from '../shared/project-settings'
+import { worktreeControl, type WorktreeControlBackend } from './worktree-control'
 import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
 import { applyStoredGeometry, storedGeometryNodes, wrapStoredNodes } from '../shared/stored-canvas-geometry'
 import { stableStringify } from '../shared/canvas-mutations'
@@ -172,6 +174,7 @@ export interface HeadlessNodeFactoryDeps {
   contextShimPath?(): string
   projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
   requestAgentsTrust?(projectId: string): unknown
+  worktrees?: WorktreeControlBackend
   /** Desktop keeps only backend sessions after a headless operation; Server retains its synthetic client. */
   releaseHeadlessAfterWork?: boolean
   /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
@@ -290,8 +293,6 @@ const TERMINAL_ROWS = 36
 const TERMINAL_SIZE = { width: 640, height: 440 }
 const H_GAP = 80
 const V_GAP = 36
-const GROUP_PAD = 28
-const GROUP_HEADER = 34
 const SERVER_AGENTS: ReadonlySet<string> = new Set(LOCAL_HEADLESS_AGENTS)
 
 function token(): string {
@@ -482,54 +483,6 @@ function isDescendant(
     current = byId.get(current.parentId)
   }
   return false
-}
-
-/** Re-fit one persisted group around its direct children without moving them in parent space. */
-function fitGroupToChildren(
-  nodes: CanvasNodeState[],
-  groupId: string
-): CanvasNodeState[] {
-  const group = nodes.find((node) => node.id === groupId)
-  if (!group || group.kind !== 'group') return nodes
-  const children = nodes.filter((node) => node.parentId === groupId)
-  if (!children.length) return nodes
-  const absoluteX = (child: CanvasNodeState): number => group.position.x + child.position.x
-  const absoluteY = (child: CanvasNodeState): number => group.position.y + child.position.y
-  const minX = Math.min(...children.map(absoluteX))
-  const minY = Math.min(...children.map(absoluteY))
-  const maxX = Math.max(...children.map((child) => absoluteX(child) + child.size.width))
-  const maxY = Math.max(...children.map((child) => absoluteY(child) + child.size.height))
-  const x = minX - GROUP_PAD
-  const y = minY - GROUP_PAD - GROUP_HEADER
-  const size = {
-    width: maxX - minX + GROUP_PAD * 2,
-    height: maxY - minY + GROUP_PAD * 2 + GROUP_HEADER
-  }
-  return nodes.map((node) => {
-    if (node.id === groupId) return { ...node, position: { x, y }, size }
-    if (node.parentId === groupId) {
-      return {
-        ...node,
-        position: { x: absoluteX(node) - x, y: absoluteY(node) - y }
-      }
-    }
-    return node
-  })
-}
-
-function fitAncestorChain(
-  nodes: CanvasNodeState[],
-  groupId: string | undefined
-): CanvasNodeState[] {
-  let next = nodes
-  let currentId = groupId
-  const seen = new Set<string>()
-  while (currentId && !seen.has(currentId)) {
-    seen.add(currentId)
-    next = fitGroupToChildren(next, currentId)
-    currentId = next.find((node) => node.id === currentId)?.parentId
-  }
-  return next
 }
 
 function groupPersistedNodes(
@@ -1879,6 +1832,30 @@ export class HeadlessNodeFactory {
     })
   }
 
+  async worktree(verb: 'open-worktree' | 'close-worktree', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) return { ok: false, error: `${verb}-identity-refused: verified source required` }
+      const allowed = new Set(verb === 'open-worktree' ? ['branch', 'base', 'path', 'group', 'dry-run'] : ['group', 'mode'])
+      const unknown = Object.keys(args).filter((flag) => !allowed.has(flag))
+      if (unknown.length) return { ok: false, error: `${verb}-unsupported-flags: ${unknown.join(', ')}` }
+      if (!this.deps.worktrees) return { ok: false, error: `${verb}-backend-unavailable: worktree lifecycle is not initialized` }
+      try {
+        return await worktreeControl(verb, args, this.deps.worktrees, {
+          writer: this.contentWriter, settings: this.deps.settings, stopped: () => this.stopped,
+          actor: (workspace) => {
+            const found = sourceProject(workspace, sourceNodeId)
+            return found && !found.project.ssh && !found.project.unavailable && !isRemoteSessionNode(found.node) &&
+              sourceCanControl(found.node, this.deps.agentIdOf) ? found : null
+          },
+          permitted: (workspace, project, id) => this.inCallerProject(sourceNodeId, id, workspace, project) &&
+            (id === sourceNodeId || this.ownsMutation(sourceNodeId, id, workspace, project)),
+          record: (groupId, projectId) => this.ownership.record(groupId, { projectId, sourceNodeId }),
+          publish: (id) => this.publishPersisted([id]), newGroupId: () => nextId('group')
+        })
+      } catch (error) { return { ok: false, error: `${verb}-refused: ${String(error)}` } }
+    })
+  }
+
   /** Start a durable batch, then patch outcomes against fresh state. Never called before save. */
   private async startCreated(
     target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean
@@ -1961,7 +1938,7 @@ export class HeadlessNodeFactory {
         // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
         // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now', 'group'])
           : new Set([
               'agent',
               'count',
@@ -1973,6 +1950,7 @@ export class HeadlessNodeFactory {
               'project',
               'model',
               'issue',
+              'group',
               'run-now'
             ])
       )
@@ -2016,6 +1994,24 @@ export class HeadlessNodeFactory {
       }
       const target = this.resolveTarget(workspace, source, verb, args, verified)
       if ('ok' in target) return target
+      const group = coldResolveGroup(target.nodes, args.group, verb)
+      if (!group.ok) return { ok: false, error: group.error }
+      if (group.groupId && !this.ownsMutation(sourceNodeId, group.groupId, workspace, target)) {
+        return this.ownershipRefusal(verb, sourceNodeId, group.groupId)
+      }
+      const groupCwd = coldGroupCwd(target.nodes, group.groupId, !!target.ssh)
+      if (groupCwd) {
+        try {
+          if (!(await fs.stat(groupCwd)).isDirectory()) throw new Error('group folder unavailable')
+          // A worktree binding alone is not proof that its checkout still exists.
+          const binding = target.nodes.find((n) => n.worktree?.path === groupCwd)?.worktree
+          if (binding) {
+            const list = await this.deps.worktrees?.git.worktreeList(binding.repoPath)
+            if (!list?.ok || !list.entries.some((e) => !e.prunable && e.path === binding.path)) throw new Error('worktree unavailable')
+          }
+        } catch { return { ok: false, error: `${verb}-group-cwd-unavailable: inspect and recover the frame checkout before opening work` } }
+      }
+      const originalNodes = group.groupId ? structuredClone(target.nodes) : undefined
       const after = this.resolveAfter(target, afterArg, verb)
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after, workspace, target)
@@ -2077,7 +2073,7 @@ export class HeadlessNodeFactory {
       const ropes = [...(target.ropes ?? [])]
       const bridges = [...(target.bridges ?? [])]
       const startIndex = target.nodes.length
-      const cwd = args.cwd || (target.id === source.project.id ? source.node.cwd : undefined) || target.cwd
+      const cwd = args.cwd || groupCwd || (target.id === source.project.id ? source.node.cwd : undefined) || target.cwd
       // Snapshot dependency state at the arm boundary. A `working` state is already positive
       // evidence that this fresh process made it through its boot composer; a later `done` may
       // release it. An unknown/waiting fresh spawn needs a working event after this snapshot.
@@ -2154,7 +2150,8 @@ export class HeadlessNodeFactory {
         const node: CanvasNodeState = {
           id,
           kind: 'terminal',
-          position: placeRight(target, source.node, nodeSize, created),
+          position: group.groupId ? groupSlot(target.nodes.filter((n) => n.parentId === group.groupId).length + i, nodeSize.width, nodeSize.height) :
+            placeRight(target, source.node, nodeSize, created),
           size: { ...nodeSize },
           title,
           ...(verb === 'open-agent' ? { titleAuto: true } : {}),
@@ -2162,6 +2159,7 @@ export class HeadlessNodeFactory {
           group: null,
           tags: [],
           cwd,
+          ...(group.groupId ? { parentId: group.groupId } : {}),
           ...(verb === 'open-agent' ? { agentId: agentId as AgentId } : {}),
           ...(args.model && verb === 'open-agent' ? { agentModel: args.model } : {}),
           ...(issueRef && verb === 'open-agent' ? { issueRef } : {}),
@@ -2191,6 +2189,16 @@ export class HeadlessNodeFactory {
       }
 
       target.nodes.push(...created)
+      if (group.groupId) {
+        const frame = target.nodes.find((n) => n.id === group.groupId)!
+        const size = groupSizeFor(target.nodes.filter((n) => n.parentId === group.groupId).length, nodeSize.width, nodeSize.height)
+        frame.size = { width: Math.max(frame.size.width, size.width), height: Math.max(frame.size.height, size.height) }
+        target.nodes = applyStoredGeometry(target.nodes, fitGeometryAncestors(storedGeometryNodes(target.nodes), group.groupId,
+          settings.snapToGrid ? settings.gridSize : 0))
+        const changed = originalNodes!.filter((before) => stableStringify(before) !== stableStringify(target.nodes.find((n) => n.id === before.id))).map((n) => n.id)
+        const denied = this.unownedMutation(sourceNodeId, changed, workspace, target)
+        if (denied) return this.ownershipRefusal(verb, sourceNodeId, denied)
+      }
       target.ropes = ropes
       target.bridges = bridges
       // Creation is written BEFORE anything is launched, and a refused save (canvas control is

@@ -221,6 +221,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
   })
   const actions = () => ({
     orchestrate: vi.fn(async () => ({ ok: true as const })),
+    worktree: vi.fn(async () => ({ ok: true as const })),
     reportIssue: vi.fn(async () => ({ ok: true as const })),
     showImage: vi.fn(async () => ({ ok: true as const })),
     board: vi.fn(async () => ({ ok: true as const })),
@@ -577,6 +578,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       openTerminal: vi.fn(),
       openAgent,
       orchestrate: vi.fn(),
+      worktree: vi.fn(),
       reportIssue: vi.fn(),
       showImage: vi.fn(),
       board: vi.fn(),
