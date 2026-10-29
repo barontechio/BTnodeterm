@@ -23,8 +23,8 @@ export const CONTROL_SUPPORT = {
   resize: 'supported',
   place: 'supported',
   link: 'supported',
-  verify: 'unsupported',
-  'spawn-team': 'unsupported',
+  verify: 'partial',
+  'spawn-team': 'partial',
   'open-worktree': 'unsupported',
   'close-worktree': 'unsupported',
   branch: 'unsupported',
@@ -53,6 +53,8 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  verify: 'Local Claude, Codex and Gemini reviewers; automatic release requires verified current-session state.',
+  'spawn-team': 'Local Claude, Codex and Gemini members; all roles are validated before creation.',
   'open-claude': 'Claude alias of open-agent; the same supported launch flags and local backend limits apply.',
   'show-image': 'Existing local images supported by the editor preview; no SSH filesystem fallback.',
   board: 'Reads only the caller project; creator scope shows the caller and its created cards.',
@@ -69,6 +71,8 @@ const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
 
 export interface ControlCapabilityReport {
   version: 1
+  /** The owner UI can recover host-owned queued launches through the host scheduler. */
+  hostLaunches?: true
   edition: ControlEdition
   enabled: boolean
   /** Describes implementation, never a grant to execute. */
@@ -83,6 +87,7 @@ export function serverSupportsControl(verb: string): verb is ServerControlVerb {
 export function controlCapabilities(edition: ControlEdition, enabled: boolean): ControlCapabilityReport {
   return {
     version: 1,
+    hostLaunches: true,
     edition,
     enabled,
     verbs: (Object.keys(CONTROL_SUPPORT) as ControlVerb[]).map((verb) => ({

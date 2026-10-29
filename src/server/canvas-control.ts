@@ -50,6 +50,9 @@ import {
 } from './control-unsupported'
 import { HeadlessNodeFactory } from './headless-node-factory'
 import { sendSettledEnvelope } from './settled-envelope'
+import { contextLinkShimPath } from '../core/context-link'
+import type { ProjectLaunchInfo } from '../shared/project-settings'
+import type { HostLaunchReply } from '../shared/headless-launch'
 import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
 import { reportIssueFromControl } from '../core/github/control-report-issue'
@@ -81,6 +84,8 @@ export interface ServerCanvasControlDeps {
    *  Absent = those verbs answer that the GitHub lane is unavailable here. */
   githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'dispatch'>
   reportIssue?: ReportIssueDeps
+  projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
+  requestAgentsTrust?(projectId: string): unknown
   /**
    * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
    * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
@@ -91,6 +96,7 @@ export interface ServerCanvasControlDeps {
 }
 
 export interface ServerCanvasControl {
+  runFromOwner(nodeId: string, command: string): Promise<HostLaunchReply>
   deliverBoardComment(raw: unknown): Promise<AgentMessageReply>
   handler: ReturnType<typeof createServerEditionControlHandler>
   onAgentEvent(event: NormalizedAgentEvent): void
@@ -205,6 +211,14 @@ export async function initServerCanvasControl(
     codexSharedIdentity:
       deps.codexSharedIdentity ?? (() => codexIdentityCaps().then((caps) => caps.shared)),
     stateOf: nodeState,
+    stateVerified: (id) => {
+      const entry = mirrorEntry(id)
+      return entry?.stateVerified === true && !entry.restored && !entry.idleInferred && !!entry.sessionId
+    },
+    sessionOf: (id) => mirrorEntry(id)?.sessionId,
+    contextShimPath: contextLinkShimPath,
+    projectLaunchInfo: deps.projectLaunchInfo,
+    requestAgentsTrust: deps.requestAgentsTrust,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
     outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
     handedOver: (nodeId) => stationHandovers.isHandedOver(nodeId),
@@ -300,6 +314,7 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),
     reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {
       projectIdsForNode: (id) => deps.workspaceStore.projectIdsForNode(id), service: deps.reportIssue
     }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),
@@ -405,6 +420,7 @@ export async function initServerCanvasControl(
     stationNotices,
     stationOutcomes,
     stationHandovers,
+    runFromOwner: (id, command) => factory.runFromOwner(id, command),
     deliverBoardComment: (raw) => stopped ? Promise.resolve({ ok: false,
       error: 'Board comment delivery is stopped.', result: { kind: 'notPermitted', reason: 'control-disabled' }
     }) : deliverBoardCommentFromUi(raw, messaging),

@@ -16,6 +16,16 @@ its path, not just its session id; account roots can contain equal ids and mtime
 against currently configured local roots before resolving account identity. Scoped queries use
 `transcript:search-scoped`, with no fallback to the legacy global channel on older hosts.
 
+Local `spawn-team` and `verify` use `core/headless-node-factory.ts` in both shells, with pure
+planning in `shared/team-plan.ts`. Save the whole batch before opening sessions. New dependency
+arms require verified current-session evidence and process-local creator/launch identity;
+restored nodes do not acquire automatic execution authority. Host launches retain the historical
+`executor: 'server'` wire value on Desktop too. Owner Run now goes through `control:run-launch`,
+serialized with automatic delivery; a lost reply must never trigger renderer terminal input.
+Desktop releases synthetic clients after the operation while preserving the persistent backend.
+SSH, Windows and non-headless agents keep their existing Desktop adapter. Missing selected
+accounts and prompt files hold the saved task instead of substituting credentials or a brief.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

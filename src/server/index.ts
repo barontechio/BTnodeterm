@@ -42,7 +42,8 @@ import {
   registerProjectSetupHandlers,
   type ProjectSetupHandlerDeps
 } from '../core/project-setup-handlers'
-import { registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
@@ -563,6 +564,8 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  registerHostLaunchIpc(platform, (id, command) => canvasControl ? canvasControl.runFromOwner(id, command) :
+    Promise.resolve({ ok: false, started: false, error: 'Enable Server canvas control to run this host-owned launch.' }))
   registerBoardCommentDeliveryIpc(platform, {
     eligibleOwner: (senderId) => platform.isOwnerClient?.(senderId) === true,
     deliver: (raw) => canvasControl ? canvasControl.deliverBoardComment(raw) : Promise.resolve({
@@ -855,6 +858,8 @@ export async function startServer(
         ptyManager,
         settings: () => settingsStore.get(),
         boardLog,
+        projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
+        requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
         reportIssue: {
           contextForProject: async (id) => {
             const context = await github.controller.contextForProject(id)

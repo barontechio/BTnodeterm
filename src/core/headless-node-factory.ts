@@ -11,6 +11,22 @@ import { isImagePath } from '../shared/image-preview'
 import { NODE_MIN_SIZES } from '../shared/node-sizing'
 
 import { CanvasContentWriter, type NodePatch, type PatchSave } from './canvas-content-writer'
+import { platform } from './platform'
+import { saveUpload } from './uploads'
+import { claudeConfigDirFor } from './claude-config-dir'
+import { codexHomeForAccount } from './codex-accounts-core'
+import { agentAccountColor } from '../shared/agents/account-color'
+import { parseTeamSpec } from '../shared/team-spec'
+import { planIndependentTeam, planVerification, type PlannedTeamRole } from '../shared/team-plan'
+import { launchPromptFor } from '../shared/prompt-spill'
+import { arrangeNodes } from '../shared/canvas-geometry'
+import { placeBelowSource } from '../shared/placement'
+import { dryRunRequested } from '../shared/control-verbs'
+import { waitRopeId } from '../shared/canvas-lineage'
+import { LOCAL_HEADLESS_AGENTS } from '../shared/headless-agents'
+import { LAUNCH_CLAIM_LEDGER_MAX } from './launch-claim-ledger'
+import { projectLaunchOverride } from '../shared/project-launch-policy'
+import type { ProjectLaunchInfo } from '../shared/project-settings'
 import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
 import { applyStoredGeometry, storedGeometryNodes, wrapStoredNodes } from '../shared/stored-canvas-geometry'
 import { stableStringify } from '../shared/canvas-mutations'
@@ -34,7 +50,7 @@ import {
   type NodeColor
 } from '../shared/node-colors'
 import { applyStickyWrite, parseStickyArgs, resolveStickyRef } from '../shared/sticky-write'
-import type { HeadlessLaunchFailure, HeadlessLaunchResult } from '../shared/headless-launch'
+import type { HeadlessLaunchFailure, HeadlessLaunchResult, HostLaunchReply } from '../shared/headless-launch'
 import { localNodePtyOptions } from '../shared/node-pty-options'
 import type { WorkspaceStore } from './workspace-store'
 import {
@@ -151,6 +167,13 @@ export interface HeadlessNodeFactoryDeps {
   /** Hook-mirror lookups. A stored agentId wins; these cover a plain terminal running an agent. */
   stateOf(nodeId: string): AgentState | undefined
   agentIdOf?(nodeId: string): string | undefined
+  stateVerified?(nodeId: string): boolean
+  sessionOf?(nodeId: string): string | undefined
+  contextShimPath?(): string
+  projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
+  requestAgentsTrust?(projectId: string): unknown
+  /** Desktop keeps only backend sessions after a headless operation; Server retains its synthetic client. */
+  releaseHeadlessAfterWork?: boolean
   /** A station's latest task report (`report-outcome`, core's store) — what `--after-success` waits
    *  on. Absent = no report is ever known, so a success wait never releases on its own. */
   outcomeOf?(nodeId: string): StationOutcomeRecord | undefined
@@ -246,7 +269,8 @@ export function launchFailedError(
     groups.set(key, group)
   }
   const what = (g: OpenLaunchFailure): string =>
-    g.reason === 'line-too-long'
+    g.reason === 'account-unavailable' ? 'restore or choose the selected local account before using Run now' :
+    g.reason === 'prompt-file-missing' ? 'restore the prompt file before using Run now' : g.reason === 'line-too-long'
       ? 'the launch line is longer than a terminal line takes, so Run now will fail the same way; ' +
         `shorten the ${verb === 'open-terminal' ? 'command' : 'prompt'}`
       : g.retained
@@ -268,7 +292,7 @@ const H_GAP = 80
 const V_GAP = 36
 const GROUP_PAD = 28
 const GROUP_HEADER = 34
-const SERVER_AGENTS: ReadonlySet<string> = new Set(['claude', 'codex', 'gemini'])
+const SERVER_AGENTS: ReadonlySet<string> = new Set(LOCAL_HEADLESS_AGENTS)
 
 function token(): string {
   return randomBytes(4).toString('hex')
@@ -569,8 +593,19 @@ function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
   return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
+async function promptReadable(file: string | undefined): Promise<boolean> {
+  if (!file) return true
+  try { await fs.access(file, fs.constants.R_OK); return (await fs.stat(file)).isFile() } catch { return false }
+}
+
+function launchIdentity(project: Project, node: CanvasNodeState): string {
+  return stableStringify({ projectId: project.id, projectCwd: project.cwd, projectSsh: project.ssh,
+    kind: node.kind, agentId: node.agentId, accountId: node.accountId, cwd: node.cwd, shell: node.shell,
+    ssh: node.ssh, remote: node.sshRemoteTmux, command: node.pendingLaunch?.command, promptFile: node.pendingLaunch?.promptFile })
+}
+
 /**
- * Server-side canvas authoring and launch scheduler.
+ * Host-side canvas authoring and launch scheduler, shared by Desktop and Server adapters.
  *
  * Every workspace read/modify/save transaction is serialized. That is important even on one
  * Node event loop: WorkspaceStore.load/save both await filesystem operations, so two simultaneous
@@ -586,6 +621,16 @@ export class HeadlessNodeFactory {
   private ownership: HeadlessNodeOwnership
   /** Fresh server-spawned agents that have not emitted their first real working turn yet. */
   private awaitingFirstWorking = new Set<string>()
+  /** New orchestration arms require authenticated current-session state; never rebuilt from disk. */
+  private strictArms = new Set<string>()
+  private strictLaunchIdentities = new Map<string, string>()
+  private delivered = new Map<string, string>()
+
+  private noteDelivered(id: string, command: string): void {
+    this.delivered.delete(id)
+    this.delivered.set(id, command)
+    while (this.delivered.size > LAUNCH_CLAIM_LEDGER_MAX) this.delivered.delete(this.delivered.keys().next().value!)
+  }
   /** Stations whose LAST turn ended on an API/model error (#521, the `errored` flag on a `done`),
    *  from this edition's own event stream — the desktop's `lastTurnError`, kept here so a success
    *  wait holds on an errored turn on both editions. Cleared by the next genuine new turn. */
@@ -703,6 +748,7 @@ export class HeadlessNodeFactory {
   }
 
   private async attach(project: Project, node: CanvasNodeState): Promise<PtyCreateResult> {
+    if (this.stopped) throw new Error('host canvas control stopped')
     if (this.attached.has(node.id)) {
       return { sessionId: node.id, fresh: false }
     }
@@ -718,20 +764,36 @@ export class HeadlessNodeFactory {
    *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
    * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
    */
-  private launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+  private async launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+    if (!(await promptReadable(node.pendingLaunch?.promptFile))) return { outcome: 'failed', reason: 'prompt-file-missing' }
+    if (!(await this.accountReady(node))) return { outcome: 'failed', reason: 'account-unavailable' }
     const pty = this.deps.ptyManager
-    return launchHeadless(
+    try { return await launchHeadless(
       {
         persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
         createHeadless: () => this.attach(project, node),
         paneCommand: (key) => pty.paneCommand(key),
-        writeHeadless: (key, data) => pty.writeHeadless(key, data),
+        writeHeadless: (key, data) => !this.stopped && pty.writeHeadless(key, data),
         onOutput: (key, cb) => pty.onOutput(key, cb),
         releaseHeadless: (key) => pty.releaseHeadless(key),
         timing: this.deps.launchTiming
       },
-      { ptyOptions: ptyOptions(project, node), command, release: false, requirePersistent: false }
-    )
+      { ptyOptions: ptyOptions(project, node), command, release: false, requirePersistent: this.deps.releaseHeadlessAfterWork === true }
+    ) } finally {
+      if (this.deps.releaseHeadlessAfterWork) { this.attached.delete(node.id); pty.releaseHeadless(node.id) }
+    }
+  }
+
+  private async accountReady(node: CanvasNodeState): Promise<boolean> {
+    if (!node.accountId) return true
+    if (node.agentId !== 'claude' && node.agentId !== 'codex') return false
+    const settings = this.deps.settings()
+    const account = (node.agentId === 'claude' ? settings.claudeAccounts : settings.codexAccounts)?.find((a) => a.id === node.accountId)
+    if (!account || account.pending || account.host) return false
+    try {
+      const home = node.agentId === 'claude' ? claudeConfigDirFor(node.accountId) : codexHomeForAccount(platform().userDataDir, node.accountId)
+      return (await fs.stat(home)).isDirectory()
+    } catch { return false }
   }
 
   private resolveTarget(
@@ -1517,6 +1579,16 @@ export class HeadlessNodeFactory {
   /** `run --node <id>` (#925): deliver a node's retained launch now. The control scope applies:
    *  nodes the caller spawned during this server run, or (`project` scope) any node of its project. */
   run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runInternal(sourceNodeId, args, verified)
+  }
+
+  /** Called only by the authenticated owner IPC, sharing the scheduler's serial execution. */
+  async runFromOwner(nodeId: string, expectedCommand: string): Promise<HostLaunchReply> {
+    const reply = await this.runInternal(nodeId, { node: nodeId }, true, { expectedCommand })
+    return { ...reply, started: (reply.result as { started?: unknown } | undefined)?.started === true }
+  }
+
+  private runInternal(sourceNodeId: string, args: Record<string, string>, verified: boolean, owner?: { expectedCommand: string }): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       if (!verified) {
         return { ok: false, error: 'run-identity-refused: Server Edition canvas control requires verified node identity' }
@@ -1524,8 +1596,18 @@ export class HeadlessNodeFactory {
       const flagError = unsupportedFlags(args, new Set(['node', 'project']))
       if (flagError) return { ok: false, error: `run: ${flagError}` }
       const id = (args.node ?? '').trim()
+      const workspace = await this.loadForEdit()
+      if (this.stopped) return { ok: false, error: 'run-not-saved: host canvas control stopped; no session was started' }
+      const holders = nodeProjects(workspace, id)
+      if (owner) {
+        if (holders.length !== 1 || holders[0].ssh || holders[0].unavailable) return { ok: false, error: 'run-host-target-refused: requires one available local project' }
+        const held = holders[0].nodes.find((node) => node.id === id)?.pendingLaunch
+        if (held && (held.executor !== 'server' || held.command !== owner.expectedCommand)) return { ok: false, error: 'run-host-stale-request: inspect the current queued launch before retrying' }
+        if (this.delivered.get(id) === owner.expectedCommand && held?.attempted !== false) return { ok: true, result: { started: true }, message: 'launch was already delivered' }
+        if (!held || held.executor !== 'server' || held.command !== owner.expectedCommand) return { ok: false, error: 'run-host-stale-request: inspect the current queued launch before retrying' }
+      }
       const spawned = this.ownsSpawn(sourceNodeId, id)
-      if (!spawned && this.controlScope !== 'project') return this.ownershipRefusal('run', sourceNodeId, id)
+      if (!owner && !spawned && this.controlScope !== 'project') return this.ownershipRefusal('run', sourceNodeId, id)
       // Resolve through the ownership record, never by first id match: node ids repeat across
       // projects (a committed project.json opened from a second folder), and `attach()` is keyed
       // by id alone, so a stranger copy sorting first would be claimed while the owned session is
@@ -1534,9 +1616,8 @@ export class HeadlessNodeFactory {
       // the caller did not spawn resolves to the caller's own project, which `ownsMutation` has
       // checked is the only project holding that id.
       const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
-      let projectId = spawned ? this.ownership.ownerOf(id)!.projectId : undefined
+      let projectId = owner ? holders[0].id : spawned ? this.ownership.ownerOf(id)!.projectId : undefined
       if (projectId !== undefined && args.project !== undefined && args.project !== projectId) return noNode
-      const workspace = await this.loadForEdit()
       if (projectId === undefined) {
         const source = sourceProject(workspace, sourceNodeId)
         if (!source || !this.ownsMutation(sourceNodeId, id, workspace, source.project)) {
@@ -1568,6 +1649,7 @@ export class HeadlessNodeFactory {
         }
       }
       const launched = await this.launch(project, node, held.command)
+      if (launched.outcome === 'delivered') this.noteDelivered(id, held.command)
       // As open() does: an agent this spawned fresh has not had its first real turn yet, so a
       // later `--after` on it must not be released by the CLI's boot `done` blip.
       if (node.agentId && launched.fresh) this.awaitingFirstWorking.add(id)
@@ -1582,7 +1664,9 @@ export class HeadlessNodeFactory {
           }
         : {
             ok: true,
-            message: `${id} stays queued (${launched.reason}); launch retained for Run now`,
+            message: launched.reason === 'account-unavailable' ? `${id} stays queued: restore or choose its local account before using Run now.` :
+              launched.reason === 'prompt-file-missing' ? `${id} stays queued: restore its prompt file before using Run now.` :
+              `${id} stays queued (${launched.reason}); launch retained for Run now`,
             result: { ids: [id], id, started: false, startedIds: [], queued: true, queuedIds: [id], reason: launched.reason }
           }
     })
@@ -1626,6 +1710,175 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** A team is validated and persisted as one batch before any session starts. */
+  orchestrate(verb: 'spawn-team' | 'verify', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) return { ok: false, error: `${verb}-identity-refused: requires verified node identity` }
+      const flagError = unsupportedFlags(args, new Set(verb === 'spawn-team' ? ['team', 'label', 'dry-run'] :
+        ['node', 'agent', 'lenses', 'focus', 'synthesis', 'label']))
+      if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      if (!dryRunRequested(args) && this.deps.releaseHeadlessAfterWork && !this.deps.ptyManager.persistentSpawnAvailable()) {
+        return { ok: false, error: `${verb}-backend-unavailable: headless execution requires a persistent backend` }
+      }
+      const initialWorkspace = await this.readWorkspace()
+      const initial = sourceProject(initialWorkspace, sourceNodeId)
+      if (!initial || !sourceCanControl(initial.node, this.deps.agentIdOf)) return { ok: false, error: `${verb}-source-refused: requires a control-capable source in one saved project` }
+      if (initial.project.ssh || initial.node.ssh || initial.node.sshRemoteTmux || initial.project.unavailable) return { ok: false, error: `${verb}-host-refused: requires an available local project` }
+      let origin = initial.node
+      let roles: PlannedTeamRole[]
+      let lenses: string[] | undefined
+      if (verb === 'spawn-team') {
+        const parsed = parseTeamSpec(args.team ?? '', SERVER_AGENTS)
+        if (!parsed.ok) return { ok: false, error: `${verb}: ${parsed.error}` }
+        roles = planIndependentTeam(parsed.roles)
+      } else {
+        const targetId = (args.node ?? '').trim()
+        const target = initial.project.nodes.find((n) => n.id === targetId)
+        if (!target || !this.inCallerProject(sourceNodeId, targetId, initialWorkspace, initial.project) ||
+          (targetId !== sourceNodeId && !this.ownsMutation(sourceNodeId, targetId, initialWorkspace, initial.project))) {
+          return this.ownershipRefusal(verb, sourceNodeId, targetId)
+        }
+        const targetAgent = effectiveAgentId(target, this.deps.agentIdOf)
+        const agent = args.agent || targetAgent
+        if (target.kind !== 'terminal' || !targetAgent || !canContextLink(targetAgent) || !agent || !SERVER_AGENTS.has(agent) || !canContextLink(agent as AgentId)) {
+          return { ok: false, error: 'verify-agent-refused: target and reviewers must support linked context on this backend' }
+        }
+        const shimPath = this.deps.contextShimPath?.()
+        if (!shimPath) return { ok: false, error: 'verify-context-unavailable: linked context is not initialized on this host' }
+        const plan = planVerification({ targetId, targetTitle: target.title || targetId, agent, shimPath,
+          hostPlatform: process.platform, lenses: args.lenses, focus: args.focus, synthesis: args.synthesis })
+        roles = plan.roles; lenses = plan.lenses; origin = target
+      }
+      const proofOf = (node: CanvasNodeState) => stableStringify({ kind: node.kind, agent: effectiveAgentId(node, this.deps.agentIdOf),
+        session: this.deps.sessionOf?.(node.id) ?? node.agentSessionId, cwd: node.cwd, account: node.accountId, ssh: node.ssh, remote: node.sshRemoteTmux })
+      const originProof = proofOf(origin)
+      const settings = this.deps.settings()
+      const accountFor = (role: PlannedTeamRole, project: Project, from: CanvasNodeState, current: Settings): string | undefined => {
+        const inherited = effectiveAgentId(from, this.deps.agentIdOf) === role.agent ? from.accountId : undefined
+        const id = inherited || (role.agent === 'claude' ? project.defaultAccountId : undefined)
+        if (!id || (role.agent !== 'claude' && role.agent !== 'codex')) return undefined
+        const account = (role.agent === 'claude' ? current.claudeAccounts : current.codexAccounts)?.find((a) => a.id === id)
+        if (!account || account.pending || account.host) throw new Error(`${verb}-account-refused: ${id} is not a ready local ${role.agent} account`)
+        return id
+      }
+      let accounts: Array<string | undefined>
+      try {
+        accounts = roles.map((role) => accountFor(role, initial.project, origin, settings))
+        for (const [index, role] of roles.entries()) {
+          const id = accounts[index]
+          if (id) {
+            const home = role.agent === 'claude' ? claudeConfigDirFor(id) : codexHomeForAccount(platform().userDataDir, id)
+            if (!(await fs.stat(home)).isDirectory()) throw new Error('account home unavailable')
+          }
+          if (role.promptFile && !(await fs.stat(role.promptFile)).isFile()) throw new Error(`prompt file unavailable: ${role.promptFile}`)
+        }
+      } catch (error) { return { ok: false, error: `${verb}-input-refused: ${String(error)}` } }
+      if (dryRunRequested(args)) return { ok: true, message: `Dry run: would open ${roles.length} team member(s) in ${args.label || 'Team'}. Nothing was opened.`,
+        result: { dryRun: true, label: args.label || 'Team', roles: roles.map(({ afterNodes: _n, afterRoles: _r, ...role }) => role) } }
+      const probes = await Promise.all([
+        this.deps.cliCaps(), this.deps.grokCaps(), this.deps.codexCaps(), this.deps.codexSharedIdentity()
+      ]).catch(() => null)
+      if (!probes) return { ok: false, error: `${verb}-backend-unavailable: capability probes failed; no nodes were created` }
+      const [caps, grokCaps, codexCaps, sharedIdentity] = probes
+      const launchInfo = await this.deps.projectLaunchInfo?.(initial.project.id).catch(() => null)
+      if (roles.some((r, i) => r.agent === 'codex' && accounts[i] && !sharedIdentity)) return { ok: false, error: `${verb}-account-refused: managed Codex identity is unavailable` }
+      const launches = await Promise.all(roles.map((role) => launchPromptFor({ ...role, localFs: true }, {
+        saveUpload: (name, bytes) => saveUpload(platform().userDataDir, name, bytes), encodeBase64: (text) => Buffer.from(text, 'utf8').toString('base64')
+      })))
+      const ids = roles.map(() => nextId('term'))
+      const groupId = nextId('group')
+      const commands = new Map<string, string>()
+      let created: CanvasNodeState[] = []
+      let project: Project | undefined
+      let editStarted = false
+      let requestTrust = false
+      try {
+        const edit = await this.contentWriter.edit((workspace): ServerControlReply => {
+          const fresh = sourceProject(workspace, sourceNodeId)
+          if (!fresh || fresh.project.id !== initial.project.id || fresh.project.cwd !== initial.project.cwd || fresh.project.ssh || fresh.project.unavailable ||
+            fresh.node.ssh || fresh.node.sshRemoteTmux || !sourceCanControl(fresh.node, this.deps.agentIdOf)) return { ok: false, error: `${verb}-source-changed: inspect the source project before retrying` }
+          const from = fresh.project.nodes.find((n) => n.id === origin.id)
+          if (!from || proofOf(from) !== originProof || !this.inCallerProject(sourceNodeId, from.id, workspace, fresh.project) || from.ssh || from.sshRemoteTmux ||
+            (verb === 'verify' && from.id !== sourceNodeId && !this.ownsMutation(sourceNodeId, from.id, workspace, fresh.project))) {
+            return { ok: false, error: `${verb}-target-changed: inspect the target project before retrying` }
+          }
+          const current = this.deps.settings()
+          const size = terminalSize(current)
+          for (const [index, role] of roles.entries()) {
+            if (accountFor(role, fresh.project, from, current) !== accounts[index]) return { ok: false, error: `${verb}-account-changed: review the selected account before retrying` }
+          }
+          created = roles.map((role, index) => {
+            const agent = role.agent as BuiltinAgentId
+            const config = AGENT_CONFIG[agent]
+            const permissionMode = agent === 'claude' ? gatePermissionMode(resolvePermissionMode(fresh.project, current), caps.autoPermissionMode) : resolvePermissionMode(fresh.project, current)
+            const sessionIdFlagSupported = supportsSessionIdFlag(agent, caps.sessionIdFlag, grokCaps.sessionIdFlag)
+            const sessionId = sessionIdFlagSupported ? randomUUID() : undefined
+            const launchOverride = projectLaunchOverride(agent, launchInfo, current)
+            requestTrust ||= launchOverride.requestTrust
+            const command = assembleLaunchCommand({ agentId: agent, initialPrompt: launches[index].prompt,
+              promptFile: launches[index].promptFile, model: role.model, permissionMode, sessionId, sessionIdFlagSupported,
+              launchCmdOverride: launchOverride.command, sharedIdentity,
+              approvalCaps: { codexApprovalValues: codexCaps.approvalValues, codexNoDaemon: codexCaps.noDaemon ?? null }
+            }, this.deps.env ?? process.env).command
+            const after = [...role.afterNodes, ...role.afterRoles.map((i) => ids[i])]
+            const awaitWorking = [...role.afterRoles.map((i) => ids[i]), ...role.afterNodes.filter((id) =>
+              this.awaitingFirstWorking.has(id) || this.deps.stateVerified?.(id) !== true)]
+            const mustWait = after.some((id) => awaitWorking.includes(id) || this.handedOver(id) || this.deps.stateVerified?.(id) !== true || this.deps.stateOf(id) !== 'done')
+            if (!mustWait) commands.set(ids[index], command)
+            const accountId = accounts[index]
+            return { id: ids[index], kind: 'terminal', position: { x: 0, y: 0 }, size: { ...size },
+              title: role.title || config.label, titleAuto: !role.title, color: agentAccountColor(agent, accountId, {
+                claude: current.claudeAccounts ?? [], codex: current.codexAccounts ?? []
+              }) ?? config.color, group: null, agentId: agent, cwd: from.cwd || fresh.project.cwd, openedBy: sourceNodeId,
+              ...(accountId ? { accountId } : {}), ...(role.model ? { agentModel: role.model } : {}),
+              ...(sessionId ? { agentSessionId: sessionId } : {}), pendingLaunch: { command, after, executor: 'server',
+                attempted: !mustWait, ...(!mustWait ? { manualOnly: true } : {}), ...(awaitWorking.length ? { awaitWorking } : {}),
+                ...(launches[index].promptFile ? { promptFile: launches[index].promptFile } : {}) }
+            }
+          })
+          const grid = current.snapToGrid ? current.gridSize : 0
+          const live = storedGeometryNodes([...fresh.project.nodes, ...created])
+          const arranged = applyStoredGeometry([...fresh.project.nodes, ...created], arrangeNodes(live, ids, { layout: 'grid' }))
+          const frame: CanvasNodeState = { id: groupId, kind: 'group', position: { x: 0, y: 0 }, size: { width: 200, height: 140 },
+            title: args.label || (verb === 'verify' ? `Verify: ${from.title || from.id}` : 'Team'), color: '#8b8b8b', group: null, openedBy: sourceNodeId }
+          const grouped = wrapStoredNodes(arranged, ids, frame, grid)
+          if (!grouped) throw new Error('could not construct team frame')
+          const group = grouped.find((n) => n.id === groupId)!
+          group.position = placeBelowSource(fresh.project.nodes, sourceNodeId, { w: group.size.width, h: group.size.height }, { snapGrid: grid })!
+          created = grouped.filter((n) => ids.includes(n.id))
+          const ropes = [...(fresh.project.ropes ?? [])]
+          const bridges = [...(fresh.project.bridges ?? [])]
+          for (const [index, role] of roles.entries()) {
+            addEdge(ropes, sourceNodeId, ids[index], 'ctrl')
+            if (canContextLink(effectiveAgentId(fresh.node, this.deps.agentIdOf)!) && canContextLink(role.agent as AgentId)) addEdge(bridges, sourceNodeId, ids[index], 'link')
+            for (const dep of [...role.afterNodes, ...role.afterRoles.map((i) => ids[i])]) {
+              const id = waitRopeId(dep, ids[index])
+              if (!ropes.some((edge) => edge.id === id)) ropes.push({ id, source: dep, target: ids[index] })
+              addEdge(bridges, ids[index], dep, 'link')
+            }
+          }
+          project = fresh.project
+          editStarted = true
+          project.nodes = grouped; project.ropes = ropes; project.bridges = bridges
+          return { ok: true }
+        })
+        if (!edit.value.ok || !edit.saved || !project) return edit.value.ok ? { ok: false, error: `${verb}-not-saved: no sessions were started` } : edit.value
+        for (const id of [...ids, groupId]) this.ownership.record(id, { sourceNodeId, projectId: project.id })
+        for (const node of created) { this.strictArms.add(node.id); this.strictLaunchIdentities.set(node.id, launchIdentity(project, node)) }
+        if (requestTrust) { try { void this.deps.requestAgentsTrust?.(project.id) } catch { /* next launch can ask again */ } }
+        await this.publishPersisted([project.id])
+        const launch = await this.startCreated(project, created, commands, true)
+        const result = { groupId, memberIds: ids, ...launch, ...(lenses ? { targetId: origin.id, lenses, reviewerIds: ids.slice(0, lenses.length), judgeId: ids[lenses.length] ?? null } : {}) }
+        if (launch.failed.length) return { ok: false, error: launchFailedError(created.filter((n) => launch.failed.includes(n.id)).map((n) => ({
+          id: n.id, reason: launch.reasons[n.id], retained: !!n.pendingLaunch
+        })), verb), result }
+        return { ok: true, message: `opened ${ids.length} member(s) in group ${groupId}; launch delivery does not confirm agent startup`, result }
+      } catch (error) {
+        return { ok: false, error: editStarted ? `${verb}-save-uncertain: inspect list before repeating; ${String(error)}` : String(error) }
+      }
+    })
+  }
+
   /** Start a durable batch, then patch outcomes against fresh state. Never called before save. */
   private async startCreated(
     target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean
@@ -1640,17 +1893,30 @@ export class HeadlessNodeFactory {
     }
     for (const node of created) {
       try {
+        if (this.stopped) { fail(node.id, 'cancelled'); continue }
+        const currentWorkspace = (await this.contentWriter.edit((fresh) => fresh)).value
+        const holders = nodeProjects(currentWorkspace, node.id)
+        const currentProject = holders.length === 1 && holders[0].id === target.id ? holders[0] : undefined
+        const currentNode = currentProject?.nodes.find((n) => n.id === node.id)
+        if (!currentProject || currentProject.ssh || !currentNode || isRemoteSessionNode(currentNode) ||
+          currentNode.kind !== node.kind || currentNode.agentId !== node.agentId || currentNode.accountId !== node.accountId ||
+          currentNode.cwd !== node.cwd || currentProject.cwd !== target.cwd ||
+          currentNode.pendingLaunch?.command !== node.pendingLaunch?.command) { fail(node.id, 'cancelled'); continue }
+        if (!(await this.accountReady(node))) { fail(node.id, 'account-unavailable'); continue }
+        if (!(await promptReadable(node.pendingLaunch?.promptFile))) { fail(node.id, 'prompt-file-missing'); continue }
         const command = commands.get(node.id)
         if (!command) {
           // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
           const result = await this.attach(target, node)
           if (!result.sessionId) fail(node.id, 'spawn-failed')
+          else if (this.deps.releaseHeadlessAfterWork && result.persistent === false) fail(node.id, 'not-persistent')
           else if (trackAgentStartup && result.fresh) this.awaitingFirstWorking.add(node.id)
+          if (this.deps.releaseHeadlessAfterWork) { this.attached.delete(node.id); this.deps.ptyManager.releaseHeadless(node.id) }
           continue
         }
         const launched = await this.launch(target, node, command)
         if (trackAgentStartup && launched.fresh) this.awaitingFirstWorking.add(node.id)
-        if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+        if (launched.outcome === 'delivered') { this.noteDelivered(node.id, command); node.pendingLaunch = undefined }
         else fail(node.id, launched.reason)
       } catch {
         // The launcher answers its own failures; only the spawn-only `attach` above throws.
@@ -1900,7 +2166,7 @@ export class HeadlessNodeFactory {
           ...(args.model && verb === 'open-agent' ? { agentModel: args.model } : {}),
           ...(issueRef && verb === 'open-agent' ? { issueRef } : {}),
           ...(mintedSessionId ? { agentSessionId: mintedSessionId } : {}),
-          ...(source.node.accountId && verb === 'open-agent' &&
+          ...(source.node.accountId && verb === 'open-agent' && effectiveAgentId(source.node, this.deps.agentIdOf) === agentId &&
           (agentId === 'claude' || agentId === 'codex')
             ? { accountId: source.node.accountId }
             : {}),
@@ -2101,8 +2367,17 @@ export class HeadlessNodeFactory {
           // spawned for this caller during the current run may receive automatic input.
           if (!this.ownership.ownerOf(node.id)) continue
           const command = pending.command
+          if (this.strictArms.has(node.id) && this.strictLaunchIdentities.get(node.id) !== launchIdentity(project, node)) {
+            patch(claimLaunch(project.id, node.id, command, false))
+            continue
+          }
+          if (!(await promptReadable(pending.promptFile)) || !(await this.accountReady(node))) {
+            patch(claimLaunch(project.id, node.id, command, false))
+            continue
+          }
           let awaitWorking = pending.awaitWorking
-          if (observed?.state === 'working' && awaitWorking?.includes(observed.nodeId)) {
+          if (observed?.state === 'working' && awaitWorking?.includes(observed.nodeId) &&
+            (!this.strictArms.has(node.id) || this.deps.stateVerified?.(observed.nodeId) === true)) {
             const depId = observed.nodeId
             const rest = awaitWorking.filter((id) => id !== depId)
             awaitWorking = rest.length ? rest : undefined
@@ -2117,6 +2392,7 @@ export class HeadlessNodeFactory {
           const ready = pending.after.every((depId) => {
             const stillExists = project.nodes.some((candidate) => candidate.id === depId)
             if (!stillExists) return true
+            if (this.strictArms.has(node.id) && this.deps.stateVerified?.(depId) !== true) return false
             if (awaitWorking?.includes(depId)) return false
             if (this.handedOver(depId)) return false
             return observed?.nodeId === depId
@@ -2152,8 +2428,21 @@ export class HeadlessNodeFactory {
           // and the claim applied to the fresh read (a teammate may have deleted the node, re-armed it
           // with another command, or claimed it, since the look above).
           if (!claim.saved || !claim.applied[patches.length - 1]) continue
+          if (this.strictArms.has(node.id)) {
+            const stillValid = await this.contentWriter.edit((fresh) => {
+              const projects = nodeProjects(fresh, node.id)
+              const project = projects.length === 1 ? projects[0] : undefined
+              const current = project?.nodes.find((n) => n.id === node.id)
+              return !!project && !!current && this.strictLaunchIdentities.get(node.id) === launchIdentity(project, current)
+            })
+            if (!stillValid.value) continue
+          }
           if (!isLaunchShell(await this.deps.ptyManager.paneCommand(node.id).catch(() => null))) continue
-          if ((await this.deps.ptyManager.sendText(node.id, command).catch(() => false)) !== true) continue
+          const delivered = this.strictArms.has(node.id) ?
+            (await this.launch(project, node, command)).outcome === 'delivered' :
+            (await this.deps.ptyManager.sendText(node.id, command).catch(() => false)) === true
+          if (!delivered) continue
+          this.noteDelivered(node.id, command)
           patch(clearLaunch(project.id, node.id, command))
         }
       }
@@ -2170,6 +2459,9 @@ export class HeadlessNodeFactory {
   stop(): void {
     this.stopped = true
     this.ownership.clear()
+    this.strictArms.clear()
+    this.strictLaunchIdentities.clear()
+    this.delivered.clear()
     this.projectGrants.clear()
   }
 }

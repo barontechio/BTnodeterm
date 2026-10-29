@@ -190,11 +190,12 @@ const api: NodeTerminalApi = {
       ipcRenderer.on(IPC.workspaceExternalChange, h)
       return () => ipcRenderer.removeListener(IPC.workspaceExternalChange, h)
     },
-    // Deliberate no-op on the desktop shell: nothing here writes the project file on an agent's
-    // behalf. `HeadlessNodeFactory` is Server Edition only — the desktop's canvas-control verbs run
-    // through the renderer's own React Flow state, and its watcher path stays on onExternalChange.
-    // A real subscription would be dead wiring for a channel this main process never broadcasts.
-    onServerChange: (_cb: (project: Project) => void) => () => {},
+    // Host-owned orchestration publishes the persisted project without raising an outside-edit conflict.
+    onServerChange: (cb: (project: Project) => void) => {
+      const h = (_e: unknown, project: Project) => cb(project)
+      ipcRenderer.on(IPC.workspaceServerChange, h)
+      return () => ipcRenderer.removeListener(IPC.workspaceServerChange, h)
+    },
     // Quit / restart-to-update flush (src/main/renderer-flush.ts): answer with the request id once
     // the callback settles, whether it saved, had nothing to save, or failed.
     onFlushRequest: (cb: () => Promise<unknown> | void) => {
@@ -926,7 +927,10 @@ const api: NodeTerminalApi = {
   // Absolute path of a dropped/picked File (File.path was removed in Electron 30+).
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   userDataDir: () => ipcRenderer.invoke(IPC.appUserDataDir),
-  control: { capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities) },
+  control: {
+    capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities),
+    runLaunch: (nodeId, command) => ipcRenderer.invoke(IPC.controlRunLaunch, nodeId, command)
+  },
   notify: (payload) => ipcRenderer.invoke(IPC.appNotify, payload),
   openNotificationSettings: () => ipcRenderer.invoke(IPC.appOpenNotificationSettings),
   onFocusNode: (listener) => {

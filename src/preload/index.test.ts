@@ -36,6 +36,22 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('delivers persisted host project changes and unsubscribes when the view closes', () => {
+    const got: unknown[] = []
+    const off = api.workspace.onServerChange((project) => got.push(project))
+    const call = h.on.mock.calls.find((entry) => entry[0] === IPC.workspaceServerChange)!
+    const handler = call[1] as (event: unknown, project: unknown) => void
+    const project = { id: 'p', nodes: [{ id: 'team-member' }] }
+    handler({}, project)
+    expect(got).toEqual([project])
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.workspaceServerChange, handler)
+  })
+
+  it('routes explicit host-owned launch recovery through owner IPC', async () => {
+    await api.control!.runLaunch!('node', 'claude prompt')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.controlRunLaunch, 'node', 'claude prompt')
+  })
   it('routes foreground process termination through request IPC', async () => {
     await api.pty.terminateForeground('node-1', 'claude')
     expect(h.invoke).toHaveBeenCalledWith(IPC.ptyTerminateForeground, 'node-1', 'claude')

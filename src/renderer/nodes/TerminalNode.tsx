@@ -1,4 +1,5 @@
 import { elementOnScreen } from '../terminal/on-screen'
+import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
 import { useContextEnsure } from '../terminal/useContextEnsure'
 import { canPlainApprove, sendHeaderAnswer } from '../lib/approveGate'
 import { isLocalOnSshCanvas } from '../lib/localOnSshCanvas'
@@ -1317,6 +1318,7 @@ export function TerminalNode({
   // namespaces (pty, fs) go through it; app-global ones (clipboard, shell) stay on the global.
   const session = useSession()
   const { api } = session
+  const [queuedRunError, setQueuedRunError] = useState<string | undefined>()
   // The project whose nodes this node's subtree renders (Canvas: the project React Flow's store
   // holds). Read by the create path in the once-mounted lifecycle effect, so a ref.
   const owningProject = useOwningProjectId()
@@ -6421,7 +6423,7 @@ export function TerminalNode({
                 ? ' term-node__status--queued-warn'
                 : ''
             }`}
-            title={launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip, pendingInterruptedOn, pendingHandedOverOn)}
+            title={queuedRunError || launchTooltip(launchDelivery, pendingWaitingOn, pendingLaunch.command, pendingErroredOn, session.source === 'relay', prTooltip, successTooltip, pendingInterruptedOn, pendingHandedOverOn)}
           >
             <span className="term-node__status-dot" />
             {startingNow
@@ -6443,10 +6445,19 @@ export function TerminalNode({
                 // unconditionally threw the command away whenever the session was not up yet —
                 // and "not up yet" is precisely the state a user reaches for this button in, so
                 // the one escape hatch could destroy the thing it exists to rescue.
-                void launchCommand(id, pendingLaunch.command, true, api).then((outcome) => {
+                void (async () => {
+                  setQueuedRunError(undefined)
+                  const host = await runHostQueuedLaunch(api, id, pendingLaunch)
+                  if (host) {
+                    if (!host.started) setQueuedRunError(host.error || host.message || 'Launch is still queued.')
+                    return host.ok && host.started ? 'submitted' : 'cancelled'
+                  }
+                  return launchCommand(id, pendingLaunch.command, true, api)
+                })().then((outcome) => {
                   if (outcome === 'submitted') {
                     useLaunchDelivery.getState().clear(id)
-                    updateNodeData(id, { initialCommand: undefined, pendingLaunch: undefined })
+                    if ((getNode(id)?.data.pendingLaunch as PendingLaunch | undefined)?.command === pendingLaunch.command)
+                      updateNodeData(id, { initialCommand: undefined, pendingLaunch: undefined })
                   } else {
                     useLaunchDelivery.getState().markFailed(id, 1)
                   }

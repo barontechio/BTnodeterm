@@ -1,4 +1,5 @@
 import { planGeometryCommand } from '@shared/geometry-command'
+import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
 import { planBoardAssignment } from '@shared/board-assignment'
 import { controlOpenAgent } from '@shared/control-open-agent'
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
@@ -18556,6 +18557,10 @@ export function Canvas() {
       const stored = active ? undefined : st.getProject(project.id)?.nodes.find((n) => n.id === nodeId)
       if (!live && !stored) return { ok: false, error: `run: no node with id ${nodeId}` }
       const pending = (live ? live.data.pendingLaunch : stored?.pendingLaunch) as PendingLaunch | undefined
+      const hostLaunch = await runHostQueuedLaunch(api, nodeId, pending)
+      if (hostLaunch) return { ok: hostLaunch.ok, error: hostLaunch.error, message: hostLaunch.message,
+        result: { id: nodeId, ids: [nodeId], started: hostLaunch.started, queued: !hostLaunch.started,
+          startedIds: hostLaunch.started ? [nodeId] : [], queuedIds: hostLaunch.started ? [] : [nodeId] } }
       const one = (started: boolean, reason?: string): ControlReply => ({
         ok: true,
         message: started

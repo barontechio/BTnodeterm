@@ -138,6 +138,7 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   // HOST machine's loopback over one of its SSH masters. Neither is a peer's to ask for.
   IPC.devPortsScan,
   IPC.controlCapabilities,
+  IPC.controlRunLaunch,
   IPC.devPortsForward,
   IPC.devPortsUnforward
 ])

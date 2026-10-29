@@ -69,6 +69,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  orchestrate(verb: 'spawn-team' | 'verify', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   reportIssue(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
@@ -177,6 +178,9 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.openAgent(nodeId, controlOpenAgent(verb, command.args), verified)
       case 'show-image':
         return actions.showImage(nodeId, command.args, verified)
+      case 'spawn-team':
+      case 'verify':
+        return actions.orchestrate(verb, nodeId, command.args, verified)
       case 'close':
         return actions.close(nodeId, command.args, verified)
       case 'link':

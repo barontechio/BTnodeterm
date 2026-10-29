@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -62,6 +62,19 @@ describe('Server board comment delivery', () => {
 })
 
 describe('buildControlApi', () => {
+  it('negotiates host-owned launch recovery and never falls back after a lost reply', async () => {
+    const request = vi.fn(async (method: string) => method === IPC.controlCapabilities ? { hostLaunches: true } : { ok: true, started: true })
+    const api = buildControlApi({ request } as never)
+    expect(await api.control!.runLaunch!('node', 'task')).toMatchObject({ started: true })
+    expect(request).toHaveBeenCalledWith(IPC.controlRunLaunch, 'node', 'task')
+    const lost = { request: async (method: string) => {
+      if (method === IPC.controlCapabilities) return { hostLaunches: true }
+      throw new Error('connection closed after submission')
+    } }
+    expect(await buildControlApi(lost as never).control!.runLaunch!('node', 'task')).toMatchObject({ ok: false, started: false })
+    const old = { request: async () => { throw Object.assign(new Error('no handler'), { code: 'E_NO_HANDLER' }) } }
+    expect(await buildControlApi(old as never).control!.runLaunch!('node', 'task')).toBeNull()
+  })
   it('reads the host report and reports unknown on an older or unreachable host', async () => {
     const c = fakeClient()
     expect(await buildControlApi(c as never).control!.capabilities()).toBe('R')

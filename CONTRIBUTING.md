@@ -205,6 +205,15 @@ existing imports as re-exports. Keep opener/wait-rope interpretation in `shared/
 so layout and team progress agree. A core command must patch stored geometry, not round-trip
 the whole node through renderer hydration and serialization.
 
+Local team/review execution uses `core/headless-node-factory.ts` in both shells. Pure team,
+review, prompt and placement planners live in `shared/`. Persist the complete batch before
+starting sessions; release dependencies only from verified current-session evidence. Process
+ownership and launch identities are never reconstructed from saved nodes. The historical
+`pendingLaunch.executor: 'server'` value identifies host execution in either edition. Run now
+uses the owner-only `control:run-launch` claim path and must not fall back to terminal input
+after an uncertain host reply. Desktop keeps its legacy adapters for SSH, Windows and agents
+without a local headless backend. A missing account or prompt file holds work for recovery.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

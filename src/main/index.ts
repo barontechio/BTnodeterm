@@ -143,7 +143,10 @@ import {
   registerProjectSetupHandlers,
   type ProjectSetupHandlerDeps
 } from '../core/project-setup-handlers'
-import { registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { HeadlessNodeFactory } from '../core/headless-node-factory'
+import { useHostTeamPlanner } from '../core/team-control-route'
+import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
@@ -380,9 +383,9 @@ import { initClaudeAccounts } from './claude-accounts'
 import { initCodexAccounts } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
 import type { CodexCliCaps } from '../shared/types'
-import { registerGrokCliIpc } from '../core/grok-cli'
+import { grokCliCaps, registerGrokCliIpc } from '../core/grok-cli'
 import { registerCursorCliIpc } from '../core/cursor-cli'
-import { refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
+import { codexIdentityCaps, refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
 import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc, setWallpaperImageOps, setWallpaperMediaUrl } from '../core/wallpaper'
 import { nativeImageWallpaperOps } from './wallpaper-native-image'
@@ -567,6 +570,7 @@ const clearRendererKeyState = (): void => {
 }
 const sshStore = new SshStore()
 const ptyManager = new PtyManager()
+let coreTeams: HeadlessNodeFactory | null = null
 // Dictation: local whisper.cpp models live under userData, one dir per install (same convention
 // as the tmux config / scrollback-store). onProgress pushes { id, pct } to the renderer the same
 // way agent-status events do (sendToMain — resolves the live window at send time).
@@ -3441,6 +3445,7 @@ app.whenReady().then(async () => {
       // A station that starts a DIFFERENT session drops the report its old one made — before the
       // renderer hears the event, so no `--after-success` can fire on it in between.
       stationOutcomes.onAgentEvent(enriched)
+      coreTeams?.onAgentEvent(enriched)
       sendToMain(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
@@ -4524,6 +4529,21 @@ app.whenReady().then(async () => {
         env: { version: app.getVersion(), os: process.platform, edition: 'desktop' }
       }
     })
+  coreTeams = new HeadlessNodeFactory({
+    controlScope: 'project', workspaceStore, ptyManager, releaseHeadlessAfterWork: true,
+    settings: () => settingsStore.get(), cliCaps: claudeCliCaps, grokCaps: grokCliCaps, codexCaps: codexCliCaps,
+    codexSharedIdentity: () => codexIdentityCaps().then((caps) => caps.shared),
+    stateOf: nodeState, agentIdOf: (id) => mirrorEntry(id)?.agentId, sessionOf: (id) => mirrorEntry(id)?.sessionId,
+    stateVerified: (id) => { const entry = mirrorEntry(id); return entry?.stateVerified === true && !entry.restored && !entry.idleInferred && !!entry.sessionId },
+    contextShimPath: contextLinkShimPath,
+    projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
+    requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
+    outcomeOf: (id) => stationOutcomes.get(id), handedOver: (id) => stationHandovers.isHandedOver(id),
+    handoverOf: (id) => stationHandovers.list().find((record) => record.nodeId === id),
+    publishProject: (project) => sendToMain(IPC.workspaceServerChange, project)
+  })
+  registerHostLaunchIpc(corePlatform, (id, command) => coreTeams ? coreTeams.runFromOwner(id, command) :
+    Promise.resolve({ ok: false, started: false, error: 'Host launch scheduler is stopped.' }))
   const readControlCapabilities = registerControlCapabilities('desktop', () => true)
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker
@@ -4586,6 +4606,19 @@ app.whenReady().then(async () => {
     if (verb === 'browser') return handleBrowserVerb(nodeId, args, verified)
     // Answered in MAIN for the same reasons as `browser`; see handleReportIssueVerb.
     if (verb === 'report-issue') return handleReportIssueVerb(nodeId, args, verified)
+    if (coreTeams && (verb === 'spawn-team' || verb === 'verify')) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      if (useHostTeamPlanner({ verb, sourceNodeId: nodeId, args, workspace, settings: settingsStore.get(),
+        hostPlatform: process.platform, agentIdOf: (id) => mirrorEntry(id)?.agentId })) {
+        return coreTeams.orchestrate(verb, nodeId, args, verified)
+      }
+    }
+    if (coreTeams && verb === 'run' && workspaceStore.getNode(args.node)?.pendingLaunch?.executor === 'server') {
+      const sourceProjects = workspaceStore.projectIdsForNode(nodeId)
+      const targetProjects = workspaceStore.projectIdsForNode(args.node)
+      if (sourceProjects.length === 1 && targetProjects.length === 1 && sourceProjects[0] === targetProjects[0] &&
+        (args.project === undefined || args.project === sourceProjects[0])) return coreTeams.run(nodeId, args, verified)
+    }
     // ── `open-project` + `--project` targeting, gated in MAIN before anything is forwarded
     // (issue #338 PR 1). The renderer never sees an invalid cwd or an unauthorized `--project`.
     // The verb itself is verified-only at the hook-server route (requiresVerified) — by the time
@@ -5492,6 +5525,8 @@ app.on('before-quit', (e) => {
     return
   }
   quitting = true // from here on, window close-events must NOT be turned into hide
+  coreTeams?.stop()
+  coreTeams = null
   destroyNotchHud()
   backgroundTray?.destroy()
   backgroundTray = undefined

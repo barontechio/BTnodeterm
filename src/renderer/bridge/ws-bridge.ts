@@ -1,4 +1,6 @@
 import type { ChatCatalog } from '@shared/chat-catalog'
+import type { HostLaunchReply } from '@shared/headless-launch'
+import { E_NO_HANDLER, E_UNSUPPORTED } from '@shared/rpc'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
@@ -258,7 +260,18 @@ export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'contr
   return {
     control: {
       capabilities: () => client.request(IPC.controlCapabilities).catch(() => null) as
-        ReturnType<NonNullable<NodeTerminalApi['control']>['capabilities']>
+        ReturnType<NonNullable<NodeTerminalApi['control']>['capabilities']>,
+      runLaunch: async (id, command) => {
+        const uncertain = (error: unknown): HostLaunchReply => ({ ok: false, started: false,
+          error: `Launch could not be confirmed; inspect the session before repeating. ${error instanceof Error ? error.message : String(error)}` })
+        let report: unknown
+        try { report = await client.request(IPC.controlCapabilities) } catch (error) {
+          const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+          return code === E_NO_HANDLER || code === E_UNSUPPORTED ? null : uncertain(error)
+        }
+        if (!report || typeof report !== 'object' || (report as { hostLaunches?: unknown }).hostLaunches !== true) return null
+        try { return await client.request(IPC.controlRunLaunch, id, command) as HostLaunchReply } catch (error) { return uncertain(error) }
+      }
     }
   }
 }

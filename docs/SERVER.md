@@ -54,6 +54,14 @@ reporting for that project. It targets only the caller's unambiguous project rep
 redaction, preview, fingerprint deduplication and rate limits. `--dry-run` composes the preview without
 publishing. Concurrent reports for one project receive a busy result instead of a queued publication.
 
+`spawn-team --team '<json>'` and `verify --node <id>` run without an open browser. Local Claude,
+Codex and Gemini backends share Desktop's team/review planners. The host validates all roles,
+saves the complete group, members and dependency edges, then starts sessions. Reviews wait for
+verified target completion; synthesis waits for real reviewer turns. Saved holds after a restart
+require owner recovery through Run now. A removed account or missing prompt file also holds work.
+Run now is serialized with automatic delivery and refuses a stale command. If a reply is lost,
+inspect the session before retrying; the browser does not fall back to sending terminal input.
+
 ## Quickstart
 
 ```bash

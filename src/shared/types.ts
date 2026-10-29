@@ -485,9 +485,9 @@ export interface PendingLaunch {
   /** Delivered to the node's shell once the wait is over (agent CLI + prompt, or a plain command). */
   command: string
   /**
-   * Which core process owns delivery. Absent is the historical renderer-owned path. Server
-   * Edition headless opens stamp `server`, so a connected browser can render the armed state and
-   * dependency edges without racing the server to type the command into the same pane. The
+   * Which core process owns delivery. Absent is the historical renderer-owned path. Headless
+   * opens and orchestration on both shells retain the `server` wire value, so a connected viewer
+   * renders the armed state without racing the host scheduler to type into the same pane. The
    * desktop's headless start (#925) stamps `core` on its manualOnly write-ahead claim.
    */
   executor?: 'server' | 'core'
@@ -496,7 +496,7 @@ export interface PendingLaunch {
    * agent can briefly report `done` while its argv prompt is still booting; that idle blip must not
    * release a downstream launch. The server removes an id only after a verified `working` event,
    * then requires the ordinary later `done`. Persisted so a server restart cannot forget the gate.
-   * Desktop-owned launches leave this absent; renderer parity is a separate follow-up.
+   * Legacy renderer-owned launches leave this absent; headless orchestration on either shell uses it.
    */
   awaitWorking?: string[]
   /**
@@ -4574,6 +4574,8 @@ export interface NodeTerminalApi {
   /** Optional for older hosts; null means this connection cannot describe the host's support. */
   control?: {
     capabilities(): Promise<import('./control-capabilities').ControlCapabilityReport | null>
+    /** Null means an older host; transport errors must return a refusal, never a legacy fallback. */
+    runLaunch?(nodeId: string, expectedCommand: string): Promise<import('./headless-launch').HostLaunchReply | null>
   }
   pty: PtyApi
   workspace: WorkspaceApi
