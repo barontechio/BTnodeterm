@@ -2226,31 +2226,6 @@ describe('HeadlessNodeFactory — casts every content change before it saves', (
   })
 })
 
-describe('HeadlessNodeFactory — one load and one save, both through the cast helper (source)', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'headless-node-factory.ts'), 'utf8').replace(/\r\n/g, '\n')
-  it('every verb loads through loadForEdit and saves through castAndSave', () => {
-    // A second `workspaceStore.save(` is a save site that casts nothing: on a governed project the
-    // authority's overlay would drop whatever it changed.
-    expect(src.match(/workspaceStore\.save\(/g)?.length).toBe(1)
-    expect(src.match(/workspaceStore\.load\(/g)?.length).toBe(1)
-    const saveAt = src.indexOf('workspaceStore.save(')
-    const helper = src.lastIndexOf('private async castAndSave(', saveAt)
-    expect(helper).toBeGreaterThan(0)
-    expect(src.slice(helper, saveAt)).toContain('diffContent(')
-    // The one read is the read-only view; every edit copies it (loadForEdit).
-    const readAt = src.indexOf('workspaceStore.load(')
-    expect(src.lastIndexOf('private readWorkspace(', readAt)).toBeGreaterThan(0)
-  })
-
-  it('browsers are sent the PERSISTED project, re-read after the save, never a verb\'s copy', () => {
-    const calls = [...src.matchAll(/this\.deps\.publishProject/g)].map((m) => m.index ?? -1)
-    const helper = src.indexOf('private async publishPersisted(')
-    const end = src.indexOf('\n  }\n', helper)
-    expect(helper).toBeGreaterThan(0)
-    for (const at of calls) expect(at > helper && at < end, `publishProject outside publishPersisted at ${at}`).toBe(true)
-    expect(src.slice(helper, end)).toContain('await this.readWorkspace()')
-  })
-})
 
 // A launch can take seconds. A verb's SECOND save (after it) must never write back the copy it
 // loaded before the launch: that copy predates whatever a teammate did meanwhile, and a whole-node

@@ -178,6 +178,11 @@ available through the authenticated `capabilities` command and `control:capabili
 Keep the manifest and handler in the same change. Support is not authorization: identity,
 project scope, capability consent and backend checks still run when the command executes.
 
+Server canvas commands persist through `core/canvas-content-writer.ts`: edit a private snapshot,
+publish its content mutations before an authority-overlay save, and re-read the persisted project
+before notifying browsers. After a slow external effect, apply only its still-valid patches to a
+fresh read. The writer does not authorize commands or replace the workspace's write queue.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

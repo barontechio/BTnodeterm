@@ -4,8 +4,7 @@ import { isLaunchShell } from '../shared/agents/pane'
 import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
-import { publishCanvasMutation } from '../core/canvas-sync'
-import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
+import { CanvasContentWriter, type NodePatch, type PatchSave } from '../core/canvas-content-writer'
 import { groupsFirst } from '../shared/node-order'
 import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
@@ -366,22 +365,6 @@ function addEdge(list: BridgeLink[], source: string, target: string, prefix: str
   list.push({ id: edgeId(prefix, source, target), source, target })
 }
 
-/** One node edit a verb re-applies to a fresh read (`savePatches`). Idempotent. */
-interface NodePatch {
-  projectId: string
-  nodeId: string
-  /** Apply to the fresh node. true = it LANDED: the node was in the state this patch is for (see
-   *  each patch for which). A caller that delivers on the strength of a patch asks this, because the
-   *  fresh read can find the node deleted, or re-armed, by a teammate since the verb looked. */
-  apply(node: CanvasNodeState): boolean
-}
-
-/** What `savePatches` did: whether the save landed, and per patch whether it applied to the fresh
- *  read. A patch LANDED only when both are true. */
-interface PatchSave {
-  saved: boolean
-  applied: boolean[]
-}
 
 /** The held launch this verb owns, by its command: a patch never touches a launch someone replaced. */
 const ownLaunch = (node: CanvasNodeState, command: string): boolean => node.pendingLaunch?.command === command
@@ -432,14 +415,6 @@ function dropAwaitWorking(projectId: string, nodeId: string, command: string, de
   }
 }
 
-/** A project absent from a baseline: all of its content is new. */
-const EMPTY_CONTENT: CanvasContent = { nodes: [], bridges: [], ropes: [] }
-
-/** Every project's content, deep-copied: a verb edits its workspace in place (`node.pendingLaunch =
- *  …`), so a baseline that shared those objects would diff as unchanged. */
-function snapshotContent(workspace: Workspace): Map<string, CanvasContent> {
-  return new Map(workspace.projects.map((p) => [p.id, structuredClone(contentOf(p))]))
-}
 
 function nodeProjects(workspace: Workspace, nodeId: string): Project[] {
   return workspace.projects.filter((project) => project.nodes.some((node) => node.id === nodeId))
@@ -650,11 +625,11 @@ export class HeadlessNodeFactory {
    */
   private projectGrants = new Map<string, Set<string>>()
   private stopped = false
-  /** Per loaded workspace copy: every project's content as last loaded or saved (`castAndSave`). */
-  private baselines = new WeakMap<Workspace, Map<string, CanvasContent>>()
+  private readonly contentWriter: CanvasContentWriter
 
   constructor(private readonly deps: HeadlessNodeFactoryDeps) {
     this.ownership = deps.ownership ?? createHeadlessNodeOwnership()
+    this.contentWriter = new CanvasContentWriter({ ...deps, isStopped: () => this.stopped })
   }
 
   private runExclusive<T>(work: () => Promise<T>): Promise<T> {
@@ -666,90 +641,24 @@ export class HeadlessNodeFactory {
     return run
   }
 
-  /** THE ONE READ of the store. A read-only view: never edited, never saved. */
   private readWorkspace(): Promise<Workspace> {
-    return this.deps.workspaceStore.load({ sideline: false })
+    return this.contentWriter.readWorkspace()
   }
 
-  /**
-   * The load a verb EDITS. A private copy of the workspace, so no verb ever edits an object the store
-   * or the canvas authority still holds (a governed project's nodes come from the authority's own
-   * state), and the content of every project as loaded: `castAndSave` diffs against it.
-   */
-  private async loadForEdit(): Promise<Workspace> {
-    const workspace = structuredClone(await this.readWorkspace())
-    this.baselines.set(workspace, snapshotContent(workspace))
-    return workspace
+  private loadForEdit(): Promise<Workspace> {
+    return this.contentWriter.loadForEdit()
   }
 
-  /**
-   * THE ONE SAVE. Diff every project's whole content against what was last loaded or saved, cast
-   * every op, THEN save. Nothing is hand-listed per verb, and that is the point: on a project the
-   * canvas authority governs, the save is overlaid with the authority's content, which holds only
-   * what it heard as ops, so any change a verb made that is not cast here is dropped from disk
-   * (docs/hosted-team-relay.md). The reflector hands each op to the authority synchronously, so
-   * every one is in its state before the overlay reads it. The ops are cast from a copy, never from
-   * the workspace a verb keeps editing, so nobody downstream holds an object that changes later.
-   *
-   * Refused once canvas control has stopped: the shell detaches the authority from the store right
-   * after, and a verb still mid-launch would otherwise write its copy un-overlaid over the
-   * authority's final flush. `onlyIfChanged` skips a save that would carry no op. Answers whether it
-   * saved.
-   */
-  private async castAndSave(workspace: Workspace, opts: { onlyIfChanged?: boolean } = {}): Promise<boolean> {
-    if (this.stopped) {
-      console.warn('[headless-node-factory] canvas control stopped: a pending canvas write was skipped')
-      return false
-    }
-    const before = this.baselines.get(workspace)
-    const after = snapshotContent(workspace)
-    const cast = this.deps.publishMutation ?? ((projectId: string, m: CanvasMutation) => {
-      publishCanvasMutation(projectId, m)
-    })
-    const ops: Array<[string, CanvasMutation]> = []
-    for (const project of workspace.projects) {
-      const next = after.get(project.id)
-      if (!next) continue
-      for (const m of diffContent(before?.get(project.id) ?? EMPTY_CONTENT, next, project.id)) ops.push([project.id, m])
-    }
-    if (opts.onlyIfChanged && !ops.length) return false
-    for (const [projectId, m] of ops) cast(projectId, m)
-    this.baselines.set(workspace, after)
-    await this.deps.workspaceStore.save(workspace)
-    return true
+  private castAndSave(workspace: Workspace, opts: { onlyIfChanged?: boolean } = {}): Promise<boolean> {
+    return this.contentWriter.castAndSave(workspace, opts)
   }
 
-  /**
-   * A SECOND phase's save: the launch between the two phases can take seconds, and the copy the
-   * verb loaded before it predates whatever a teammate did meanwhile (a move, a rename, a deletion).
-   * So re-read, re-apply ONLY this verb's own patches to the nodes that still exist (a node deleted
-   * meanwhile stays deleted), and save only if that changed anything. The patches must be idempotent:
-   * every call re-applies all of them, so a later save still carries an earlier one.
-   *
-   * Answers per patch whether it applied to the fresh read, and whether the save landed: a caller
-   * that delivers on the strength of a claim must see BOTH (a stopping factory refuses the save, and
-   * the node may be gone or re-armed since the verb looked).
-   */
-  private async savePatches(patches: readonly NodePatch[]): Promise<PatchSave> {
-    if (!patches.length) return { saved: false, applied: [] }
-    const workspace = await this.loadForEdit()
-    const applied = patches.map((patch) => {
-      const node = workspace.projects.find((p) => p.id === patch.projectId)?.nodes.find((n) => n.id === patch.nodeId)
-      return node ? patch.apply(node) : false
-    })
-    return { saved: await this.castAndSave(workspace, { onlyIfChanged: true }), applied }
+  private savePatches(patches: readonly NodePatch[]): Promise<PatchSave> {
+    return this.contentWriter.savePatches(patches)
   }
 
-  /** The PERSISTED projects to browsers (`workspace:server-change`), re-read after the save — never
-   *  a verb's own copy, which can predate a teammate's edit and would undo it on every client that
-   *  merges it. Their content already travelled as ops in `castAndSave`. */
-  private async publishPersisted(projectIds: Iterable<string>): Promise<void> {
-    if (!this.deps.publishProject || this.stopped) return
-    const wanted = new Set(projectIds)
-    if (!wanted.size) return
-    for (const project of (await this.readWorkspace()).projects) {
-      if (wanted.has(project.id)) this.deps.publishProject(project)
-    }
+  private publishPersisted(projectIds: Iterable<string>): Promise<void> {
+    return this.contentWriter.publishPersisted(projectIds)
   }
 
   /** Who opened `nodeId` during THIS server run (and into which project), or undefined — the
