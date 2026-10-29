@@ -90,6 +90,29 @@ describe('buildRealApi: workspace', () => {
   })
 })
 
+describe('buildRealApi: pty naming', () => {
+  // ✦ Name with AI used to resolve a hard-coded "not available in the server edition yet" here,
+  // long after the naming module moved to core. The server registers the same handlers as the
+  // desktop (core/naming-ipc.ts), so both members must reach them with every argument.
+  it('generateName / generateGroupName request the real server channels', async () => {
+    const c = fakeClient()
+    const api = buildRealApi(c as never)
+    await api.pty.generateName('n1', '/repo', 'acct-1')
+    await api.pty.generateGroupName(['n1', 'n2'], '/repo')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.ptyGenerateName, args: ['n1', '/repo', 'acct-1'] },
+      { kind: 'request', method: IPC.ptyGenerateGroupName, args: [['n1', 'n2'], '/repo'] }
+    ])
+  })
+
+  it('answers a dropped socket or a relay refusal as a failed naming, never a rejection', async () => {
+    const c = { ...fakeClient(), request: () => Promise.reject(new Error('refused')) }
+    const api = buildRealApi(c as never)
+    await expect(api.pty.generateName('n1', '/repo')).resolves.toEqual({ ok: false, message: 'refused' })
+    await expect(api.pty.generateGroupName(['n1'], '/repo')).resolves.toEqual({ ok: false, message: 'refused' })
+  })
+})
+
 describe('buildRealApi: host platform', () => {
   it('keeps a failed host read unknown instead of inventing Linux from the browser bridge', async () => {
     const c = fakeClient()

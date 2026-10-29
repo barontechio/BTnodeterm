@@ -73,6 +73,7 @@ import {
   type RemoteUsageQuery,
   type SessionMemoryQuery,
   type SessionMemoryReport,
+  type GitResult,
   type Settings,
   type SpeechApi,
   type SpeechModelInfo,
@@ -245,10 +246,10 @@ export class RpcClient {
   }
 }
 
-const AI_NAMING_UNAVAILABLE = {
-  ok: false as const,
-  message: 'AI naming is not available in the server edition yet'
-}
+const namingFailed = (e: unknown): GitResult => ({
+  ok: false,
+  message: e instanceof Error ? e.message : String(e)
+})
 
 /** Build the real `pty` / `workspace` / `projectSettings` / `settings` namespaces (plus the
  *  top-level `userDataDir`) over an RpcClient, mirroring the preload's
@@ -279,9 +280,14 @@ export function buildRealApi(
     destroy: (persistKey, opts) =>
       client.cast(IPC.ptyDestroy, persistKey, opts?.everySocket === true),
     recycle: (persistKey) => client.cast(IPC.ptyRecycle, persistKey),
-    // No server handler — degrade gracefully (never reject the boot path).
-    generateName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
-    generateGroupName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
+    // A dropped socket or a relay refusal answers as a failed naming, never a rejection: the
+    // ✦ callers only read `ok`, and a node's spinner would otherwise never stop.
+    generateName: (persistKey, cwd, accountId) =>
+      (client.request(IPC.ptyGenerateName, persistKey, cwd, accountId) as Promise<GitResult>).catch(
+        namingFailed
+      ),
+    generateGroupName: (memberKeys, cwd) =>
+      (client.request(IPC.ptyGenerateGroupName, memberKeys, cwd) as Promise<GitResult>).catch(namingFailed),
     capture: (persistKey, full) =>
       client.request(IPC.ptyCapture, persistKey, full).catch(() => '') as Promise<string>,
     // Documented degrade, not a stub with a hole in it: SSH PROJECTS are desktop-only (the whole
