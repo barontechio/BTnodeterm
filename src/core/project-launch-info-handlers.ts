@@ -9,6 +9,28 @@ import type { ProjectTrustStore } from './project-trust-store'
 import { projectFamilyTrusted, projectTrustKeyFor } from './project-trust-verdict'
 import type { WorkspaceStore } from './workspace-store'
 
+export async function readProjectLaunchInfo(
+  workspaceStore: Pick<WorkspaceStore, 'readProjectSettings' | 'projectTargetInfo'>,
+  trustStore: ProjectTrustStore,
+  projectId: unknown
+): Promise<ProjectLaunchInfo | null> {
+  if (typeof projectId !== 'string' || !projectId) return null
+  const snap = await workspaceStore.readProjectSettings(projectId)
+  if (!snap) return null
+  const info = workspaceStore.projectTargetInfo(projectId)
+  const sharedDoc: ProjectSettingsDoc = snap.shared ?? {}
+  const resolved = resolveProjectSettings(snap.local, snap.shared ?? undefined)
+  // The verdict itself lives in `project-trust-verdict.ts`, shared with the SPAWN's own reader
+  // (`makeProjectSpawnOverrides`): a renderer told "trusted" here while the spawn silently
+  // drops the same value would be a gate that reports one thing and enforces another.
+  const key = projectTrustKeyFor(info)
+  const trusted = {
+    agents: await projectFamilyTrusted(trustStore, key, 'agents', sharedDoc),
+    shell: await projectFamilyTrusted(trustStore, key, 'shell', sharedDoc)
+  }
+  return { resolved, trusted }
+}
+
 /**
  * `project-settings:launch-info` — the single read a launcher warms before it may consume a
  * shared-sourced value out of `resolveProjectSettings`'s answer (SDD: consumption plan, Task 1).
@@ -32,21 +54,7 @@ export function registerProjectLaunchInfoHandlers(
   platform.handle(
     IPC.projectSettingsLaunchInfo,
     async (projectId: unknown): Promise<ProjectLaunchInfo | null> => {
-      if (typeof projectId !== 'string' || !projectId) return null
-      const snap = await workspaceStore.readProjectSettings(projectId)
-      if (!snap) return null
-      const info = workspaceStore.projectTargetInfo(projectId)
-      const sharedDoc: ProjectSettingsDoc = snap.shared ?? {}
-      const resolved = resolveProjectSettings(snap.local, snap.shared ?? undefined)
-      // The verdict itself lives in `project-trust-verdict.ts`, shared with the SPAWN's own reader
-      // (`makeProjectSpawnOverrides`): a renderer told "trusted" here while the spawn silently
-      // drops the same value would be a gate that reports one thing and enforces another.
-      const key = projectTrustKeyFor(info)
-      const trusted = {
-        agents: await projectFamilyTrusted(trustStore, key, 'agents', sharedDoc),
-        shell: await projectFamilyTrusted(trustStore, key, 'shell', sharedDoc)
-      }
-      return { resolved, trusted }
+      return readProjectLaunchInfo(workspaceStore, trustStore, projectId)
     }
   )
 }

@@ -1,3 +1,4 @@
+import { projectAgentDefault, projectLaunchOverride } from '@shared/project-launch-policy'
 import { wrapGeometryNodes } from '@shared/canvas-geometry'
 import { editorNodeData, EDITOR_NODE_SIZE } from '@shared/editor-node'
 export * from '@shared/canvas-geometry'
@@ -36,7 +37,7 @@ import { claudeCliCapsNow, grokCliCapsNow } from './permissionMode'
 import { ensureGrokTakenIds, grokTakenIdsNow } from './grokSessionIds'
 import { mintFreeGrokSessionId } from '@shared/agents/grok-session-mint'
 import { projectLaunchInfoNow } from './projectLaunchInfo'
-import { isAgentEnabled, launchableDefaultAgent } from './agentAvailability'
+import { launchableDefaultAgent } from './agentAvailability'
 import { codexSharedIdentity } from './codexIdentity'
 import { codexApprovalCaps } from './codexCli'
 import { folderTitle } from '../lib/explorerCreate'
@@ -556,12 +557,6 @@ export function createSshTerminalNode(
   }
 }
 
-/** The user's OWN global launch-command override, with no project layered over it. */
-function globalLaunchOverride(agentId: AgentId): string | undefined {
-  const raw = useSettings.getState().settings.agentLaunchCommands?.[agentId as BuiltinAgentId]
-  const cmd = typeof raw === 'string' ? raw.trim() : ''
-  return cmd || undefined
-}
 
 /**
  * Projects whose SHARED `agents` family we have already asked the human to trust this session.
@@ -630,45 +625,10 @@ function askAgentsTrustOnce(projectId: string): void {
  * byte-identical to the behavior before per-project settings existed.
  */
 export function agentLaunchOverride(agentId: AgentId, projectId?: string): string | undefined {
-  const global = globalLaunchOverride(agentId)
-  if (!projectId) return global
-  const info = projectLaunchInfoNow(projectId)
-  if (!info) return global
-  const entry = info.resolved.agents.launchCmd
-  if (!entry) return global
-  // Scope check BEFORE anything else: an agent this project does not name consumes nothing here,
-  // so it must not even raise a trust prompt about a value it would never use.
-  const target = projectDefaultAgent(projectId, useSettings.getState().settings)
-  if (!target || target !== agentId) return global
-  // `.nodeterm/settings.json` is hand-editable, git-shared, hostile input (see @shared/project-settings):
-  // a non-string that slipped through is simply not a launch command.
-  const cmd = typeof entry.value === 'string' ? entry.value.trim() : ''
-  if (!cmd) return global
-  // LITERAL ONLY — the same rule the project's ENV already obeys (`ProjectSpawnOverrides.env`:
-  // "`${env:VAR}` is NOT expanded here"), and for the same reason. The assembler expands
-  // `${env:…}` in whatever `launchCmdOverride` it is handed (`shared/agents/launch.ts`
-  // `expandedProgram`) — a CUSTOM-AGENT feature, where the value is the local user's own typing and
-  // Settings previews the expansion. Inheriting it for a project document would turn a hand-edited,
-  // git-shared settings.json into a read of THIS machine's environment, laundered past a consent
-  // dialog that rendered the token verbatim. Nor is honoring it literally an option: `${env:X}` is a
-  // bad substitution at bash/zsh, so the typed line would fail anyway. So a project launchCmd
-  // carrying a token is not a launch command — the same verdict, and the same fall-through, as the
-  // non-string case above. Checked BEFORE the trust branch so a value that can never be consumed
-  // never raises a question about itself, exactly like the out-of-scope agent check.
-  //
-  // BOTH halves, local as well as shared — the deliberate overreach `isReservedSpawnEnvKey` explains
-  // for the env list: one auditable rule beats a provenance check at every launch. The cost is that
-  // a local overlay cannot use expansion either; the global Settings → Agents override (which does
-  // expand, and is previewed) is where a wrapper that needs `${env:…}` belongs.
-  if (cmd.includes('${env:')) return global
-  if (entry.source === 'local') return cmd
-  // NOTE (carried from Task 2's review): the trust-changed invalidation this ask relies on is
-  // keyed by projectId while the grant itself is keyed by LOCATION — two projects pointing at the
-  // same folder each keep their own cached verdict, so the sibling stays cold until its own
-  // refresh. Known and deliberate; the cost is one extra prompt, never a wrong grant.
-  if (info.trusted.agents) return cmd
-  askAgentsTrustOnce(projectId)
-  return global
+  const settings = useSettings.getState().settings
+  const decision = projectLaunchOverride(agentId, projectId ? projectLaunchInfoNow(projectId) : undefined, settings)
+  if (decision.requestTrust && projectId) askAgentsTrustOnce(projectId)
+  return decision.command
 }
 
 /**
@@ -700,15 +660,8 @@ export function claudeLaunchCommand(projectId?: string): string {
  * executable content (`projectTrustContent('agents', …)` hashes launchCmd + env, not this), and
  * every id it can select resolves to a command the user already configured themselves.
  */
-function projectDefaultAgent(
-  projectId: string | undefined,
-  settings: Settings
-): AgentId | undefined {
-  const raw = projectId ? projectLaunchInfoNow(projectId)?.resolved.agents.defaultAgentId : undefined
-  const id = typeof raw?.value === 'string' ? raw.value.trim() : ''
-  if (!id) return undefined
-  const known = !!agentConfig(id) || settings.customAgents.some((c) => c.id === id)
-  return known && isAgentEnabled(settings, id) ? id : undefined
+function projectDefaultAgent(projectId: string | undefined, settings: Settings): AgentId | undefined {
+  return projectAgentDefault(projectId ? projectLaunchInfoNow(projectId) : undefined, settings)
 }
 
 /**
