@@ -236,7 +236,7 @@ export interface OpenLaunchFailure {
  */
 export function launchFailedError(
   failures: readonly OpenLaunchFailure[],
-  verb: 'open-terminal' | 'open-agent'
+  verb: 'open-terminal' | 'open-agent' | 'spawn-team' | 'verify'
 ): string {
   const groups = new Map<string, OpenLaunchFailure & { ids: string[] }>()
   for (const f of failures) {
@@ -1626,6 +1626,63 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** Start a durable batch, then patch outcomes against fresh state. Never called before save. */
+  private async startCreated(
+    target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean
+  ) {
+    const failed: string[] = []
+    // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
+    // hides the reason Run now would repeat (`line-too-long`).
+    const reasons: Record<string, HeadlessLaunchFailure> = {}
+    const fail = (id: string, reason: HeadlessLaunchFailure): void => {
+      failed.push(id)
+      reasons[id] = reason
+    }
+    for (const node of created) {
+      try {
+        const command = commands.get(node.id)
+        if (!command) {
+          // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
+          const result = await this.attach(target, node)
+          if (!result.sessionId) fail(node.id, 'spawn-failed')
+          else if (trackAgentStartup && result.fresh) this.awaitingFirstWorking.add(node.id)
+          continue
+        }
+        const launched = await this.launch(target, node, command)
+        if (trackAgentStartup && launched.fresh) this.awaitingFirstWorking.add(node.id)
+        if (launched.outcome === 'delivered') node.pendingLaunch = undefined
+        else fail(node.id, launched.reason)
+      } catch {
+        // The launcher answers its own failures; only the spawn-only `attach` above throws.
+        fail(node.id, 'spawn-failed')
+      }
+    }
+
+    // Creation and delivery are separate transactions. A refused/throwing send retains the
+    // exact command for the user's Run now action; boot still cannot adopt persisted nodes.
+    // The launches took time, so their outcomes are written onto a fresh read, never this copy.
+    const outcomes: NodePatch[] = []
+    for (const node of created) {
+      const command = commands.get(node.id)
+      if (failed.includes(node.id) && node.pendingLaunch) {
+        node.pendingLaunch.manualOnly = true
+        outcomes.push(claimLaunch(target.id, node.id, node.pendingLaunch.command, false))
+      } else if (command && !node.pendingLaunch) {
+        outcomes.push(clearLaunch(target.id, node.id, command))
+      }
+    }
+    await this.savePatches(outcomes)
+    await this.publishPersisted([target.id])
+    const ids = created.map((node) => node.id)
+    const queuedIds = created
+      .filter((node) => node.pendingLaunch && !failed.includes(node.id))
+      .map((node) => node.id)
+    const deliveredIds = created
+      .filter((node) => commands.has(node.id) && !node.pendingLaunch && !failed.includes(node.id))
+      .map((node) => node.id)
+    return { failed, reasons, ids, queuedIds, deliveredIds }
+  }
+
   private open(
     sourceNodeId: string,
     verb: 'open-terminal' | 'open-agent',
@@ -1894,56 +1951,9 @@ export class HeadlessNodeFactory {
         }
       }
 
-      const failed: string[] = []
-      // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
-      // hides the reason Run now would repeat (`line-too-long`).
-      const reasons: Record<string, HeadlessLaunchFailure> = {}
-      const fail = (id: string, reason: HeadlessLaunchFailure): void => {
-        failed.push(id)
-        reasons[id] = reason
-      }
-      for (const node of created) {
-        try {
-          const command = commands.get(node.id)
-          if (!command) {
-            // Nothing to deliver now (a plain terminal, or a launch held for `--after`): spawn only.
-            const result = await this.attach(target, node)
-            if (!result.sessionId) fail(node.id, 'spawn-failed')
-            else if (verb === 'open-agent' && result.fresh) this.awaitingFirstWorking.add(node.id)
-            continue
-          }
-          const launched = await this.launch(target, node, command)
-          if (verb === 'open-agent' && launched.fresh) this.awaitingFirstWorking.add(node.id)
-          if (launched.outcome === 'delivered') node.pendingLaunch = undefined
-          else fail(node.id, launched.reason)
-        } catch {
-          // The launcher answers its own failures; only the spawn-only `attach` above throws.
-          fail(node.id, 'spawn-failed')
-        }
-      }
-
-      // Creation and delivery are separate transactions. A refused/throwing send retains the
-      // exact command for the user's Run now action; boot still cannot adopt persisted nodes.
-      // The launches took time, so their outcomes are written onto a fresh read, never this copy.
-      const outcomes: NodePatch[] = []
-      for (const node of created) {
-        const command = commands.get(node.id)
-        if (failed.includes(node.id) && node.pendingLaunch) {
-          node.pendingLaunch.manualOnly = true
-          outcomes.push(claimLaunch(target.id, node.id, node.pendingLaunch.command, false))
-        } else if (command && !node.pendingLaunch) {
-          outcomes.push(clearLaunch(target.id, node.id, command))
-        }
-      }
-      await this.savePatches(outcomes)
-      await this.publishPersisted([target.id])
-      const ids = created.map((node) => node.id)
-      const queuedIds = created
-        .filter((node) => node.pendingLaunch && !failed.includes(node.id))
-        .map((node) => node.id)
-      const deliveredIds = created
-        .filter((node) => commands.has(node.id) && !node.pendingLaunch && !failed.includes(node.id))
-        .map((node) => node.id)
+      const { failed, reasons, ids, queuedIds, deliveredIds } = await this.startCreated(
+        target, created, commands, verb === 'open-agent'
+      )
       const launchResult = { queued: queuedIds.length > 0, queuedIds, deliveredIds, failed }
       if (failed.length) {
         return {
