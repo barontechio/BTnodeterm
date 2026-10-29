@@ -15,13 +15,13 @@ import { useBoardCommentDelivery } from '../state/boardCommentDelivery'
  * The delivery itself goes through Canvas, which registers the deliverer below: it holds the target
  * node's restart lock (a comment must not land inside a wake's un-submitted resume line) and
  * publishes pending canvas edits first (main authorizes against its persisted store) — the same two
- * steps the agent `send` path takes — then calls the desktop's main-window-only IPC channel.
+ * steps the agent `send` path takes — then calls the host-owner-only IPC channel.
  */
 
-/** Only the desktop app's own window delivers. A relay tab onto another machine and a Server Edition
- *  browser tab are display-only: the comment is posted, its mentions render, nothing is typed. */
-export function canDeliverBoardComments(source: SessionSource, browserRuntime: boolean): boolean {
-  return source === 'local' && !browserRuntime
+/** The current host's owner UI may request delivery; relay/other-host tabs stay display-only.
+ *  The host checks authenticated ownership and every messaging gate when this request arrives. */
+export function canDeliverBoardComments(source: SessionSource, _browserRuntime: boolean): boolean {
+  return source === 'local'
 }
 
 export type BoardCommentDeliverer = (req: BoardCommentDeliverRequest) => Promise<AgentMessageReply>

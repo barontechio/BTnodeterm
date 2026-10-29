@@ -44,6 +44,11 @@ are bounded; account and exact cwd filters use a separate additive RPC channel, 
 refuses a scoped request instead of ignoring its scope. Removed, pending and remote accounts do not
 contribute results. Search and naming are owner APIs; relay peers cannot use the global search.
 
+With canvas control enabled, a comment the owner posts in this host's board can deliver its mentions
+to agent sessions. Delivery uses the existing messaging capability grant, runtime pane ownership,
+queue, receipts and deduplication. Relay comments and comments loaded from history remain display-only.
+An interrupted RPC shows an uncertain delivery outcome; check the session before sending again.
+
 ## Quickstart
 
 ```bash

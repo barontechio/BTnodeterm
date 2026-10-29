@@ -24,6 +24,7 @@ import { initPlatform, resetPlatformForTests } from '../core/platform'
 import type { PtyManager } from '../core/pty-manager'
 import type { WorkspaceStore } from '../core/workspace-store'
 import { IPC } from '../shared/ipc'
+import { mentionToken } from '../shared/board-comment'
 import { DEFAULT_SETTINGS, type Project, type Settings, type Workspace } from '../shared/types'
 import { initServerCanvasControl, type ServerCanvasControl } from './canvas-control'
 
@@ -232,6 +233,12 @@ describe('initServerCanvasControl', () => {
       error: expect.stringContaining('notPermitted (switch-off)')
     })
     expect(paneOwner).not.toHaveBeenCalled()
+    expect(sendEnvelope).not.toHaveBeenCalled()
+    expect(await runtime.deliverBoardComment({ projectId: 'p1', commentId: 'comment-1', author: 'User',
+      text: `${mentionToken(openedId, 'Agent')} please check`, targetNodeId: openedId
+    })).toMatchObject({ ok: false, result: { kind: 'notPermitted', reason: 'switch-off' } })
+    runtime.stop()
+    expect(await runtime.deliverBoardComment({})).toMatchObject({ ok: false, result: { reason: 'control-disabled' } })
     expect(sendEnvelope).not.toHaveBeenCalled()
   })
 

@@ -152,6 +152,6 @@ describe('canDeliverBoardComments', () => {
     expect(canDeliverBoardComments('local', false)).toBe(true)
     expect(canDeliverBoardComments('relay', false)).toBe(false)
     expect(canDeliverBoardComments('server', false)).toBe(false)
-    expect(canDeliverBoardComments('local', true)).toBe(false)
+    expect(canDeliverBoardComments('local', true)).toBe(true)
   })
 })

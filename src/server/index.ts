@@ -56,6 +56,7 @@ import { serverEditionControlHandler } from './control-unsupported'
 import { registerControlCapabilities } from '../core/control-capabilities'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
 import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
+import { registerBoardCommentDeliveryIpc } from '../core/agents/board-comment-ipc'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
 import { registerStationHandoverIpc } from '../core/station-handover'
@@ -560,6 +561,13 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  registerBoardCommentDeliveryIpc(platform, {
+    eligibleOwner: (senderId) => platform.isOwnerClient?.(senderId) === true,
+    deliver: (raw) => canvasControl ? canvasControl.deliverBoardComment(raw) : Promise.resolve({
+      ok: false, error: 'Board comment delivery requires enabled Server canvas control.',
+      result: { kind: 'notPermitted', reason: 'control-disabled' }
+    })
+  })
   registerControlCapabilities('server', () => canvasControl !== null)
   // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
   // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a

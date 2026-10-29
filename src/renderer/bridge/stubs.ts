@@ -690,9 +690,8 @@ export function buildStubApi(): Omit<
         ok: false as const,
         error: 'Agent messaging is only available in the desktop app. Do not retry.'
       }),
-      // A board comment typed here — in a browser tab, or in a relay tab onto another machine — is
-      // display-only on purpose: it never types into a pane. The typed outcome lets the comment row
-      // say so instead of showing nothing.
+      // Safe default for relay/unsupported hosts. The Server owner bridge overrides this method
+      // with the authenticated host entrance; a relay tab retains this named refusal.
       deliverBoardComment: async () => ({
         ok: false as const,
         error: 'Board comments reach agents only in the desktop app.',

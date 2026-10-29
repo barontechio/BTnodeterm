@@ -194,6 +194,7 @@ export interface BoardCommentOutcomeView {
 // cannot be imported here). A core test walks `RETRYABLE` against this table, so a new outcome kind
 // cannot reach a comment row as silence.
 const OUTCOME_TEXT: Record<string, BoardCommentOutcomeView> = {
+  deliveryUnknown: { tone: 'warn', text: 'delivery could not be confirmed — inspect the session before sending again' },
   delivered: { tone: 'ok', text: 'delivered' },
   // Held for the session's turn to end, or for the ten-second window after the last comment to it.
   queued: { tone: 'pending', text: 'queued — delivered as soon as the session can take it' },
@@ -246,6 +247,8 @@ const OUTCOME_TEXT: Record<string, BoardCommentOutcomeView> = {
 }
 
 const NOT_PERMITTED_TEXT: Record<string, string> = {
+  'owner-required': 'not delivered — only the host owner may send a comment to a session',
+  'control-disabled': 'not delivered — enable Server canvas control to deliver comments',
   'switch-off':
     'not delivered — agent messaging is off for this project (Settings → Agents)',
   'cross-project': 'not delivered — that session is not on this board',

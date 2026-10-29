@@ -362,6 +362,7 @@ import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { createControlForwarder, type ControlForwardReply } from './control-forward'
 import { claimOpenedBrowser } from './browser-open-claim'
 import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
+import { registerBoardCommentDeliveryIpc } from '../core/agents/board-comment-ipc'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
 import {
@@ -2277,15 +2278,14 @@ app.whenReady().then(async () => {
     const { reply } = await deliverFromControl(raw, messagingDeps)
     return reply
   })
-  // A board comment that @mentions a session (the comment composer's send). Raw ipcMain on purpose —
-  // invisible to relay peers (platform-electron.ts, invariant 4c) — and guarded to the live main
-  // window, because a <webview> guest is a webContents in this process too and this handler types
-  // into a pane. Everything else (the mention↔target check, scope, ownership, switch, flow, the
+  // A board comment that @mentions a session (the comment composer's send), refused to relay peers
+  // by the host-only channel policy and guarded to the live main
+  // window through the shared owner-only registrar, because a <webview> guest is a webContents
+  // in this process too and this handler types into a pane. Everything else (the mention↔target check, scope, ownership, switch, flow, the
   // envelope, the queue) is `deliverBoardCommentFromUi`, over the SAME deps the agent verbs use.
-  ipcMain.handle(IPC.agentBoardCommentDeliver, async (event, raw: unknown) => {
-    if (getMainWindow()?.webContents.id !== event.sender.id)
-      return { ok: false, error: 'board comments are delivered only from the main window.' }
-    return deliverBoardCommentFromUi(raw, messagingDeps)
+  registerBoardCommentDeliveryIpc(corePlatform, {
+    eligibleOwner: (senderId) => getMainWindow()?.webContents.id === senderId,
+    deliver: (raw) => deliverBoardCommentFromUi(raw, messagingDeps)
   })
 
   // Station-failure notices (src/core/agents/station-notice.ts): when a station an agent opened

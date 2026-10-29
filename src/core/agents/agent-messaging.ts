@@ -139,6 +139,9 @@ export function ptyPaneProbeDeps(pty: {
 }
 
 export interface AgentMessagingDeps {
+  /** This shell wired board-comment delivery exclusively through an authenticated owner entrance.
+   * A person's request uses pane ownership and project consent, independently of agent creator scope. */
+  ownerBoardComments?: boolean
   paneOwner(nodeId: string): Promise<PaneOwner | null>
   /** Per-target pane-read budget; see `DeliveryDeps.paneProbeTimeoutMs`. Optional — absent keeps
    *  the 2s default for every target, i.e. exactly the pre-existing behaviour. */
@@ -729,12 +732,11 @@ export async function runDelivery(
     : resolveDeliveryScope(projects, ident.sourceNodeId, req.targetNodeId)
   let notPermitted = scopeRefusal(scope)
   const projectId = scope.kind === 'same-project' ? scope.projectId : undefined
-  // A shell with a creator ledger (the Server Edition) authorizes control by which AGENT spawned
-  // the target. A person's board comment is no agent's, and that shell serves no board-comment
-  // delivery at all — refused by edition rather than squeezed through a ledger it was not built for.
+  // Agent creator proof cannot stand for a person. Only an explicitly wired owner entrance can
+  // deliver a person's comment on a shell that otherwise enforces the agent creator ledger.
   // A station notice asks the ledger the other way round (see `stationNotice` above).
   if (!notPermitted && deps.callerOwnsTarget) {
-    if (board) notPermitted = 'unsupported-edition'
+    if (board) { if (!deps.ownerBoardComments) notPermitted = 'unsupported-edition' }
     else if (
       !(stationNotice
         ? deps.callerOwnsTarget(req.targetNodeId, ident.sourceNodeId)
@@ -985,8 +987,8 @@ async function deliverWithQueue(
 /**
  * Deliver ONE mentioned session's copy of a board comment the local user just posted.
  *
- * The ONE caller is the comment composer's send handler (via the desktop's main-window-only IPC
- * channel). There is deliberately no path from anything that READS the board log to here: a comment
+ * The ONE caller is the comment composer's send handler through the host-owner-only IPC channel.
+ * There is deliberately no path from anything that READS the board log to here: a comment
  * that arrives by git pull, by another instance writing the file, from a relay peer or a
  * team-presence guest is display-only. Its tokens render as names and never type into a pane.
  *

@@ -5,6 +5,7 @@ import {
   buildClaudeAccountsApi,
   buildControlApi,
   buildTranscriptSearchApi,
+  buildBoardCommentDeliveryApi,
   buildFilesApi,
   buildRealApi,
   buildSessionMemoryApi,
@@ -13,6 +14,7 @@ import {
 import { buildStubApi } from './stubs'
 import { E_UNSUPPORTED } from '../../shared/rpc'
 import { IPC } from '../../shared/ipc'
+import { boardCommentOutcomeText } from '../../shared/board-comment'
 
 function fakeClient() {
   const calls: Array<{ kind: string; method: string; args: unknown[] }> = []
@@ -42,6 +44,20 @@ describe('transcript search protocol', () => {
     ])
     const old = { request: () => Promise.reject(new Error('no scoped handler')) }
     await expect(buildTranscriptSearchApi(old as never).transcripts.search('needle', { accountId: 'a' })).rejects.toThrow('no scoped handler')
+  })
+})
+
+describe('Server board comment delivery', () => {
+  it('requests delivery and surfaces an uncertain connection outcome without retrying', async () => {
+    const c = fakeClient()
+    const api = buildBoardCommentDeliveryApi(c as never, buildStubApi().agentMessage)
+    const request = { projectId: 'p', commentId: 'c', author: 'Owner', text: 'hello', targetNodeId: 'a' }
+    await api.agentMessage.deliverBoardComment(request)
+    expect(c.calls).toEqual([{ kind: 'request', method: IPC.agentBoardCommentDeliver, args: [request] }])
+    const lost = { request: () => Promise.reject(new Error('socket closed')) }
+    const reply = await buildBoardCommentDeliveryApi(lost as never, buildStubApi().agentMessage).agentMessage.deliverBoardComment(request)
+    expect(reply).toMatchObject({ ok: false, result: { kind: 'deliveryUnknown' } })
+    expect(boardCommentOutcomeText('deliveryUnknown')).toMatchObject({ tone: 'warn', text: expect.stringContaining('inspect the session') })
   })
 })
 

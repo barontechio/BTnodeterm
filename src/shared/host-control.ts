@@ -100,9 +100,8 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.appUpdatePrepShutdown,
   IPC.appUpdatePrepQuit,
   // A board comment that @mentions a session types into that session's pane. Only the host's own
-  // user may do that: a relay peer's comment is display-only. Registered with a raw ipcMain handler
-  // (so no peer can reach it at all); listed here too, so moving it onto the platform table later
-  // cannot quietly open it.
+  // user may do that: a relay peer's comment is display-only. The registrar checks the owner
+  // and shell-specific live-window eligibility; relay dispatch refuses this channel too.
   IPC.agentBoardCommentDeliver,
   // Global transcript search spans account roots; only the authenticated machine owner may read it.
   IPC.transcriptSearch,

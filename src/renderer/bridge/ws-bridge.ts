@@ -269,6 +269,14 @@ export function buildTranscriptSearchApi(client: RpcClient): Pick<NodeTerminalAp
       ReturnType<NodeTerminalApi['transcripts']['search']> } }
 }
 
+export function buildBoardCommentDeliveryApi(client: RpcClient, fallback: NodeTerminalApi['agentMessage']): Pick<NodeTerminalApi, 'agentMessage'> {
+  return { agentMessage: { ...fallback, deliverBoardComment: (request) =>
+    client.request(IPC.agentBoardCommentDeliver, request).catch((error: unknown) => ({
+      ok: false, error: `Board comment delivery could not be confirmed: ${error instanceof Error ? error.message : String(error)}. Inspect the session before sending again.`,
+      result: { kind: 'deliveryUnknown', reason: 'transport' }
+    })) as ReturnType<NodeTerminalApi['agentMessage']['deliverBoardComment']> } }
+}
+
 export function buildRealApi(
   client: RpcClient
 ): Pick<
@@ -1486,6 +1494,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...stubApi,
     ...buildControlApi(client),
     ...buildTranscriptSearchApi(client),
+    ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),

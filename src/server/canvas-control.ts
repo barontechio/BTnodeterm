@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   createDeliveryQueue,
   deliverFromControl,
+  deliverBoardCommentFromUi,
   deliverStationNotice,
   messagingEnabledVia,
   onMessagingAgentEvent,
@@ -49,6 +50,7 @@ import {
 } from './control-unsupported'
 import { HeadlessNodeFactory } from './headless-node-factory'
 import { sendSettledEnvelope } from './settled-envelope'
+import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
 import {
   answerGitHubRead,
@@ -86,6 +88,7 @@ export interface ServerCanvasControlDeps {
 }
 
 export interface ServerCanvasControl {
+  deliverBoardComment(raw: unknown): Promise<AgentMessageReply>
   handler: ReturnType<typeof createServerEditionControlHandler>
   onAgentEvent(event: NormalizedAgentEvent): void
   /** Station-failure notices for the stations agents opened during THIS server run. */
@@ -231,7 +234,8 @@ export async function initServerCanvasControl(
     hasLiveSession: (nodeId) => deps.ptyManager.sessionExists(nodeId),
     mirrorEntry,
     projects: () => deps.workspaceStore.persistedCanvases(),
-    isRemoteNode: () => false,
+    isRemoteNode: (id) => !!deps.ptyManager.sshRemoteForNode?.(id) || !!deps.workspaceStore.sshProjectIdForNode?.(id),
+    ownerBoardComments: true,
     messagingEnabled: messagingEnabledVia(
       (projectId) => deps.workspaceStore.capabilityProjectFor(projectId),
       // The SAME machine default the desktop reads — this shell's own settings.json.
@@ -369,6 +373,7 @@ export async function initServerCanvasControl(
   await factory.start()
 
   const baseHandler = createServerEditionControlHandler(actions)
+  let stopped = false
   return {
     // New work typed into a station by `run` withdraws its older outcome report — the "new task"
     // rule in core/station-outcome-store.ts, applied on the answer. (`send` / `reply` go through
@@ -394,7 +399,11 @@ export async function initServerCanvasControl(
     stationNotices,
     stationOutcomes,
     stationHandovers,
+    deliverBoardComment: (raw) => stopped ? Promise.resolve({ ok: false,
+      error: 'Board comment delivery is stopped.', result: { kind: 'notPermitted', reason: 'control-disabled' }
+    }) : deliverBoardCommentFromUi(raw, messaging),
     stop: () => {
+      stopped = true
       factory.stop()
       queue.resetForTests()
       stationNotices.stop()
