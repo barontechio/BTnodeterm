@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
   buildControlApi,
+  buildTranscriptSearchApi,
   buildFilesApi,
   buildRealApi,
   buildSessionMemoryApi,
@@ -28,6 +29,21 @@ function fakeClient() {
     }
   }
 }
+
+describe('transcript search protocol', () => {
+  it('uses an additive channel so an old host cannot silently ignore account scope', async () => {
+    const c = fakeClient()
+    const api = buildTranscriptSearchApi(c as never)
+    await api.transcripts.search('needle')
+    await api.transcripts.search('needle', { accountId: 'a', limit: 10 })
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.transcriptSearch, args: ['needle'] },
+      { kind: 'request', method: IPC.transcriptSearchScoped, args: ['needle', { accountId: 'a', limit: 10 }] }
+    ])
+    const old = { request: () => Promise.reject(new Error('no scoped handler')) }
+    await expect(buildTranscriptSearchApi(old as never).transcripts.search('needle', { accountId: 'a' })).rejects.toThrow('no scoped handler')
+  })
+})
 
 describe('buildControlApi', () => {
   it('reads the host report and reports unknown on an older or unreachable host', async () => {

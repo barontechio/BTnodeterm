@@ -3882,9 +3882,16 @@ export interface TranscriptHit {
   accountId?: string
 }
 
+export interface TranscriptSearchScope {
+  /** null = system account; absent = all configured local accounts. */
+  accountId?: string | null
+  cwd?: string
+  limit?: number
+}
+
 export interface TranscriptsApi {
   /** Search all on-disk Claude session transcripts by content. */
-  search(query: string): Promise<TranscriptHit[]>
+  search(query: string, scope?: TranscriptSearchScope): Promise<TranscriptHit[]>
 }
 
 /** What the Claude CLI on THIS machine can do. Fed by the `claude --version` probe in

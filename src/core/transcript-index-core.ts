@@ -118,11 +118,12 @@ export interface RefreshPlan {
 // Decide what an incremental refresh must do: re-read scan files that are new or whose mtime
 // increased, keep prior entries whose file is unchanged and still present, drop the rest.
 export function planRefresh(prior: TranscriptIndexEntry[], scan: ScanFile[]): RefreshPlan {
-  const priorById = new Map(prior.map((e) => [e.sessionId, e]))
+  // A session id can exist in two account roots. Its path binds the indexed text to its account.
+  const priorByPath = new Map(prior.map((e) => [e.transcriptPath, e]))
   const toRead: ScanFile[] = []
   const keep: TranscriptIndexEntry[] = []
   for (const f of scan) {
-    const p = priorById.get(f.sessionId)
+    const p = priorByPath.get(f.transcriptPath)
     if (p && p.mtime === f.mtime) keep.push(p)
     else toRead.push(f)
   }

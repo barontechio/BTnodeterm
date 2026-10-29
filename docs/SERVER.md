@@ -38,6 +38,12 @@ creates a persistent editor preview for an existing local image. Relative paths 
 source session's absolute cwd (or its project cwd); remote sources are refused until their filesystem
 adapter is available. Image bytes use the existing authenticated file-preview API.
 
+Conversation search uses the shared local Claude index, including configured local managed/linked
+accounts. The Server starts its index on the owner's first search and stops it on shutdown. Results
+are bounded; account and exact cwd filters use a separate additive RPC channel, so an older host
+refuses a scoped request instead of ignoring its scope. Removed, pending and remote accounts do not
+contribute results. Search and naming are owner APIs; relay peers cannot use the global search.
+
 ## Quickstart
 
 ```bash

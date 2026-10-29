@@ -6,7 +6,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { platform } from './platform'
-import type { ClaudeAccount } from '../shared/types'
+import type { ClaudeAccount, TranscriptSearchScope } from '../shared/types'
 import { accountConfigDir, normalizeLinkedConfigDir } from './claude-accounts-core'
 import { SESSION_ID_RE } from './transcript-reader'
 import { sweepStaleTempFiles, writeFileAtomic } from './fs-atomic'
@@ -29,6 +29,9 @@ let entries: TranscriptIndexEntry[] = []
 let dirty = false
 let timer: NodeJS.Timeout | undefined
 let accountsGetter: (() => ClaudeAccount[]) | undefined
+let generation = 0
+let closed = false
+const refreshTasks = new Set<Promise<void>>()
 
 function indexFilePath(): string {
   return path.join(platform().userDataDir, 'transcript-index.json')
@@ -62,9 +65,10 @@ function accountRoots(): Array<{ root: string; accountId?: string }> {
 
 // Walk each root's <projectDir>/<sessionId>.jsonl, returning {sessionId, path, mtime}. Fail-open
 // per root (a missing/unreadable account dir just contributes nothing).
-async function scanTranscripts(): Promise<ScanFile[]> {
+async function scanTranscripts(epoch: number): Promise<ScanFile[]> {
   const out: ScanFile[] = []
   for (const root of projectsRoots()) {
+    if (closed || generation !== epoch) return []
     let dirs: string[]
     try {
       dirs = await fs.promises.readdir(root)
@@ -72,6 +76,7 @@ async function scanTranscripts(): Promise<ScanFile[]> {
       continue
     }
     for (const d of dirs) {
+      if (closed || generation !== epoch) return []
       let files: string[]
       try {
         files = await fs.promises.readdir(path.join(root, d))
@@ -79,6 +84,7 @@ async function scanTranscripts(): Promise<ScanFile[]> {
         continue
       }
       for (const f of files) {
+        if (closed || generation !== epoch) return []
         if (!f.endsWith('.jsonl')) continue
         const sessionId = f.slice(0, -'.jsonl'.length)
         if (!SESSION_ID_RE.test(sessionId)) continue
@@ -124,7 +130,9 @@ export function loadPersistedIndex(file: string): TranscriptIndexEntry[] {
   try {
     const raw = fs.readFileSync(file, 'utf8')
     const data = JSON.parse(raw)
-    return Array.isArray(data) ? (data as TranscriptIndexEntry[]) : []
+    return Array.isArray(data) ? data.filter((entry) => entry && typeof entry === 'object' &&
+      ['sessionId', 'transcriptPath', 'cwd', 'title', 'text'].every((key) => typeof entry[key] === 'string') &&
+      Number.isFinite(entry.mtime)) : []
   } catch {
     return []
   }
@@ -154,22 +162,31 @@ export async function persistIndex(
 // One refresh at a time. A cold scan of a large tree can outlast the interval, and two overlapping
 // runs would race their persists (and the `dirty` flag) as well as reading every file twice.
 let refreshing: Promise<void> | undefined
+let refreshingGeneration = -1
 /** Rescan and persist if owed — what launch and the 5-minute timer run. A call while a refresh is
  *  in flight joins it rather than starting a second scan. */
 export function refreshTranscriptIndex(): Promise<void> {
-  refreshing ??= refreshOnce().finally(() => {
-    refreshing = undefined
+  if (closed) return Promise.resolve()
+  if (refreshing && refreshingGeneration === generation) return refreshing
+  refreshingGeneration = generation
+  const task = refreshOnce(generation).finally(() => {
+    refreshTasks.delete(task)
+    if (refreshing === task) refreshing = undefined
   })
-  return refreshing
+  refreshing = task
+  refreshTasks.add(task)
+  return task
 }
 
-async function refreshOnce(): Promise<void> {
-  const scan = await scanTranscripts()
+async function refreshOnce(epoch: number): Promise<void> {
+  const scan = await scanTranscripts(epoch)
+  if (closed || generation !== epoch) return
   const { toRead, keep } = planRefresh(entries, scan)
   // Only persist when the index actually changed (new/updated entries or dropped ones).
   const changed = toRead.length > 0 || keep.length !== entries.length
   const fresh: TranscriptIndexEntry[] = [...keep]
   for (const f of toRead) {
+    if (closed || generation !== epoch) return
     const text = await readTail(f.transcriptPath)
     const { cwd, title, text: body } = extractEntryFields(text)
     fresh.push({
@@ -181,19 +198,39 @@ async function refreshOnce(): Promise<void> {
       text: body
     })
   }
+  if (closed || generation !== epoch) return
   entries = fresh
   if (changed) dirty = true
-  if (dirty) dirty = !(await persistIndex(indexFilePath(), entries))
+  if (dirty) {
+    const saved = await persistIndex(indexFilePath(), entries)
+    if (!closed && generation === epoch) dirty = !saved
+  }
 }
 
-export function searchTranscripts(query: string): TranscriptHit[] {
-  const roots = accountRoots()
-  return searchEntries(entries, query, undefined, (p) =>
-    roots.find((r) => p.startsWith(r.root + path.sep))?.accountId
-  )
+export function searchTranscripts(query: string, scope: TranscriptSearchScope = {}): TranscriptHit[] {
+  const roots = accountRoots().sort((a, b) => b.root.length - a.root.length)
+  const rootFor = (file: string) => {
+    const matches = roots.filter((r) => {
+      const relative = path.relative(r.root, file)
+      return relative && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)
+    })
+    const first = matches[0]
+    if (!first || matches.some((r) => path.resolve(r.root) === path.resolve(first.root) && r.accountId !== first.accountId)) return undefined
+    return first
+  }
+  const eligible = entries.filter((entry) => {
+    const root = rootFor(entry.transcriptPath)
+    return root && (scope.accountId === undefined || (root.accountId ?? null) === scope.accountId) &&
+      (scope.cwd === undefined || entry.cwd === scope.cwd)
+  })
+  return searchEntries(eligible, query, scope.limit, (p) => rootFor(p)?.accountId)
 }
 
 export function initTranscriptIndex(getAccounts?: () => ClaudeAccount[]): void {
+  if (timer) clearInterval(timer)
+  generation++
+  closed = false
+  dirty = false
   accountsGetter = getAccounts
   entries = loadPersistedIndex(indexFilePath())
   // Collect the legacy ownerless `<file>.tmp` shape once it is a day old. A pid-bearing temp left by
@@ -203,4 +240,17 @@ export function initTranscriptIndex(getAccounts?: () => ClaudeAccount[]): void {
   void refreshTranscriptIndex()
   timer = setInterval(() => void refreshTranscriptIndex(), TRANSCRIPT_INDEX_REFRESH_MS)
   if (timer.unref) timer.unref()
+}
+
+/** Retire the scanner before shell shutdown; old refreshes cannot repopulate a new lifetime. */
+export async function stopTranscriptIndex(): Promise<void> {
+  closed = true
+  const epoch = ++generation
+  if (timer) clearInterval(timer)
+  timer = undefined
+  await Promise.allSettled([...refreshTasks])
+  if (generation === epoch) {
+    entries = []
+    accountsGetter = undefined
+  }
 }

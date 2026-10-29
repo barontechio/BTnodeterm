@@ -263,6 +263,12 @@ export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'contr
   }
 }
 
+export function buildTranscriptSearchApi(client: RpcClient): Pick<NodeTerminalApi, 'transcripts'> {
+  return { transcripts: { search: (query, scope) => (scope === undefined ?
+    client.request(IPC.transcriptSearch, query) : client.request(IPC.transcriptSearchScoped, query, scope)) as
+      ReturnType<NodeTerminalApi['transcripts']['search']> } }
+}
+
 export function buildRealApi(
   client: RpcClient
 ): Pick<
@@ -1479,6 +1485,7 @@ export async function installWsBridge(): Promise<boolean> {
   const api: NodeTerminalApi = {
     ...stubApi,
     ...buildControlApi(client),
+    ...buildTranscriptSearchApi(client),
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),

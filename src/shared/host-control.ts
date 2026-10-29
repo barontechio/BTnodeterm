@@ -104,6 +104,9 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   // (so no peer can reach it at all); listed here too, so moving it onto the platform table later
   // cannot quietly open it.
   IPC.agentBoardCommentDeliver,
+  // Global transcript search spans account roots; only the authenticated machine owner may read it.
+  IPC.transcriptSearch,
+  IPC.transcriptSearchScoped,
   IPC.stationNoticeDropped,
   // The host's own dispatcher state; a relay tab's board belongs to the host and its dispatch is
   // refused, so a peer has nothing true to report.

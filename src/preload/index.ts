@@ -751,7 +751,8 @@ const api: NodeTerminalApi = {
       )
   },
   transcripts: {
-    search: (query: string) => ipcRenderer.invoke(IPC.transcriptSearch, query)
+    search: (query, scope) => scope === undefined ? ipcRenderer.invoke(IPC.transcriptSearch, query) :
+      ipcRenderer.invoke(IPC.transcriptSearchScoped, query, scope)
   },
   remoteHost: {
     start: () => ipcRenderer.invoke(IPC.remoteHostStart),

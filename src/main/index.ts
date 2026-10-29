@@ -361,7 +361,7 @@ import { geometryArgsRefusal } from '../shared/geometry-verbs'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { createControlForwarder, type ControlForwardReply } from './control-forward'
 import { claimOpenedBrowser } from './browser-open-claim'
-import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
+import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
 import {
@@ -3335,8 +3335,8 @@ app.whenReady().then(async () => {
   // "Open recent": this machine's agent histories (both shells register it — core/recent-conversations.ts).
   registerRecentConversationsIpc()
 
-  initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
-  corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
+  const stopTranscriptSearch = registerTranscriptSearchIpc(corePlatform, () => settingsStore.get().claudeAccounts ?? [])
+  app.once('will-quit', () => { void stopTranscriptSearch() })
   // Populate the context meter without a live hook event: the renderer calls this on mount (the
   // continuing session may be idle after a restart). The routing — which agent's locator, which
   // agent's tail, local or remote — lives in core so the Server Edition serves it too; this shell

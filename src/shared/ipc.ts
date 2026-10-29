@@ -123,6 +123,7 @@ export const IPC = {
   agentGatewayCredentialSave: 'agent:gateway-credential-save',
   agentGatewayCredentialClear: 'agent:gateway-credential-clear',
   transcriptSearch: 'transcript:search',
+  transcriptSearchScoped: 'transcript:search-scoped',
   appToggleMarkdown: 'app:toggle-markdown',
   appCloseNode: 'app:close-node',
   /** main → renderer: ⌘/Ctrl+0 ("actual size"). Intercepted in `before-input-event` because

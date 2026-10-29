@@ -55,6 +55,7 @@ import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { serverEditionControlHandler } from './control-unsupported'
 import { registerControlCapabilities } from '../core/control-capabilities'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
+import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
 import { registerStationHandoverIpc } from '../core/station-handover'
@@ -443,6 +444,7 @@ export async function startServer(
     run: runGitHubCliCommand
   })
   registerServerGitHubControl(platform, github.controller)
+  const stopTranscriptSearch = registerTranscriptSearchIpc(platform, () => settingsStore.get().claudeAccounts ?? [], { lazy: true })
   // A browser tab's board dispatch reports its queue here, for the `issues` control verb (display only).
   const boardDispatchReports = registerBoardDispatchReportIpc(platform)
 
@@ -1226,6 +1228,7 @@ export async function startServer(
         pressure.stop()
         ptyPressure.stop()
         canvasControl?.stop()
+        await stopTranscriptSearch()
         workspaceWatcher.dispose()
         await contextLink.stop()
         // Every save already queued lands while the authority still governs (see the serving close).
@@ -1301,6 +1304,7 @@ export async function startServer(
       pressure.stop()
       ptyPressure.stop()
       canvasControl?.stop()
+      await stopTranscriptSearch()
       workspaceWatcher.dispose()
       await contextLink.stop()
       // Every save already queued lands while the authority still governs, then it writes what it owes.

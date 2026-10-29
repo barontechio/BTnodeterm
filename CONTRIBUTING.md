@@ -60,6 +60,10 @@ projections between Desktop and Server. Host commands authorize every affected n
 serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
 lazy defaults; assignment changes never launch or type into a session.
 
+Global transcript search is owner-only and local to the host's configured Claude account roots.
+Index refresh identity is the transcript path, since session ids can repeat across accounts.
+Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.
+
 **Put new service logic in `src/core` behind `CorePlatform`, not inline in `src/main`.** That is the
 seam the Server Edition boots from; logic left in `src/main` silently does not exist there, and the
 boundary tests cannot tell you a feature is *missing*. This keeps happening to the same subsystem:

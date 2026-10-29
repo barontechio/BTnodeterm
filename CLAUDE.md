@@ -10,6 +10,12 @@ frame/descendant before applying geometry. Preserve stored metadata and expanded
 Server `board` sees only its source project and scope-visible cards; `assign` can move the caller's
 own card or its permitted cards, and never starts work or touches a PTY. Reads keep defaults lazy.
 
+Global Claude transcript search uses `core/transcript-search-ipc.ts` in both shells and is
+owner-only. Server starts scanning lazily and awaits scanner shutdown. An index entry is bound to
+its path, not just its session id; account roots can contain equal ids and mtimes. Filter search
+against currently configured local roots before resolving account identity. Scoped queries use
+`transcript:search-scoped`, with no fallback to the legacy global channel on older hosts.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
