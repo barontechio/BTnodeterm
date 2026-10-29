@@ -280,6 +280,16 @@ export function buildWebPreviewApi(client: RpcClient): Pick<NodeTerminalApi, 'we
   } }
 }
 
+export function buildOwnerConfirmationApi(client: RpcClient): Pick<NodeTerminalApi, 'ownerConfirmation'> {
+  return { ownerConfirmation: {
+    connect: () => client.request(IPC.ownerConfirmationConnect) as Promise<string>,
+    disconnect: (epoch) => client.request(IPC.ownerConfirmationDisconnect, epoch) as Promise<void>,
+    decide: (answer) => client.request(IPC.ownerConfirmationDecide, answer) as Promise<boolean>,
+    onRequest: (listener) => client.subscribe(IPC.ownerConfirmationRequest, listener as Listener),
+    onDismiss: (listener) => client.subscribe(IPC.ownerConfirmationDismiss, listener as Listener)
+  } }
+}
+
 export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'control'> {
   return {
     control: {
@@ -1532,6 +1542,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildControlApi(client),
     ...buildMediaApi(client),
     ...buildWebPreviewApi(client),
+    ...buildOwnerConfirmationApi(client),
     ...buildTranscriptSearchApi(client),
     ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),

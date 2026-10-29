@@ -234,6 +234,15 @@ script from navigating its own frame. Both the response sandbox and iframe omit 
 References require owner issuance and a current saved local web node. Bound files, snapshots,
 pending reads/writes and reference lifetimes; preserve referenced generated files across restart.
 
+Host confirmation uses `core/owner-confirmation.ts` with the optional owner UI API. Capture exact
+normalized arguments, target/session identity and policy in the intent binding. Await the person
+outside workspace locks and command queues, then consume the one-use permit immediately before
+the effect; its mandatory `checkCurrent` callback revalidates that binding. Never await consumption
+inside a synchronous WorkspaceStore edit. A failed proof read, expired permit or disconnected owner
+is a refusal. Decisions belong to the exact connection epoch; peers never receive or approve them.
+The UI reuses ConfirmDialog with explicit-click approval and no automatic focus. Existing waiver
+rules remain in `shared/control-confirm.ts`; the broker does not grant standing consent.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

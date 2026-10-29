@@ -107,6 +107,16 @@ are immutable and bounded in memory. Generated HTML uses owner-only content-addr
 referenced files survive restart, and unused staging files age out on the next write. Existing
 browser HTML modals that do not have a saved web-node scope remain unsupported by this API.
 
+### Owner confirmation service
+
+Desktop and Server now share the host-side confirmation broker and the owner dialog adapter.
+An action must capture its exact normalized arguments, target/session and policy before asking.
+Approval produces a single-use permit and rechecks that state immediately before execution.
+An absent owner UI, expired request, lost connection or failed proof read cannot approve an action.
+Two owner tabs can answer only once; relay peers cannot subscribe or approve. Requests never take
+keyboard focus or accept an incidental Enter. This broker is infrastructure: `write`, settings
+changes and worktree removal remain unavailable until their command adapters are connected.
+
 ## Quickstart
 
 ```bash

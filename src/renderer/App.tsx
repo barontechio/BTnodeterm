@@ -3,6 +3,7 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { Canvas } from './canvas/Canvas'
 import { PromptDialogHost } from './components/promptDialog'
 import { NodeIconDialogHost } from './components/NodeIconPicker'
+import { OwnerConfirmationHost } from './components/OwnerConfirmationHost'
 import { SessionProvider } from './session/session'
 import { localSession } from './session/localSession'
 import { useSettings } from './state/settings'
@@ -227,6 +228,7 @@ export default function App() {
         {/* The node-icon picker, opened from the node menu, a node header and the kanban card
             modal — one dialog for all three, driven by nodeIconDialog(). */}
         <NodeIconDialogHost />
+        <OwnerConfirmationHost />
         {liquidGlass && !glassA11y.reduceTransparency && <GlassRefraction slider={glassT} />}
       </ReactFlowProvider>
     </SessionProvider>

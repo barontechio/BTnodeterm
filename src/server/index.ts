@@ -14,6 +14,7 @@ import { authBootMessages } from './auth-boot-messages'
 import type { ServerConfig } from './config'
 
 import { initPlatform } from '../core/platform'
+import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { SettingsStore } from '../core/settings-store'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
@@ -241,6 +242,8 @@ export async function startServer(
     appVersion: readAppVersion()
   })
   initPlatform(platform)
+  const ownerConfirmations = new OwnerConfirmationBroker(platform)
+  registerOwnerConfirmationIpc(platform, ownerConfirmations)
 
   const auth = new Auth(config.dataDir)
   if (config.passwordSeed && !auth.isConfigured()) auth.setPassword(config.passwordSeed)
@@ -1030,6 +1033,7 @@ export async function startServer(
   // and its GitHub issue subscriptions.
   const dropUiClient = (uiId: number): void => {
     workspaceStore.forgetClient(uiId)
+    ownerConfirmations.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
@@ -1252,6 +1256,7 @@ export async function startServer(
       port: 0, // nothing bound
       async close() {
         mediaReferences.dispose()
+        ownerConfirmations.dispose()
         webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
@@ -1327,6 +1332,7 @@ export async function startServer(
     port,
     async close() {
       mediaReferences.dispose()
+      ownerConfirmations.dispose()
       webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.

@@ -6,6 +6,7 @@ import {
   buildControlApi,
   buildMediaApi,
   buildWebPreviewApi,
+  buildOwnerConfirmationApi,
   buildTranscriptSearchApi,
   buildBoardCommentDeliveryApi,
   buildFilesApi,
@@ -59,6 +60,20 @@ describe('isolated web preview protocol', () => {
       { kind: 'request', method: IPC.webPreviewAllow, args: [{ projectId: 'p', nodeId: 'web' }] },
       { kind: 'request', method: IPC.webPreviewRenew, args: ['one'] },
       { kind: 'request', method: IPC.webPreviewRelease, args: ['one'] }
+    ])
+  })
+})
+
+describe('owner confirmation protocol', () => {
+  it('binds connection lifetime and exact one-use decisions to owner RPC', async () => {
+    const c = fakeClient(); const api = buildOwnerConfirmationApi(c as never).ownerConfirmation!
+    await api.connect()
+    await api.decide({ id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    await api.disconnect('epoch')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.ownerConfirmationConnect, args: [] },
+      { kind: 'request', method: IPC.ownerConfirmationDecide, args: [{ id: 'one', token: 'token', proof: 'proof', answer: 'approve' }] },
+      { kind: 'request', method: IPC.ownerConfirmationDisconnect, args: ['epoch'] }
     ])
   })
 })

@@ -5,6 +5,7 @@ import type { AlertSoundKind } from '../shared/alert-sound'
 import { resolveUiScale } from '../shared/ui-scale'
 import type { RecentConversationsRequest } from '../shared/recent-conversations'
 import type { OpenLinkChoice, OpenLinkPrompt } from '../shared/open-link'
+import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import type {
   CanvasMutation,
   CanvasState,
@@ -930,6 +931,13 @@ const api: NodeTerminalApi = {
   control: {
     capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities),
     runLaunch: (nodeId, command) => ipcRenderer.invoke(IPC.controlRunLaunch, nodeId, command)
+  },
+  ownerConfirmation: {
+    connect: () => ipcRenderer.invoke(IPC.ownerConfirmationConnect),
+    disconnect: (epoch) => ipcRenderer.invoke(IPC.ownerConfirmationDisconnect, epoch),
+    decide: (answer) => ipcRenderer.invoke(IPC.ownerConfirmationDecide, answer),
+    onRequest: subscribe<[OwnerConfirmation]>(IPC.ownerConfirmationRequest),
+    onDismiss: subscribe<[string]>(IPC.ownerConfirmationDismiss)
   },
   notify: (payload) => ipcRenderer.invoke(IPC.appNotify, payload),
   openNotificationSettings: () => ipcRenderer.invoke(IPC.appOpenNotificationSettings),

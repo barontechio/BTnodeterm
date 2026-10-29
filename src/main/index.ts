@@ -457,6 +457,7 @@ import {
   writeAgentHtml
 } from './media-protocol'
 import { initPlatform, platform } from '../core/platform'
+import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { electronPlatform } from './platform-electron'
 import { registerPeerSink, unregisterPeerSink, wirePeerRegistry } from './peer-registry'
 import { WEBGL_CONTEXT_CAP_DESKTOP } from '../shared/webgl'
@@ -489,6 +490,8 @@ if (NT_MULTI && process.platform === 'darwin') app.commandLine.appendSwitch('use
 // .dispatch / .cast — see platform-electron.ts). `platform()` only exposes the CorePlatform half.
 const corePlatform = electronPlatform()
 initPlatform(corePlatform)
+const ownerConfirmations = new OwnerConfirmationBroker(corePlatform)
+registerOwnerConfirmationIpc(corePlatform, ownerConfirmations)
 
 const settingsStore = new SettingsStore()
 // ⌘M / ⌘W are registry commands (`node.toggleMarkdown` / `node.close`), so what the window
@@ -1355,6 +1358,7 @@ function createWindow(): BrowserWindow {
   // or replaced by a reload (which reuses this webContents id with nothing subscribed).
   releaseOnRendererDeparture(win, win.webContents, () => {
     workspaceStore.forgetClient(presenceId)
+    ownerConfirmations.forgetClient(presenceId)
     dropGitHubClient?.(presenceId)
   })
   win.on('closed', () => {
@@ -5542,6 +5546,7 @@ app.on('before-quit', (e) => {
   backgroundTray = undefined
   coreTeams?.stop()
   coreTeams = null
+  ownerConfirmations.dispose()
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log
   // honest. Clearing the ref too keeps a hook edge that lands during the quit flush (the pty
   // teardown window below) from re-holding an assertion nothing will ever release.

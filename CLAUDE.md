@@ -52,6 +52,16 @@ resource CSP cannot block a script's self-navigation, so both response and ifram
 disabled, retaining sandbox automatic-feature restrictions. Generated files are owner-only,
 content-addressed and preserved while referenced. Native Desktop retains its existing adapter.
 
+`core/owner-confirmation.ts` owns pending owner decisions in both shells. Each request hashes its
+exact normalized binding and presentation and sends independent recipient tokens to registered,
+currently attached owner UIs. Approval yields a short-lived host-only execution permit; mandatory
+`checkCurrent` validation runs when it is consumed, and consumption is single-use even across
+async proof reads. Reconnection, logout, cancellation, expiry or failed target/policy reads cannot
+grant a later effect. Wait outside workspace locks and global command queues. `OwnerConfirmationHost`
+uses the existing dialog, disables Enter approval and button autofocus, and coordinates with Canvas's
+synchronous pending-confirm flags. UI countdowns are receipt-relative; the host deadline remains
+authoritative. The broker grants no waiver and does not alter the existing Server close policy.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

@@ -4598,6 +4598,7 @@ export interface NodeTerminalApi {
   fs: FsApi
   media: MediaApi
   webPreview?: import('./web-preview').WebPreviewApi
+  ownerConfirmation?: import('./owner-confirmation').OwnerConfirmationApi
   browser: BrowserApi
   files: FilesApi
   updates: UpdateApi

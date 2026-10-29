@@ -36,6 +36,22 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('routes owner confirmation epochs, decisions and dismissals without leaking event objects', async () => {
+    const confirmation = api.ownerConfirmation!
+    await confirmation.connect()
+    await confirmation.decide({ id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    await confirmation.disconnect('epoch')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationConnect)
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDecide, { id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDisconnect, 'epoch')
+    const receive = vi.fn()
+    const off = confirmation.onDismiss(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.ownerConfirmationDismiss)![1] as (event: unknown, id: string) => void
+    handler({ sender: 'native' }, 'one')
+    expect(receive).toHaveBeenCalledExactlyOnceWith('one')
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.ownerConfirmationDismiss, handler)
+  })
   it('delivers persisted host project changes and unsubscribes when the view closes', () => {
     const got: unknown[] = []
     const off = api.workspace.onServerChange((project) => got.push(project))

@@ -41,6 +41,9 @@ and [media definitions #1321](https://github.com/eneskirca/nodeterm/pull/1321). 
 workflow runs report `action_required`; the upstream maintainer must authorize those fork runs.
 The integration through `be86cd38` is pushed to the fork as `up/server-media-streaming`. Upstream
 acceptance is tracked separately from local implementation and validation.
+The PR 11 snapshot passes all 24,324 tests (109 skipped) and both builds. The shared owner
+confirmation broker and both UI adapters are implemented, with target/policy revalidation at
+single-use permit consumption. Their command adapters (PR 13) remain the next delivery step.
 
 Baseline inspected on 2026-10-29:
 

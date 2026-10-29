@@ -346,6 +346,7 @@ import { installTerminalFocusMirror } from '../lib/terminalFocusMirror'
 import { runQuitFlushes } from '../lib/quitFlush'
 import { nodeToRefocus } from '../lib/focusRestore'
 import { openDialogCount } from '../components/dialog-stack'
+import { hasOwnerConfirmation, registerConfirmationBlocker } from '../lib/ownerConfirmationSlot'
 import {
   applyWindowTitle,
   composeWindowTitle,
@@ -2332,6 +2333,7 @@ export function Canvas() {
   const confirmBusy = useCallback(() => {
     const f = confirmFlags.current
     return (
+      hasOwnerConfirmation() ||
       f.confirm ||
       f.remove ||
       f.move ||
@@ -2344,6 +2346,8 @@ export function Canvas() {
       removePendingRef.current
     )
   }, [])
+  useEffect(() => registerConfirmationBlocker(() =>
+    Object.values(confirmFlags.current).some(Boolean) || removePendingRef.current), [])
   // Issue #848's offer is an actionable dialog like the rest, so it is in the same guard: an agent
   // `write`/`close` or a worktree removal must not stack over it (flag flipped at call time).
   const setLastSessionOffer = useCallback((v: { id: string; name: string } | null) => {
