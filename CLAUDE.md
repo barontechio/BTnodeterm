@@ -74,6 +74,15 @@ never falls back. Clean unloads write nothing. Explicit flush waits for earlier 
 the queued barrier. Legacy clients still perform whole-snapshot replacement; they do not gain
 field-level concurrency guarantees retroactively.
 
+Local CLI settings changes in both shells use `core/settings-control.ts`. Wait outside all store
+and command queues, then consume an exact owner permit and compare the approved old state again
+inside the destination store FIFO. A changed source session/account/project or capability answer
+invalidates it. A consumed permit's `current()` also checks owner lifetime/deadline inside that FIFO;
+waiting for an earlier write must not outlive approval. Only existing allowlisted fields may change;
+settings never consult confirm waivers.
+UI and host capability changes use the shared `setProjectCapability` setter, keeping the answer
+machine-local. Desktop cross-project and SSH paths retain their existing adapters.
+
 **Contributors: start with `CONTRIBUTING.md`** — the short version (setup, boundaries, house rules,
 testing habits). This file is what you reach for when you need to know *why* a rule is the way it
 is, or you are changing a subsystem it describes. A change that other developers must know about

@@ -68,7 +68,7 @@ const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
   rename: 'Changes canvas metadata; does not type a rename command into the session.',
   close: 'Cannot close the caller; busy sessions require an explicit force in project scope.',
   run: 'Local retained launches only.',
-  settings: 'Read only; changing a setting requires an owner confirmation path.',
+  settings: 'Own local project and allowlisted canvas settings; every change requires an attached owner UI and individual confirmation.',
   issues: 'Reads only the caller project GitHub cache.',
   prs: 'Reads only the caller project GitHub cache.'
 }

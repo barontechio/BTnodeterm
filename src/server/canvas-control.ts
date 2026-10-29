@@ -71,6 +71,7 @@ export interface ServerCanvasControlDeps {
   workspaceStore: WorkspaceStore
   ptyManager: PtyManager
   settings(): Settings
+  settingsControl?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<import('./headless-node-factory').ServerControlReply>
   boardLog: BoardLogHandlers
   cliCaps?: () => Promise<ClaudeCliCaps>
   /** grok's own `--session-id` probe; defaults to the real one. See HeadlessNodeFactoryDeps. */
@@ -382,8 +383,10 @@ export async function initServerCanvasControl(
         now: () => Date.now()
       })
     },
-    settings: async (sourceNodeId, args) =>
-      serverSettingsControl(
+    settings: async (sourceNodeId, args, verified) =>
+      args.set !== undefined && deps.settingsControl
+        ? deps.settingsControl(sourceNodeId, args, verified)
+        : serverSettingsControl(
         {
           persistedCanvases: () => deps.workspaceStore.persistedCanvases(),
           capabilityProjectFor: (id) => deps.workspaceStore.capabilityProjectFor(id),

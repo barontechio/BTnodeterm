@@ -540,6 +540,8 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   // Host settings and credentials (also host-only for every peer, shared/host-control.ts).
   IPC.settingsLoad,
   IPC.settingsSave,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   // Agent-integration consent status: paths in the host's home (host-only, #744).
   IPC.integrationsStatus,
   IPC.agentDiscoverModels,

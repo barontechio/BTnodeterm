@@ -380,6 +380,8 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.integrationsStatus,
   IPC.settingsLoad,
   IPC.settingsSave,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   IPC.agentDiscoverModels,
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,

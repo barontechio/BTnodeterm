@@ -361,8 +361,8 @@ function settingsVerbDocLines(): string[] {
     '  applies only to a project key. Any key off the list is refused by name, and some never can',
     '  be changed from here — permission modes, accounts and credentials, node identity, browser',
     '  control, telemetry, keybindings, confirm waivers: those are the user\'s decisions, so ask the',
-    '  user instead of retrying. Server Edition reads settings but refuses every `--set` (it has no',
-    '  confirmation dialog). Use flags only — `settings get` / `settings set` are not a form.'
+    '  user instead of retrying. Server Edition requires an attached owner UI for each change.',
+    '  Use flags only — `settings get` / `settings set` are not a form.'
   ]
 }
 

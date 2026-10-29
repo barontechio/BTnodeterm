@@ -948,7 +948,7 @@ describe('parseControlRequest', () => {
       expect(body).toMatch(/`denied by user` is FINAL/)
       // The keys a human decides are named as unreachable, not merely "not listed".
       expect(body).toMatch(/permission modes, accounts and credentials, node identity, browser\s+control, telemetry, keybindings, confirm waivers/)
-      expect(body).toMatch(/Server Edition reads settings but refuses every `--set`/)
+      expect(body).toMatch(/Server Edition requires an attached owner UI for each change/)
       // The messaging line now names the way to ask for the switch, instead of implying there is none.
       expect(body).toContain('`--set agentMessaging --value true`')
     }
@@ -992,7 +992,7 @@ describe('parseControlRequest', () => {
         error: expect.stringContaining('settings-key-forbidden')
       })
     }
-    // "Server Edition reads settings but refuses every --set" — ask the server handler itself.
+    // A shell without a confirmation backend still refuses every set, never a standing grant.
     const serverDeps = {
       persistedCanvases: () => [{ id: 'p', nodes: [{ id: 'n' }] }],
       capabilityProjectFor: () => ({}),

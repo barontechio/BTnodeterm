@@ -20,7 +20,7 @@ describe('control capability discovery', () => {
     expect(report.verbs.find((v) => v.verb === 'list')?.support).toBe('supported')
     expect(report.verbs.find((v) => v.verb === 'browser')?.support).toBe('unsupported')
     expect(report.verbs.find((v) => v.verb === 'settings')).toMatchObject({
-      support: 'partial', limitation: expect.stringContaining('Read only')
+      support: 'partial', limitation: expect.stringContaining('individual confirmation')
     })
     expect(serverSupportsControl('list')).toBe(true)
     expect(serverSupportsControl('browser')).toBe(false)

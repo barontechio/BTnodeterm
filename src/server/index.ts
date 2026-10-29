@@ -16,6 +16,8 @@ import type { ServerConfig } from './config'
 import { initPlatform } from '../core/platform'
 import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { SettingsStore } from '../core/settings-store'
+import { SettingsControl } from '../core/settings-control'
+import { mirrorEntry } from '../core/agent-status-mirror'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
 import { registerNamingIpc } from '../core/naming-ipc'
@@ -863,11 +865,15 @@ export async function startServer(
   if (config.canvasControl === true) {
     try {
       const reportLedger = new ReportLedgerStore(config.dataDir)
+      const settingsControl = new SettingsControl({ workspace: workspaceStore, settings: settingsStore,
+        confirmations: ownerConfirmations, runtime: (id) => ({ agentId: mirrorEntry(id)?.agentId, sessionId: mirrorEntry(id)?.sessionId }),
+        publish: (project) => platform.broadcast(IPC.workspaceServerChange, project), stopped: () => canvasControl === null })
       canvasControl = await initServerCanvasControl({
         controlScope: config.controlScope ?? 'creator',
         workspaceStore,
         ptyManager,
         settings: () => settingsStore.get(),
+        settingsControl: (id, args, verified) => settingsControl.run(id, args, verified),
         boardLog,
         projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
         requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),

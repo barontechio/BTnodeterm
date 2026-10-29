@@ -7,7 +7,8 @@ import type { CorePlatform } from './platform'
 
 export type ConfirmationRefusal = 'owner-unavailable' | 'busy' | 'denied' | 'expired' | 'cancelled'
 export type OwnerPermit = { ok: false; reason: ConfirmationRefusal } |
-  { ok: true; consume(): Promise<boolean>; cancel(): void }
+  /** Recheck current() in a destination FIFO after consumption; queue wait can outlive the owner. */
+  { ok: true; consume(): Promise<boolean>; current(): boolean; cancel(): void }
 export interface ConfirmationIntent {
   action: OwnerAction
   requester: OwnerConfirmation['requester']
@@ -118,6 +119,8 @@ export class OwnerConfirmationBroker {
     if (answer.answer === 'deny') { this.finish(pending, 'denied'); return true }
     pending.approvedBy = id
     this.dismiss(pending)
+    let consumed = false
+    let cancelled = false
     pending.resolve({ ok: true, consume: async () => {
       if (pending.consuming) return false
       const current = this.pending.get(pending.id)
@@ -132,9 +135,11 @@ export class OwnerConfirmationBroker {
         if (this.pending.get(pending.id) === pending) this.finish(pending, 'cancelled')
         return false
       }
+      consumed = true
       this.drop(pending)
       return true
-    }, cancel: () => { if (this.pending.get(pending.id) === pending) this.finish(pending, 'cancelled') } })
+    }, current: () => consumed && !cancelled && this.now() < pending.expiresAt && this.eligible(id, recipient.epoch),
+    cancel: () => { cancelled = true; if (this.pending.get(pending.id) === pending) this.finish(pending, 'cancelled') } })
     return true
   }
 

@@ -107,8 +107,8 @@ export interface ServerEditionControlActions {
   rename(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   color(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   sticky(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
-  /** Reads only; `--set` is refused by name (src/server/settings-control.ts). */
-  settings(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  /** Changes need the shared owner-confirmed service; reads retain the legacy helper. */
+  settings(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   /** `run --node <id>` (#925): deliver a retained launch for the node's creator. */
   run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   /** `report-outcome` (@shared/station-outcome): a station's report about ITSELF — no creator check,
@@ -215,7 +215,7 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       case 'sticky':
         return actions.sticky(nodeId, command.args)
       case 'settings':
-        return actions.settings(nodeId, command.args)
+        return actions.settings(nodeId, command.args, verified)
       case 'run':
         return actions.run(nodeId, command.args, verified)
       case 'report-outcome':

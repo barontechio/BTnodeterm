@@ -47,6 +47,9 @@ single-use permit consumption. Their command adapters (PR 13) remain the next de
 The PR 12 snapshot passes all 24,338 tests (109 skipped) and both builds. Settings persistence now
 has a serialized conditional-update seam, partial owner UI writes and durable owner-only pushes,
 preventing modern browser edits from replacing unrelated host changes before PR 13 enables CLI sets.
+The first PR 13 adapter now enables individually confirmed local `settings --set` in both shells,
+with a conditional FIFO write and the same pure capability-consent setter as the UI. The remaining
+write/removal adapters and execution coordination are still pending.
 
 Baseline inspected on 2026-10-29:
 

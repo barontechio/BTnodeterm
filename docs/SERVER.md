@@ -17,7 +17,7 @@ remaining Desktop parity work.
 
 An agent can run `nodeterm.sh capabilities` through its normal authenticated control endpoint.
 The response names this edition, whether canvas control is enabled and the implementation status
-of each verb, including partial support such as read-only `settings`. Discovery works even with
+of each verb, including partial support such as local owner-confirmed `settings`. Discovery works even with
 Server canvas control disabled; it requires verified node identity and does not grant permission
 to execute an action. A browser can read the same report through `nodeTerminal.control.capabilities()`.
 Older hosts do not expose this optional API; a browser bridge returns `null` when support is unknown.
@@ -114,8 +114,14 @@ An action must capture its exact normalized arguments, target/session and policy
 Approval produces a single-use permit and rechecks that state immediately before execution.
 An absent owner UI, expired request, lost connection or failed proof read cannot approve an action.
 Two owner tabs can answer only once; relay peers cannot subscribe or approve. Requests never take
-keyboard focus or accept an incidental Enter. This broker is infrastructure: `write`, settings
-changes and worktree removal remain unavailable until their command adapters are connected.
+keyboard focus or accept an incidental Enter. Settings changes use this broker; `write` and
+worktree removal remain unavailable until their command adapters are connected.
+
+`settings --set <key> --value <value>` can change only the existing allowlist: canvas grid/default
+dimensions and the caller local project's agent messaging switch. Every change needs individual
+owner confirmation. No owner UI means no change; a waiver or canvas-control opt-in is insufficient.
+The host checks source account/session and the approved old value again before the queued write.
+Concurrent unrelated edits survive. Forbidden keys and other projects remain refused.
 
 Modern owner clients save settings as explicit field patches and receive host changes after
 durable persistence. Concurrent changes to other fields are preserved. Pending local edits stay

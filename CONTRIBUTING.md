@@ -68,6 +68,9 @@ Settings edits use explicit partial patches through the host's FIFO writer. Publ
 settings pushes only after atomic persistence; a failed write must retain the durable cache.
 The UI merges pushes with its pending edits. Only a missing patch handler permits the legacy full
 save fallback; a lost reply never does. Host read/modify/write operations use `SettingsStore.update`.
+Agent settings changes use `core/settings-control.ts` and require individual owner confirmation,
+followed by a conditional FIFO edit. Capability toggles must call the shared `setProjectCapability`
+setter so the file flag and the machine-local answer stay paired.
 
 **Put new service logic in `src/core` behind `CorePlatform`, not inline in `src/main`.** That is the
 seam the Server Edition boots from; logic left in `src/main` silently does not exist there, and the

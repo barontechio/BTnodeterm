@@ -5,6 +5,7 @@ import { createRemoteContextEnsure } from '../core/remote-context-ensure'
 import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
 import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
 import { subagentReplay } from '../core/subagent-replay'
+import { SettingsControl } from '../core/settings-control'
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
 import { join, resolve, posix } from 'path'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
@@ -4553,6 +4554,9 @@ app.whenReady().then(async () => {
   registerHostLaunchIpc(corePlatform, (id, command) => coreTeams ? coreTeams.runFromOwner(id, command) :
     Promise.resolve({ ok: false, started: false, error: 'Host launch scheduler is stopped.' }))
   const readControlCapabilities = registerControlCapabilities('desktop', () => true)
+  const settingsControl = new SettingsControl({ workspace: workspaceStore, settings: settingsStore,
+    confirmations: ownerConfirmations, runtime: (id) => ({ agentId: mirrorEntry(id)?.agentId, sessionId: mirrorEntry(id)?.sessionId }),
+    publish: (project) => sendToMain(IPC.workspaceServerChange, project) })
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker
     // stamps the new work with it, so a turn the typed text starts is always later.
@@ -4614,6 +4618,12 @@ app.whenReady().then(async () => {
     if (verb === 'browser') return handleBrowserVerb(nodeId, args, verified)
     // Answered in MAIN for the same reasons as `browser`; see handleReportIssueVerb.
     if (verb === 'report-issue') return handleReportIssueVerb(nodeId, args, verified)
+    if (verb === 'settings' && args.set !== undefined) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const projects = workspace.projects.filter((p) => p.nodes.some((n) => n.id === nodeId))
+      if (projects.length === 1 && !projects[0].ssh && !isRemoteSessionNode(projects[0].nodes.find((n) => n.id === nodeId)) &&
+        (args.project === undefined || args.project === projects[0].id)) return settingsControl.run(nodeId, args, verified)
+    }
     if (coreTeams && (verb === 'open-worktree' || verb === 'close-worktree') && args.project === undefined &&
       !(verb === 'close-worktree' && args.mode === 'remove')) {
       const workspace = await workspaceStore.load({ sideline: false })

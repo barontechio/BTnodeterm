@@ -341,7 +341,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     await expect(
       handler({ verb: 'settings', nodeId: 'term-source', args: { get: 'gridSize' }, verified: true })
     ).resolves.toMatchObject({ ok: true })
-    expect(a.settings).toHaveBeenCalledWith('term-source', { get: 'gridSize' })
+    expect(a.settings).toHaveBeenCalledWith('term-source', { get: 'gridSize' }, true)
     // A key off the allowlist never reaches the action.
     await expect(
       handler({
