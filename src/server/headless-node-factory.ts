@@ -5,6 +5,9 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { CanvasContentWriter, type NodePatch, type PatchSave } from '../core/canvas-content-writer'
+import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
+import { applyStoredGeometry, storedGeometryNodes } from '../shared/stored-canvas-geometry'
+import { stableStringify } from '../shared/canvas-mutations'
 import { groupsFirst } from '../shared/node-order'
 import { launchHeadless } from '../core/headless-launch'
 import { gateProjectTarget, GRANT_CAP } from '../core/project-grants'
@@ -1181,6 +1184,84 @@ export class HeadlessNodeFactory {
           ? `linked one-way: ${from} reads ${plan.linked.join(', ')}${note}`
           : `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
         result: { from, linked: plan.linked, skipped: plan.skipped }
+      }
+    })
+  }
+
+  geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      const flags: Record<GeometryControlVerb, readonly string[]> = {
+        ungroup: ['group'], move: ['nodes', 'group'], resize: ['nodes', 'width', 'height'],
+        place: ['nodes', 'x', 'y', 'dx', 'dy'], arrange: ['nodes', 'group', 'layout', 'cols', 'gap'],
+        align: ['nodes', 'edge']
+      }
+      const flagError = unsupportedFlags(args, new Set(flags[verb]))
+      if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
+      let projectId: string | undefined
+      let editStarted = false
+      try {
+        const result = await this.contentWriter.edit((workspace): ServerControlReply => {
+          const source = sourceProject(workspace, sourceNodeId)
+          if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+          if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
+            return { ok: false, error: 'source node is not a control-capable agent' }
+          }
+          if (source.project.ssh || source.project.unavailable) {
+            return { ok: false, error: `${verb}-project-refused: geometry requires an available local project` }
+          }
+          // Explicit ids are checked even for a no-op; a cloned id never borrows creator proof.
+          const explicit = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+          if (args.group && source.project.nodes.some((n) => n.id === args.group)) explicit.push(args.group)
+          const refusal = (id: string): ServerControlReply | undefined => {
+            if (!this.inCallerProject(sourceNodeId, id, workspace, source.project)) {
+              return { ok: false, error: `${verb}-project-refused: ${id} is not exclusively in the caller's project` }
+            }
+            if (!this.ownsMutation(sourceNodeId, id, workspace, source.project)) return this.ownershipRefusal(verb, sourceNodeId, id)
+          }
+          for (const id of explicit) {
+            if (nodeProjects(workspace, id).length) {
+              const denied = refusal(id)
+              if (denied) return denied
+            }
+          }
+          const live = storedGeometryNodes(source.project.nodes)
+          const settings = this.deps.settings()
+          const plan = planGeometryCommand(verb, args, live, {
+            grid: settings.snapToGrid ? settings.gridSize : 0, edges: source.project.ropes ?? []
+          })
+          if (!plan.reply.ok || !plan.changed) return plan.reply
+          const next = applyStoredGeometry(source.project.nodes, plan.nodes)
+          const nextById = new Map(next.map((n) => [n.id, n]))
+          const affected = new Set(source.project.nodes.filter((n) =>
+            stableStringify(n) !== stableStringify(nextById.get(n.id))).map((n) => n.id))
+          // Moving/resizing a frame also changes its descendants' canvas footprint, even when
+          // their parent-relative coordinates stay equal. Include every nested descendant.
+          for (const node of source.project.nodes) {
+            let parent = node.parentId
+            while (parent) {
+              if (affected.has(parent)) { affected.add(node.id); break }
+              parent = source.project.nodes.find((n) => n.id === parent)?.parentId
+            }
+          }
+          for (const id of affected) {
+            const denied = refusal(id)
+            if (denied) return denied
+          }
+          projectId = source.project.id
+          editStarted = true
+          source.project.nodes = next
+          const removed = new Set([...affected].filter((id) => !nextById.has(id)))
+          if (removed.size) {
+            source.project.bridges = source.project.bridges?.filter((e) => !removed.has(e.source) && !removed.has(e.target))
+            source.project.ropes = source.project.ropes?.filter((e) => !removed.has(e.source) && !removed.has(e.target))
+          }
+          return plan.reply
+        })
+        if (result.saved && projectId) await this.publishPersisted([projectId])
+        return result.value
+      } catch (error) {
+        if (editStarted) return { ok: false, error: `${verb}-save-uncertain: inspect list --geometry on before repeating this command; ${String(error)}` }
+        return { ok: false, error: String(error instanceof Error ? error.message : error) }
       }
     })
   }

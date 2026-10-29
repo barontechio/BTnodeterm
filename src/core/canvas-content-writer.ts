@@ -78,6 +78,24 @@ export class CanvasContentWriter {
     return count
   }
 
+  /** Plan and authorize a synchronous edit against the latest state in the store's save queue.
+   * No I/O belongs in the callback: permission checks and the edit share one snapshot. */
+  async edit<T>(edit: (workspace: Workspace) => T): Promise<{ value: T; saved: boolean }> {
+    if (this.deps.isStopped?.()) throw this.stoppedWrite
+    if (this.deps.workspaceStore.updateWorkspace) {
+      let value!: T
+      const result = await this.deps.workspaceStore.updateWorkspace((fresh) => {
+        if (this.deps.isStopped?.()) throw this.stoppedWrite
+        value = edit(fresh)
+        return fresh
+      }, (current, next) => { this.publishChanges(current, next) })
+      return { value, saved: result.saved }
+    }
+    const fresh = await this.loadForEdit()
+    const value = edit(fresh)
+    return { value, saved: await this.castAndSave(fresh, { onlyIfChanged: true }) }
+  }
+
   /**
    * THE ONE SAVE. Diff every project's whole content against what was last loaded or saved, cast
    * every op, THEN save. Nothing is hand-listed per verb, and that is the point: on a project the

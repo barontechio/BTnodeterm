@@ -293,6 +293,7 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    geometry: (verb, sourceNodeId, args) => factory.geometry(verb, sourceNodeId, args),
     openProject: (sourceNodeId, args, verified) =>
       factory.openProject(sourceNodeId, args, verified),
     openTerminal: (sourceNodeId, args, verified) =>

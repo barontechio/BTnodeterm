@@ -220,6 +220,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     })
   })
   const actions = () => ({
+    geometry: vi.fn(async () => ({ ok: true as const })),
     openProject: vi.fn(async () => ({ ok: true as const, result: { projectId: 'project-loop' } })),
     openTerminal: vi.fn(async () => ({ ok: true as const, result: { id: 'term-new' } })),
     openAgent: vi.fn(async () => ({ ok: true as const, result: { id: 'agent-new' } })),
@@ -504,38 +505,24 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     }
   })
 
-  it('refuses `arrange` by name in both forms — a flag this edition cannot serve is never dropped', async () => {
-    // Headless canvas control keeps no measured node sizes, so the whole verb is deferred here.
-    // `--group` must take that same named refusal rather than be ignored on the way to something
-    // that answers ok.
-    const handler = createServerEditionControlHandler(actions())
-    const forms: Record<string, string>[] = [{ nodes: 'a,b' }, { group: 'g1', layout: 'lineage' }, { group: 'top' }]
-    for (const args of forms) {
-      const reply = await handler({ verb: 'arrange', nodeId: 'term-source', args, verified: true })
-      expect(reply).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
-      expect(reply.message).toContain('"arrange"')
-      expect(reply.message).toContain('do not retry')
+  it('routes every geometry verb with its complete flags after identity validation', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    const calls: Array<[string, Record<string, string>]> = [
+      ['ungroup', { group: 'g' }], ['move', { nodes: 'a', group: 'top' }],
+      ['resize', { nodes: 'a', width: '540' }], ['place', { nodes: 'a', x: '0', y: '0' }],
+      ['arrange', { nodes: 'a,b', gap: '0' }], ['arrange', { group: 'g', layout: 'lineage' }],
+      ['arrange', { group: 'top' }], ['align', { nodes: 'a,b', edge: 'left' }]
+    ]
+    for (const [verb, args] of calls) {
+      expect(await handler({ verb, nodeId: 'src', args, verified: true })).toEqual({ ok: true })
+      expect(a.geometry).toHaveBeenLastCalledWith(verb, 'src', args)
+      const count = a.geometry.mock.calls.length
+      expect(await handler({ verb, nodeId: 'src', args, verified: false })).toMatchObject({ ok: false })
+      expect(a.geometry).toHaveBeenCalledTimes(count)
     }
   })
 
-  // They run in the DESKTOP renderer's dispatch. This edition's browser bridge never subscribes to
-  // `onAgentControl`, and its headless handler serves no layout verb (`arrange`, `move`, `align`),
-  // so they take the same named permanent refusal — never "Unknown verb", which
-  // reads like a typo to retry, and never a dropped flag answered ok.
-  it('refuses the geometry verbs by name, permanently (issue #1288)', async () => {
-    const handler = createServerEditionControlHandler(actions())
-    const calls: Array<[string, Record<string, string>]> = [
-      ['resize', { nodes: 'a', width: '540' }],
-      ['place', { nodes: 'a', x: '0', y: '0' }],
-      ['arrange', { nodes: 'a,b', gap: '0' }]
-    ]
-    for (const [verb, args] of calls) {
-      const reply = await handler({ verb, nodeId: 'term-source', args, verified: true })
-      expect(reply, verb).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
-      expect(reply.message, verb).toContain(`"${verb}"`)
-      expect(reply.message, verb).toContain('do not retry')
-    }
-  })
 })
 
 /**
@@ -572,6 +559,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       openProject: vi.fn(),
       openTerminal: vi.fn(),
       openAgent,
+      geometry: vi.fn(),
       close: vi.fn(),
       link: vi.fn(),
       list: vi.fn(),

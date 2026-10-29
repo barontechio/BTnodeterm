@@ -2,6 +2,7 @@ import { parseControlRequest } from '../core/canvas-control-core'
 import { controlCapabilitiesReply } from '../core/control-capabilities'
 import { controlCapabilities, serverSupportsControl } from '../shared/control-capabilities'
 import type { ServerControlReply } from './headless-node-factory'
+import type { GeometryControlVerb } from '../shared/geometry-command'
 
 /**
  * The Server Edition's answer to `/control/*`: a NAMED, permanent refusal.
@@ -67,6 +68,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   openProject(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -173,6 +175,13 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.link(nodeId, command.args, verified)
       case 'group':
         return actions.group(nodeId, command.args)
+      case 'ungroup':
+      case 'move':
+      case 'resize':
+      case 'place':
+      case 'arrange':
+      case 'align':
+        return actions.geometry(verb, nodeId, command.args)
       case 'rename':
         return actions.rename(nodeId, command.args)
       case 'color':

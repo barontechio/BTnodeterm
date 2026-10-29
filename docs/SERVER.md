@@ -22,6 +22,12 @@ Server canvas control disabled; it requires verified node identity and does not 
 to execute an action. A browser can read the same report through `nodeTerminal.control.capabilities()`.
 Older hosts do not expose this optional API; a browser bridge returns `null` when support is unknown.
 
+Enabled Server control also supports `ungroup`, `move`, `resize`, `place`, `arrange` and `align`
+without an attached browser. They use Desktop's shared geometry planner over persisted dimensions,
+retain the caller's project and respect creator/project scope for every affected frame and descendant.
+They preserve non-geometry metadata and never activate a tab. After an uncertain save, inspect
+`nodeterm.sh list --geometry on` before repeating a relative move.
+
 ## Quickstart
 
 ```bash
