@@ -5,6 +5,8 @@
 // React/store imports so Canvas.tsx only wraps these in a memo.
 import { normalizeSuccessWaitHold } from '@shared/station-outcome'
 import type { PendingLaunch } from '@shared/types'
+import { waitRopeId, isWaitRope } from '@shared/canvas-lineage'
+export { waitRopeId, isWaitRope } from '@shared/canvas-lineage'
 
 /** Rope colour for a source with no agent (a browser popup, a plain terminal that opened nothing). */
 export const ROPE_NEUTRAL = '#8e8e93'
@@ -91,26 +93,9 @@ export function ropeInfoOf(
   }
 }
 
-/**
- * The id of a WAIT rope (`--after`, the verify panel's sequencing): `ctrl-after-<dep>-<node>`.
- *
- * A rope carries two relations — "opened by" and "waits for" — and for a long time both were minted
- * as `ctrl-<source>-<target>`, so nothing could tell them apart except ORDER (every writer appends
- * the opener's rope before the same command's waits). Order does not survive the canvas's own
- * pruning: deleting the opener deletes its rope, and the first wait into the node then looked like
- * its opener (team progress showed a pipeline's upstream station as the next one's team leader).
- * A wait now says what it is in its id. Still `ctrl-`, so every path that routes on that prefix
- * (edge changes, deletion, the store's pair-keyed dedupe) treats it exactly as before.
- */
-export function waitRopeId(dep: string, node: string): string {
-  return `ctrl-after-${dep}-${node}`
-}
 
-/** Is this rope a wait? Exact match on the rope's own endpoints, so an opener rope whose SOURCE id
- *  happens to begin with `after-` is never mistaken for one. */
-export function isWaitRope(rope: { id?: unknown; source: string; target: string }): boolean {
-  return rope.id === waitRopeId(rope.source, rope.target)
-}
+
+
 
 /**
  * Canvases saved before waits were marked: every rope into a node AFTER the first one is a wait

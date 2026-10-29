@@ -189,6 +189,13 @@ short edit that must inspect fresh state under that queue. Do not call a queued 
 inside either callback. Keep governed content on the existing authority path and forget client
 baselines on renderer/socket departure. See [workspace save concurrency](docs/workspace-save-concurrency.md).
 
+Canvas geometry and sizing rules live in `shared/canvas-geometry.ts` and `shared/node-sizing.ts`.
+The algorithms accept a structural node shape and preserve its other fields; React Flow supplies
+live measurements, and a host command supplies stored dimensions. Renderer modules keep their
+existing imports as re-exports. Keep opener/wait-rope interpretation in `shared/canvas-lineage.ts`
+so layout and team progress agree. A core command must patch stored geometry, not round-trip
+the whole node through renderer hydration and serialization.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as
