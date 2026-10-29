@@ -16,6 +16,11 @@
     }
   },
   "include": [
+    "src/bt/shared/**/*",
+    "src/bt/core/**/*",
+    "src/bt/server/**/*",
+    "src/bt/main/**/*",
+    "src/bt/*.ts",
     "electron.vite.config.ts",
     "scripts/excalidraw-assets-plugin.ts",
     "src/main/**/*",

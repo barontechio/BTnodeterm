@@ -1,6 +1,7 @@
 import { resolveConfig, resolveDataDir } from './config'
 import { startServer } from './index'
 import { runTeamCli, teamArgv } from './team-cli'
+import { startBtServer } from '../bt/server/boot' // BT fork seam (see FORK.md)
 
 /**
  * Script entry point for the headless server. Kept separate from index.ts so that
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
   }
   const config = resolveConfig(process.env, argv)
   const { port, close } = await startServer(config)
+  const bt = await startBtServer() // BT fork seam
   // Headless binds no listener, so there is nothing to announce as "listening" (startServer already
   // logged the headless line). Only print the address in normal serving mode.
   if (!config.headless) {
@@ -37,7 +39,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string): void => {
     console.log(`\nReceived ${signal}, shutting down…`)
-    void close().then(
+    void bt.stop().then(close).then(
       () => process.exit(0),
       (err) => {
         console.error('Error during shutdown:', err)

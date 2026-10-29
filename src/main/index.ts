@@ -455,6 +455,7 @@ import {
   writeAgentHtml
 } from './media-protocol'
 import { initPlatform, platform } from '../core/platform'
+import { startBtDesktop } from '../bt/main/boot' // BT fork seam (see FORK.md)
 import { electronPlatform } from './platform-electron'
 import { registerPeerSink, unregisterPeerSink, wirePeerRegistry } from './peer-registry'
 import { WEBGL_CONTEXT_CAP_DESKTOP } from '../shared/webgl'
@@ -1588,6 +1589,7 @@ function createWindow(): BrowserWindow {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // losing second instance — quitting; don't touch tmux
+  startBtDesktop() // BT fork seam
 
   // Harden every <webview> guest (WebNode runs its page in its own webContents, so the main
   // window's setWindowOpenHandler / will-navigate above don't cover it). Registered once at

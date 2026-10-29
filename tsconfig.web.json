@@ -19,6 +19,7 @@
     }
   },
   "include": [
+    "src/bt/renderer/**/*",
     "src/renderer/**/*",
     "src/shared/**/*",
     "src/preload/index.d.ts"

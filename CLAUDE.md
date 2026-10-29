@@ -1,5 +1,8 @@
 # CLAUDE.md
 
+> **BTnodeterm fork** (BT fork seam): fork-only code lives in `src/bt/`; read `FORK.md` before
+> adding features or syncing upstream.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
