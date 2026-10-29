@@ -12,7 +12,9 @@ The geometry extraction (`926988b7`) passes the complete suite: 24,207 tests wit
 Desktop and Server now share a command planner (`cc4575ba`); Server geometry is connected through
 the serialized writer with behavioral coverage for ownership, metadata, concurrency and authority
 overlays. Board projection/assignment rules are shared in `8cc2444a`; Server `board` and `assign`
-now use those rules and the queued writer. Later delivery items below remain planned work.
+now use those rules and the queued writer (`581704e4`). Image editor data and the fixed Claude alias
+are shared in `b9b670b7`; Server supports local image creation and the alias through its existing
+launch path. Later delivery items below remain planned work.
 
 Baseline inspected on 2026-10-29:
 

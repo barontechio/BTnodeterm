@@ -3,6 +3,7 @@ import { controlCapabilitiesReply } from '../core/control-capabilities'
 import { controlCapabilities, serverSupportsControl } from '../shared/control-capabilities'
 import type { ServerControlReply } from './headless-node-factory'
 import type { GeometryControlVerb } from '../shared/geometry-command'
+import { controlOpenAgent } from '../shared/control-open-agent'
 
 /**
  * The Server Edition's answer to `/control/*`: a NAMED, permanent refusal.
@@ -68,6 +69,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
@@ -170,7 +172,10 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       case 'open-terminal':
         return actions.openTerminal(nodeId, command.args, verified)
       case 'open-agent':
-        return actions.openAgent(nodeId, command.args, verified)
+      case 'open-claude':
+        return actions.openAgent(nodeId, controlOpenAgent(verb, command.args), verified)
+      case 'show-image':
+        return actions.showImage(nodeId, command.args, verified)
       case 'close':
         return actions.close(nodeId, command.args, verified)
       case 'link':

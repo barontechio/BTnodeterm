@@ -220,6 +220,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     })
   })
   const actions = () => ({
+    showImage: vi.fn(async () => ({ ok: true as const })),
     board: vi.fn(async () => ({ ok: true as const })),
     assign: vi.fn(async () => ({ ok: true as const })),
     geometry: vi.fn(async () => ({ ok: true as const })),
@@ -255,6 +256,18 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
       handler({ verb: 'report-outcome', nodeId: 'src', args: {}, verified: true })
     ).resolves.toEqual({ ok: false, error: 'report-outcome requires --outcome succeeded|failed' })
     expect(a.reportOutcome).toHaveBeenCalledTimes(1)
+  })
+
+  it('normalizes the Claude alias without dropping launch flags and gates image creation on identity', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    const args = { agent: 'codex', prompt: 'Keep all flags', model: 'model-x', after: 'dep', 'run-now': '' }
+    await handler({ verb: 'open-claude', nodeId: 'src', args, verified: true })
+    expect(a.openAgent).toHaveBeenCalledWith('src', { ...args, agent: 'claude' }, true)
+    await handler({ verb: 'show-image', nodeId: 'src', args: { path: '/tmp/picture.png' }, verified: false })
+    expect(a.showImage).not.toHaveBeenCalled()
+    await handler({ verb: 'show-image', nodeId: 'src', args: { path: '/tmp/picture.png' }, verified: true })
+    expect(a.showImage).toHaveBeenCalledWith('src', { path: '/tmp/picture.png' }, true)
   })
 
   it('routes issues / prs to the GitHub read action, after the shared parse and the identity gate', async () => {
@@ -561,6 +574,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       openProject: vi.fn(),
       openTerminal: vi.fn(),
       openAgent,
+      showImage: vi.fn(),
       board: vi.fn(),
       assign: vi.fn(),
       geometry: vi.fn(),

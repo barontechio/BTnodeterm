@@ -17,13 +17,14 @@ describe('Server board automation', () => {
   let factory: HeadlessNodeFactory
   let deps: HeadlessNodeFactoryDeps
   let ops: CanvasMutation[]
+  let dir: string
   const logs = vi.fn(async () => true)
   const effect = vi.fn(() => { throw new Error('board commands never touch a terminal') })
   const read = async () => (await store.load()).projects[0]
   const ownership = createHeadlessNodeOwnership()
 
   beforeEach(async () => {
-    const dir = testTmpDir('headless-board-')
+    dir = testTmpDir('headless-board-')
     fs.mkdirSync(path.join(dir, 'data'))
     resetPlatformForTests(); initPlatform(fakePlatform({ userDataDir: path.join(dir, 'data') }))
     store = new WorkspaceStore(); ops = []; logs.mockClear(); effect.mockClear(); ownership.clear()
@@ -106,5 +107,40 @@ describe('Server board automation', () => {
     expect(await factory.board('src', { project: 'other' })).toMatchObject({ ok: false })
     expect(await store.load()).toEqual(before)
     expect(ops).toEqual([]); expect(logs).not.toHaveBeenCalled()
+  })
+
+  it('persists an image editor and its opener without launching a session', async () => {
+    const imagePath = path.join(dir, 'picture.png')
+    fs.writeFileSync(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aHlcAAAAASUVORK5CYII=', 'base64'))
+    const before = (await read()).nodes
+    const reply = await factory.showImage('src', { path: imagePath }, true)
+    expect(reply.ok).toBe(true)
+    const p = await read()
+    const image = p.nodes.find((n) => n.kind === 'editor' && n.filePath === imagePath)!
+    expect(image).toMatchObject({ title: 'picture.png', openedBy: 'src', size: { width: 660, height: 460 } })
+    expect(p.nodes.filter((n) => n.id !== image.id)).toEqual(before)
+    expect(p.ropes).toMatchObject([{ source: 'src', target: image.id }])
+    expect(factory.openerOf(image.id)).toEqual({ sourceNodeId: 'src', projectId: 'p' })
+    expect(image.pendingLaunch).toBeUndefined()
+    expect(ops).toContainEqual({ op: 'upsert', node: image })
+  })
+
+  it('refuses inaccessible image sources, unknown flags and unverified callers without creating nodes', async () => {
+    const before = await store.load()
+    const missing = path.join(dir, 'missing.png')
+    const directory = path.join(dir, 'directory.png'); fs.mkdirSync(directory)
+    const calls: Record<string, string>[] = [{ path: missing }, { path: directory }, { path: 'file.txt' }, { path: 'relative.png' }, { path: missing, project: 'other' }]
+    for (const args of calls) {
+      expect(await factory.showImage('src', args, true)).toMatchObject({ ok: false })
+    }
+    expect(await factory.showImage('src', { path: missing }, false)).toMatchObject({ ok: false, error: expect.stringContaining('identity-refused') })
+    expect(await store.load()).toEqual(before); expect(ops).toEqual([])
+  })
+
+  it('never reads a local same-named image for a remote source', async () => {
+    const imagePath = path.join(dir, 'picture.png'); fs.writeFileSync(imagePath, 'local image')
+    const ws = await store.load(); ws.projects[0].nodes[0].sshRemoteTmux = true; await store.save(ws)
+    expect(await factory.showImage('src', { path: imagePath }, true)).toMatchObject({ ok: false, error: expect.stringContaining('host-refused') })
+    expect((await read()).nodes).toHaveLength(5); expect(ops).toEqual([])
   })
 })

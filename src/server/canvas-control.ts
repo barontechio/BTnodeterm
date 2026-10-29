@@ -293,6 +293,7 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    showImage: (sourceNodeId, args, verified) => factory.showImage(sourceNodeId, args, verified),
     board: (sourceNodeId, args) => factory.board(sourceNodeId, args),
     assign: (sourceNodeId, args) => factory.assign(sourceNodeId, args),
     geometry: (verb, sourceNodeId, args) => factory.geometry(verb, sourceNodeId, args),

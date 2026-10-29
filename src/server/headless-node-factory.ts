@@ -3,6 +3,12 @@ import { isBusyAgentState, parseForceFlag, type ControlScope } from './control-s
 import { isLaunchShell } from '../shared/agents/pane'
 import { randomBytes, randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { promises as fs } from 'node:fs'
+import { expandHomePath } from '../core/fs-handlers'
+import { FS_READ_BINARY_MAX_BYTES } from '../shared/fsLimits'
+import { editorNodeData, EDITOR_NODE_SIZE } from '../shared/editor-node'
+import { isImagePath } from '../shared/image-preview'
+import { NODE_MIN_SIZES } from '../shared/node-sizing'
 
 import { CanvasContentWriter, type NodePatch, type PatchSave } from '../core/canvas-content-writer'
 import { planGeometryCommand, type GeometryControlVerb } from '../shared/geometry-command'
@@ -268,7 +274,7 @@ function token(): string {
   return randomBytes(4).toString('hex')
 }
 
-function nextId(prefix: 'term' | 'sticky' | 'group'): string {
+function nextId(prefix: 'term' | 'sticky' | 'group' | 'editor'): string {
   return `${prefix}-${Date.now().toString(36)}-${token()}`
 }
 
@@ -1188,6 +1194,61 @@ export class HeadlessNodeFactory {
           ? `linked one-way: ${from} reads ${plan.linked.join(', ')}${note}`
           : `linked ${from} ↔ ${plan.linked.join(', ')}${note}`,
         result: { from, linked: plan.linked, skipped: plan.skipped }
+      }
+    })
+  }
+
+  showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      if (!verified) return { ok: false, error: 'show-image-identity-refused: requires verified node identity' }
+      const flagError = unsupportedFlags(args, new Set(['path']))
+      if (flagError) return { ok: false, error: `show-image: ${flagError}` }
+      const rawPath = args.path?.trim()
+      if (!rawPath || rawPath.includes('\0')) return { ok: false, error: 'show-image requires --path to an image file' }
+      const source = sourceProject(await this.readWorkspace(), sourceNodeId)
+      if (!source || !sourceCanControl(source.node, this.deps.agentIdOf)) return { ok: false, error: 'show-image-source-refused: requires a control-capable source in exactly one saved project' }
+      if (source.project.ssh || source.node.ssh || source.node.sshRemoteTmux || source.project.unavailable) {
+        return { ok: false, error: 'show-image-host-refused: remote images require their own filesystem adapter; no local fallback' }
+      }
+      const resolvePath = (project: Project, node: CanvasNodeState): string | undefined => {
+        const expanded = expandHomePath(rawPath)
+        if (path.isAbsolute(expanded)) return path.normalize(expanded)
+        const cwd = node.cwd || project.cwd
+        return cwd && path.isAbsolute(cwd) ? path.resolve(cwd, expanded) : undefined
+      }
+      const filePath = resolvePath(source.project, source.node)
+      if (!filePath) return { ok: false, error: 'show-image-path-refused: use an absolute path when the source has no absolute cwd' }
+      if (!isImagePath(filePath)) return { ok: false, error: 'show-image-type-refused: this file type has no image preview' }
+      try {
+        const stat = await fs.stat(filePath)
+        if (!stat.isFile() || stat.size > FS_READ_BINARY_MAX_BYTES) return { ok: false, error: 'show-image-file-refused: requires a regular image file within the binary preview size limit' }
+        await fs.access(filePath, fs.constants.R_OK)
+      } catch { return { ok: false, error: 'show-image-file-refused: image is missing or unreadable' } }
+      const id = nextId('editor')
+      let editStarted = false
+      try {
+        const edited = await this.contentWriter.edit((workspace): ServerControlReply => {
+          const fresh = sourceProject(workspace, sourceNodeId)
+          if (!fresh || fresh.project.id !== source.project.id || fresh.project.ssh || fresh.project.unavailable ||
+            fresh.node.ssh || fresh.node.sshRemoteTmux || !sourceCanControl(fresh.node, this.deps.agentIdOf) ||
+            resolvePath(fresh.project, fresh.node) !== filePath) return { ok: false, error: 'show-image-source-changed: inspect the source project before retrying' }
+          storedGeometryNodes(fresh.project.nodes)
+          const size = resolveDefaultNodeSize(this.deps.settings().defaultNodeSizes?.editor, EDITOR_NODE_SIZE, NODE_MIN_SIZES.editor)
+          fresh.project.nodes.push({ id, kind: 'editor', position: placeRight(fresh.project, fresh.node, size),
+            size, ...editorNodeData(filePath), openedBy: sourceNodeId })
+          const ropes = [...(fresh.project.ropes ?? [])]
+          addEdge(ropes, sourceNodeId, id, 'ctrl')
+          fresh.project.ropes = ropes
+          editStarted = true
+          return { ok: true, message: `showing image ${id}`, result: { id } }
+        })
+        if (edited.saved) {
+          this.ownership.record(id, { sourceNodeId, projectId: source.project.id })
+          await this.publishPersisted([source.project.id])
+        }
+        return edited.value
+      } catch (error) {
+        return { ok: false, error: editStarted ? `show-image-save-uncertain: inspect list before repeating; ${String(error)}` : String(error) }
       }
     })
   }

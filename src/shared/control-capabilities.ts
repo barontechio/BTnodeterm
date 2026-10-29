@@ -9,9 +9,9 @@ export const CONTROL_SUPPORT = {
   capabilities: 'supported',
   list: 'supported',
   'open-terminal': 'partial',
-  'open-claude': 'unsupported',
+  'open-claude': 'partial',
   'open-agent': 'partial',
-  'show-image': 'unsupported',
+  'show-image': 'partial',
   'show-video': 'unsupported',
   'show-web': 'unsupported',
   'open-browser': 'unsupported',
@@ -53,6 +53,8 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  'open-claude': 'Claude alias of open-agent; the same supported launch flags and local backend limits apply.',
+  'show-image': 'Existing local images supported by the editor preview; no SSH filesystem fallback.',
   board: 'Reads only the caller project; creator scope shows the caller and its created cards.',
   'open-project': 'Only an exact, already registered local project can be opened.',
   'open-terminal': 'Local persistent sessions only; the host validates supported launch flags.',

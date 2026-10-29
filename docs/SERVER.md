@@ -33,6 +33,11 @@ moves the caller's own card or another permitted card. `--before <id>` positions
 visible card, and `--column ungrouped` removes its assignment. The first assignment materializes
 the normal default board. These commands preserve provider lanes and metadata and do not launch work.
 
+`open-claude` uses the same launch path and limits as `open-agent --agent claude`. `show-image --path`
+creates a persistent editor preview for an existing local image. Relative paths resolve from the
+source session's absolute cwd (or its project cwd); remote sources are refused until their filesystem
+adapter is available. Image bytes use the existing authenticated file-preview API.
+
 ## Quickstart
 
 ```bash
