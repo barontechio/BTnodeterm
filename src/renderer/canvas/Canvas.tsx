@@ -7844,6 +7844,10 @@ export function Canvas() {
         projectId: target.projectId
       })
       setWorktreeBusy(false)
+      if (!res.ok && res.reason === 'binding') {
+        setWorktreeError(`Created worktree at ${res.worktree.path}, but its canvas binding is uncertain: ${res.message}. Inspect the canvas before retrying.`)
+        return
+      }
       if (!res.ok && res.reason === 'git') {
         // inline, never window.alert
         setWorktreeError(res.rejected ? `Could not create the worktree: ${res.message}` : res.message)
@@ -12723,6 +12727,10 @@ export function Canvas() {
           { repoPath: repoRoot, mode, branch: target.branch, baseRef, path: target.path },
           { target: newFrame, projectId }
         )
+        if (!out.ok && out.reason === 'binding') {
+          setNotice({ kind: 'error', text: `Created worktree at ${out.worktree.path}, but its canvas binding is uncertain: ${out.message}. Inspect the canvas before retrying.` })
+          return
+        }
         if (!out.ok && out.reason === 'git') {
           setNotice({ kind: 'error', text: `Could not create the worktree for #${issue.number}: ${out.message}` })
           return
@@ -15737,6 +15745,10 @@ export function Canvas() {
                 })
               }
             )
+            if (!created.ok && created.reason === 'binding') {
+              reply({ ok: false, error: `open-worktree: created ${created.worktree.path}, but binding is uncertain: ${created.message}. Inspect list before retrying.`, result: { worktree: created.worktree } })
+              return
+            }
             if (!created.ok) {
               reply({ ok: false, error: `open-worktree: ${created.reason === 'git' ? created.message : 'the project changed'}` })
               return

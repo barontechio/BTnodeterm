@@ -97,4 +97,12 @@ describe('createBoundWorktree', () => {
     expect(out.ok).toBe(true)
     expect(d.attach).toHaveBeenCalledTimes(1)
   })
+
+  it('awaits a host binding and retains the successful Git result if persistence fails', async () => {
+    const d = deps({ attach: vi.fn(async () => { throw new Error('disk full') }) })
+    expect(await createBoundWorktree(d, VALUE, { target: () => ({ groupId: null }) })).toMatchObject({
+      ok: false, reason: 'binding', message: 'disk full', worktree: { path: VALUE.path, createdByApp: true }
+    })
+    expect(d.worktreeAdd).toHaveBeenCalledTimes(1)
+  })
 })

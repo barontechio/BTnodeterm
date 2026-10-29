@@ -78,7 +78,7 @@ const GROUP_SIZE = { width: 520, height: 360 }
 /** A fresh worktree group starts empty but exists to HOLD terminals/agents, and the default
  *  GROUP_SIZE (520×360) is smaller than a single terminal (600×400) — a dropped-in terminal would
  *  overflow the frame. Open it large enough for one terminal with margin, and room to add another. */
-export const WORKTREE_GROUP_SIZE = { width: 760, height: 540 }
+export { WORKTREE_GROUP_SIZE } from '@shared/worktree'
 const EDITOR_SIZE = EDITOR_NODE_SIZE
 const DIFF_SIZE = { width: 860, height: 500 }
 const DINO_SIZE = { width: 600, height: 200 }

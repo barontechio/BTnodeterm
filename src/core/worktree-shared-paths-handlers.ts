@@ -42,25 +42,32 @@ export function registerWorktreeSharedPathsHandlers(
   platform.handle(
     IPC.worktreeMaterializeShared,
     async (projectId: unknown, worktreePath: unknown): Promise<SharedPathResult[]> => {
-      if (typeof projectId !== 'string' || !projectId) return []
-      if (typeof worktreePath !== 'string' || !worktreePath) return []
-
-      // Same derivation + validation the setup runner performs: rootPath/ssh come from THIS
-      // process's index by projectId, and `worktreePath` must be the project's rootPath or one of
-      // its actual worktrees. A null target = unknown project / no local folder / refused ssh path.
-      const info = deps.targetInfo(projectId)
-      const target = await resolveProjectSetupTarget(projectId, worktreePath, info, deps.worktreeList)
-      if (!target || target.ssh || !target.worktreePath) return []
-
-      // Read the sharedPaths list ITSELF by projectId — never a value off the wire.
-      const snap = await deps.readSettings(projectId)
-      const resolved = resolveProjectSettings(snap?.local, snap?.shared ?? undefined)
-      const sharedPaths = resolved.worktree.sharedPaths?.value ?? []
-      if (sharedPaths.length === 0) return []
-
-      // repoRoot = the project's own cwd (target.rootPath); target.worktreePath is the validated,
-      // absolute worktree directory. materializeSharedPaths never throws.
-      return materializeSharedPaths(target.rootPath, target.worktreePath, sharedPaths)
+      return materializeProjectSharedPaths(deps, projectId, worktreePath)
     }
   )
+}
+
+/** The same validated operation for host lifecycle services and RPC callers. */
+export async function materializeProjectSharedPaths(
+  deps: WorktreeSharedPathsDeps, projectId: unknown, worktreePath: unknown
+): Promise<SharedPathResult[]> {
+  if (typeof projectId !== 'string' || !projectId) return []
+  if (typeof worktreePath !== 'string' || !worktreePath) return []
+
+  // Same derivation + validation the setup runner performs: rootPath/ssh come from THIS
+  // process's index by projectId, and `worktreePath` must be the project's rootPath or one of
+  // its actual worktrees. A null target = unknown project / no local folder / refused ssh path.
+  const info = deps.targetInfo(projectId)
+  const target = await resolveProjectSetupTarget(projectId, worktreePath, info, deps.worktreeList)
+  if (!target || target.ssh || !target.worktreePath) return []
+
+  // Read the sharedPaths list ITSELF by projectId — never a value off the wire.
+  const snap = await deps.readSettings(projectId)
+  const resolved = resolveProjectSettings(snap?.local, snap?.shared ?? undefined)
+  const sharedPaths = resolved.worktree.sharedPaths?.value ?? []
+  if (sharedPaths.length === 0) return []
+
+  // repoRoot = the project's own cwd (target.rootPath); target.worktreePath is the validated,
+  // absolute worktree directory. materializeSharedPaths never throws.
+  return materializeSharedPaths(target.rootPath, target.worktreePath, sharedPaths)
 }
