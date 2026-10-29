@@ -6,6 +6,7 @@ import {
   unreadIdSet,
   unreadIdsSig
 } from './unreadBadge'
+import { LAST_SEEN_MAX_AGE_MS } from '../state/agentStatus'
 
 const DAY = 24 * 60 * 60_000
 const NOW = 1_800_000_000_000
@@ -48,6 +49,15 @@ describe('orphanStatusIds (the boot sweep)', () => {
   it('keeps a recently-seen orphan (an SSH cache that lags, a canvas a checkout may restore)', () => {
     const byId = { recent: { unread: true, lastSeen: { at: NOW - 2 * DAY } } }
     expect(orphanStatusIds(byId, projects, NOW)).toEqual([])
+  })
+
+  it('keeps an orphan for weeks, not days — a folder re-opened after an index rebuild keeps its node ids', () => {
+    const byId = { weeks: { unread: true, lastSeen: { at: NOW - 30 * DAY } } }
+    expect(orphanStatusIds(byId, projects, NOW)).toEqual([])
+  })
+
+  it('drops an orphan exactly when its clock would age out on load, never earlier', () => {
+    expect(ORPHAN_STATUS_GRACE_MS).toBe(LAST_SEEN_MAX_AGE_MS)
   })
 
   it('judges nothing when the load is incomplete: no projects, or an unreadable one', () => {

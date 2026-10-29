@@ -72,7 +72,9 @@ export interface AgentNodeStatus {
    * `saveClocks`) — never inside the main table, whose write cadence stays exactly what it was.
    * Bounded: `LAST_SEEN_MAX` newest, `LAST_SEEN_MAX_AGE_MS` old at most, dropped with the node by
    * `remove` (a deletion path that bypasses `remove` leaves a clock that ages out; it can never make
-   * a row, since rows come from canvas nodes).
+   * a row, since rows come from canvas nodes). The age-out is also the boot sweep's grace: an entry
+   * whose node is in no project is dropped once its clock is gone (`orphanStatusIds`,
+   * lib/unreadBadge.ts).
    *
    * It is a record of the PAST, restored as nothing else:
    *  - NOT as `state`: after a relaunch nothing has reported, a turn may have started or ended while

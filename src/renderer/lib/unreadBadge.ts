@@ -52,9 +52,12 @@ export function countUnreadInProjects(
 
 /** A status entry whose node is in no project is kept this long after its last hook event before
  *  the boot sweep drops it. The node may come back: an SSH project's offline copy can lag the host
- *  until the next reconcile, and a git checkout can restore an older canvas — dropping its entry at
- *  once would cost it its resume id. */
-export const ORPHAN_STATUS_GRACE_MS = 7 * 24 * 60 * 60_000
+ *  until the next reconcile, a git checkout can restore an older canvas, and a folder dropped from a
+ *  rebuilt index keeps its node ids when it is opened again — dropping its entry would cost it its
+ *  resume id. Deliberately EQUAL to `LAST_SEEN_MAX_AGE_MS` (state/agentStatus.ts, pinned by the
+ *  test): an orphan goes on the same boot its clock ages out, and never earlier. The count no longer
+ *  reads orphans, so a long window costs only a little storage. */
+export const ORPHAN_STATUS_GRACE_MS = 90 * 24 * 60 * 60_000
 
 /**
  * The status ids the boot sweep may drop: their node is in no project, and their last hook event

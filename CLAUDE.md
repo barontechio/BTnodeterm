@@ -4140,12 +4140,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   This NEVER changes the workflow bucket: read state is independent from agent state.
   The unread COUNT is the macOS Dock badge (counted over nodes some project HOLDS, closed ones
   included — never over the raw status table, which outlives nodes deleted by paths that skip
-  `remove`; stale entries are swept at load past a 7-day grace, `lib/unreadBadge.ts`), and on **Windows** a taskbar overlay icon (pure
-  `planBadge` + BGRA rasterizer `rasterizeBadge`, "9+" above nine, `main/taskbar-badge.ts`) plus a
-  `flashFrame` when the count RISES while unfocused (cleared on focus); Linux shows nothing. Windows
-  toasts need `app.setAppUserModelId` set before ready to the package.json `build.appId` the NSIS
-  shortcut carries (`main/app-identity.ts`, pinned by test; `execPath` in dev) — without it toasts
-  are dropped or mis-attributed silently (Windows never emits Notification `failed`).
+  `remove`; an orphaned entry is swept at load once its 90-day `lastSeen` clock ages out, and the
+  sweep is skipped whenever the load is incomplete, `lib/unreadBadge.ts`), and on **Windows** a
+  taskbar overlay icon (pure `planBadge` + BGRA rasterizer `rasterizeBadge`, "9+" above nine,
+  `main/taskbar-badge.ts`) plus a `flashFrame` when the count RISES while unfocused (cleared on
+  focus); Linux shows nothing. Windows toasts need `app.setAppUserModelId` set before ready to the
+  package.json `build.appId` the NSIS shortcut carries (`main/app-identity.ts`, pinned by test;
+  `execPath` in dev) — without it toasts are dropped or mis-attributed silently (Windows never
+  emits Notification `failed`).
 - **Sound alerts + custom sounds** (issue #289) — the `done` / `needsYou` alert (`SfxKind`) is a
   synthesized WebAudio chime (`renderer/lib/sfx.ts`, fired from Canvas's `alert` closure, gated by
   `soundEffects`, 5 s/node cooldown). Settings → Notifications lets the user replace either with their
