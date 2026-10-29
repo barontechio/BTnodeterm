@@ -777,7 +777,7 @@ import {
   resolveNodeColor,
   resolveSystemNodeColor
 } from '@shared/node-colors'
-import { parseLenses, verifyLensPrompt, verifySynthesisPrompt } from '../lib/verifyPanel'
+import { planVerification } from '@shared/team-plan'
 import { useSettings } from '../state/settings'
 import { activePermissionMode, cursorCliCapsNow, grokCliCapsNow, projectPermissionMode } from '../state/permissionMode'
 import { useContextWindow } from '../state/contextWindow'
@@ -15331,13 +15331,15 @@ export function Canvas() {
               })
               return
             }
-            const lenses = parseLenses(args.lenses)
-            const wantJudge = (args.synthesis ?? 'on').trim().toLowerCase() !== 'off'
             const { shimPath: vShim, platform: vShimHost } = await window.nodeTerminal.contextLink.info()
             // Reviewers open where the target's cwd says; an SSH-project panel runs on the host,
             // whose shim is POSIX, so only a local panel gets the host-platform wording.
             const vHost = sshFor(target.data.cwd as string | undefined) ? undefined : vShimHost
             const targetTitle = (target.data.title as string) || targetId
+            const panelPlan = planVerification({ targetId, targetTitle, agent: reviewAgent, shimPath: vShim,
+              hostPlatform: vHost, lenses: args.lenses, focus: args.focus, synthesis: args.synthesis })
+            const lenses = panelPlan.lenses
+            const wantJudge = panelPlan.judge !== null
             const targetCwd = target.data.cwd as string | undefined
             const live = nodesRef.current as CanvasNode[]
             const vStore = useProjects.getState()
@@ -15356,22 +15358,8 @@ export function Canvas() {
             // with a nine-character node title and no `--focus` at all (#706). So every panel
             // prompt goes through the spill before a node is built, and the awaits are done up
             // front because the factories below are synchronous.
-            const lensLaunches = await Promise.all(
-              lenses.map((lens) =>
-                spillLongPrompt(
-                  verifyLensPrompt({
-                    lens,
-                    targetTitle,
-                    targetId,
-                    agentId: reviewAgent,
-                    shimPath: vShim,
-                    hostPlatform: vHost,
-                    focus: args.focus
-                  })
-                )
-              )
-            )
-            const reviewers = lenses.map((lens, i) => {
+            const lensLaunches = await Promise.all(panelPlan.reviewers.map((role) => spillLongPrompt(role.prompt)))
+            const reviewers = panelPlan.reviewers.map((role, i) => {
               const node = createAgentNode(
                 reviewAgent,
                 live.length + i,
@@ -15386,22 +15374,14 @@ export function Canvas() {
                 lensLaunches[i].promptFile
               )
               return armAfter(
-                { ...node, data: { ...node.data, title: `Verify: ${lens}`, titleAuto: false } },
-                [targetId],
+                { ...node, data: { ...node.data, title: role.title, titleAuto: false } },
+                role.afterNodes,
                 undefined,
                 lensLaunches[i].promptFile
               )
             })
             const reviewerIds = reviewers.map((r) => r.id)
-            const judgeLaunch = await spillLongPrompt(
-              verifySynthesisPrompt({
-                lenses,
-                targetTitle,
-                agentId: reviewAgent,
-                shimPath: vShim,
-                hostPlatform: vHost
-              })
-            )
+            const judgeLaunch = panelPlan.judge ? await spillLongPrompt(panelPlan.judge.prompt) : {}
             const judge = wantJudge
               ? armAfter(
                   (() => {
@@ -15420,7 +15400,7 @@ export function Canvas() {
                     )
                     return { ...j, data: { ...j.data, title: 'Verify: verdict', titleAuto: false } }
                   })(),
-                  reviewerIds,
+                  panelPlan.judge!.afterRoles.map((index) => reviewerIds[index]),
                   undefined,
                   judgeLaunch.promptFile
                 )
