@@ -83,7 +83,7 @@ const EDITOR_SIZE = EDITOR_NODE_SIZE
 const DIFF_SIZE = { width: 860, height: 500 }
 const DINO_SIZE = { width: 600, height: 200 }
 const TRIGGER_SIZE = { width: 300, height: 170 }
-const VIDEO_SIZE = { width: 640, height: 420 }
+const VIDEO_SIZE = VIDEO_NODE_SIZE
 const WEB_SIZE = { width: 720, height: 520 }
 const BROWSER_SIZE = { width: 800, height: 560 }
 // Tall and narrow: a file manager is a LIST, and the thing that runs out first is vertical room
@@ -1125,18 +1125,8 @@ export function createEditorNode(
   }
 }
 
-const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'ogv', 'avi']
-
-/** Audio uses the existing media node kind; no workspace schema change is needed. */
-export function isAudioFile(path: string): boolean {
-  return ['mp3', 'wav', 'flac', 'ogg', 'oga', 'opus', 'm4a', 'aac', 'aiff', 'aif', 'weba'].includes(
-    path.split('.').pop()?.toLowerCase() ?? ''
-  )
-}
-
-export function isMediaFile(path: string): boolean {
-  return isVideoFile(path) || isAudioFile(path)
-}
+export { isAudioFile, isVideoFile, isMediaFile } from '@shared/media'
+import { isAudioFile, isVideoFile, isMediaFile, VIDEO_NODE_SIZE } from '@shared/media'
 
 const HTML_EXTS = ['html', 'htm']
 
@@ -1144,12 +1134,6 @@ const HTML_EXTS = ['html', 'htm']
 export function isHtmlFile(path: string): boolean {
   const ext = path.split('.').pop()?.toLowerCase() ?? ''
   return HTML_EXTS.includes(ext)
-}
-
-/** True when a path looks like a playable video file (by extension). */
-export function isVideoFile(path: string): boolean {
-  const ext = path.split('.').pop()?.toLowerCase() ?? ''
-  return VIDEO_EXTS.includes(ext)
 }
 
 /** Pick the canvas surface for a file. HTML renders as a page only when the caller asked to VIEW
