@@ -72,7 +72,9 @@ export interface AgentNodeStatus {
    * `saveClocks`) — never inside the main table, whose write cadence stays exactly what it was.
    * Bounded: `LAST_SEEN_MAX` newest, `LAST_SEEN_MAX_AGE_MS` old at most, dropped with the node by
    * `remove` (a deletion path that bypasses `remove` leaves a clock that ages out; it can never make
-   * a row, since rows come from canvas nodes).
+   * a row, since rows come from canvas nodes). The age-out is also the boot sweep's grace: an entry
+   * whose node is in no project is dropped once its clock is gone (`orphanStatusIds`,
+   * lib/unreadBadge.ts).
    *
    * It is a record of the PAST, restored as nothing else:
    *  - NOT as `state`: after a relaunch nothing has reported, a turn may have started or ended while
@@ -421,6 +423,9 @@ export interface AgentStatusStore {
   /** Record a /loop iteration (count++ and append its summary). No-op if not looping. */
   bumpLoop(id: string, message?: string): void
   remove(id: string): void
+  /** Drop several entries with ONE write of each key (the boot sweep of orphaned entries —
+   *  `orphanStatusIds` in lib/unreadBadge.ts decides which). Ids not in the table are ignored. */
+  removeMany(ids: readonly string[]): void
 }
 
 /** The persisted "last seen" clock (see `AgentNodeStatus.lastSeen`). */
@@ -1200,6 +1205,21 @@ export function createAgentStatusSession(
         save(byId)
         // Now, not on the debounce: the deleted node's clock must not outlive it on disk.
         if (s.byId[id].lastSeen) saveClocks(byId)
+        return { byId }
+      }),
+
+    removeMany: (ids) =>
+      set((s) => {
+        const present = ids.filter((id) => id in s.byId)
+        if (present.length === 0) return s
+        const byId = { ...s.byId }
+        let clocks = false
+        for (const id of present) {
+          if (byId[id].lastSeen) clocks = true
+          delete byId[id]
+        }
+        save(byId)
+        if (clocks) saveClocks(byId)
         return { byId }
       })
   }))
