@@ -12,6 +12,8 @@ import { noteProxyRefusal, proxyAuthDecision, type TrustProxyConfig } from './pr
 import { loginClientKey } from './client-address'
 import { sameOriginRequest } from './origin'
 import { handleDownload } from './download'
+import { handleMedia } from './media'
+import type { MediaReferences } from '../core/media-references'
 import type { DownloadTickets } from '../core/download-tickets'
 
 export const SESSION_COOKIE = 'nt_session'
@@ -67,6 +69,7 @@ export interface HttpHandlerOpts {
   /** Ticket store backing `GET /download` (Explorer file downloads). Omitted in tests that don't
    *  exercise it — the route then simply doesn't exist. */
   downloadTickets?: DownloadTickets
+  mediaReferences?: MediaReferences
   /**
    * NODETERM_PUBLIC_ORIGIN (an https origin, normalized). When set the session cookie is always
    * `Secure`, every response carries HSTS, and an `Origin` equal to it passes the same-origin check
@@ -440,7 +443,7 @@ async function serveStatic(
 export function createHttpHandler(
   opts: HttpHandlerOpts
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
-  const { auth, rendererDir, trustProxy, downloadTickets, publicOrigin } = opts
+  const { auth, rendererDir, trustProxy, downloadTickets, mediaReferences, publicOrigin } = opts
   let warnedNoPublicOrigin = false
 
   return function handler(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -626,6 +629,7 @@ export function createHttpHandler(
 
     // Authenticated: an Explorer download redeems its one-shot ticket here (see download.ts).
     if (downloadTickets && (await handleDownload(req, res, url, downloadTickets))) return
+    if (mediaReferences && (await handleMedia(req, res, url, mediaReferences))) return
 
     // Authenticated: serve static renderer files (index.html fallback for '/').
     await serveStatic(req, res, rendererDir, pathname)

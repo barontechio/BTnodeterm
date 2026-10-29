@@ -71,6 +71,15 @@ frame placement. `close-worktree --group <id>` unbinds a present checkout and ke
 sessions. Missing or unreadable checkouts require recovery first. Directory removal remains
 unavailable until owner confirmation is wired.
 
+`show-video --path <file>` also accepts audio and creates the existing media player node. Local
+playback uses authenticated HTTP streaming, including repeated Range requests for seeking, rather
+than base64 over the terminal socket. A browser obtains an opaque, expiring reference for the
+saved node; mounted players renew it and release it on unmount. Closing the connection revokes its
+references. Reopening/reloading obtains a new one. Every request checks the current project/node
+access and pinned file identity; removed nodes and replaced or redirected files are refused.
+Only recognized media formats are served. Playback depends on the viewer's available codecs.
+Relay peers and SSH media remain unavailable on this path.
+
 ## Quickstart
 
 ```bash

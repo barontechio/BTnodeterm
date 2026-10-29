@@ -221,6 +221,12 @@ shared paths and awaits the existing setup trust gate before exposing the frame.
 a failed Git list as absence, adopt creator rights after restart, or delete a directory to undo a
 canvas save failure. Group opens use the shared stored-node placement and verify the checkout.
 
+Server media uses `core/media-references.ts` and the authenticated HTTP route in `server/media.ts`.
+References are reusable for seeking, expiring, owner-client-bound and scoped to a saved local node;
+never reuse one-shot download tickets or accept filesystem paths in the HTTP URL. Recheck access,
+canonical path and inode before serving. Keep issuance, reference count, streams and byte-range
+parsing bounded; destroy streams on cancellation/revocation. Native Desktop keeps `nt-media://`.
+
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
 need it too, and wire it in the same change. The global (Omni) board shows all open projects as

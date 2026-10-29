@@ -34,6 +34,7 @@ import {
   ModelGatewayCredentialService
 } from '../core/model-gateway-credentials'
 import { DownloadTickets } from '../core/download-tickets'
+import { registerServerMedia } from './media-ipc'
 import { registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
 import { ProjectTrustStore } from '../core/project-trust-store'
 import { ProjectSetupService } from '../core/project-setup-service'
@@ -384,6 +385,7 @@ export async function startServer(
   // between the RPC side (which mints) and the HTTP side (which redeems) — one instance, so a
   // ticket minted over the socket is redeemable by the GET that follows it.
   const downloadTickets = new DownloadTickets()
+  const mediaReferences = registerServerMedia(platform, workspaceStore)
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
     onSettingsChange: (cb) => settingsStore.onChange(cb),
@@ -1022,6 +1024,7 @@ export async function startServer(
   // and its GitHub issue subscriptions.
   const dropUiClient = (uiId: number): void => {
     workspaceStore.forgetClient(uiId)
+    mediaReferences.forgetClient(uiId)
     ptyManager.dropClient(uiId)
     github.service.dropClient(uiId)
   }
@@ -1241,6 +1244,7 @@ export async function startServer(
     return {
       port: 0, // nothing bound
       async close() {
+        mediaReferences.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
@@ -1284,7 +1288,8 @@ export async function startServer(
       rendererDir: config.rendererDir,
       trustProxy: config.trustProxy,
       publicOrigin: config.publicOrigin,
-      downloadTickets
+      downloadTickets,
+      mediaReferences
     })
   )
   // A closed browser tab is the NORMAL way to leave the Server Edition and sends no `pty:kill`,
@@ -1311,6 +1316,7 @@ export async function startServer(
   return {
     port,
     async close() {
+      mediaReferences.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()

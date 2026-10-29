@@ -221,4 +221,18 @@ describe('host team execution without a renderer', () => {
     expect(await pty.sessionExists(id)).toBe(true)
     expect(pty.sends).toHaveLength(1)
   })
+
+  it('creates a streaming media node for a large local file without binary RPC or terminal work', async () => {
+    const file = path.join(dir, 'clip.mp4')
+    fs.writeFileSync(file, Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from('ftypisom')]))
+    fs.truncateSync(file, 32 * 1024 * 1024)
+    const reply = await factory.showVideo('src', { path: file }, true)
+    expect(reply).toMatchObject({ ok: true })
+    expect((await read()).nodes.find((n) => n.kind === 'video')).toMatchObject({ filePath: file, openedBy: 'src' })
+    expect(pty.creates).toEqual([])
+    fs.writeFileSync(file, '<script>not media</script>')
+    expect(await factory.showVideo('src', { path: file }, true)).toMatchObject({ ok: false, error: expect.stringContaining('type-refused') })
+    expect(await factory.showVideo('src', { path: file }, false)).toMatchObject({ ok: false })
+    expect((await read()).nodes.filter((n) => n.kind === 'video')).toHaveLength(1)
+  })
 })

@@ -1,3 +1,5 @@
+import { mediaMime, VIDEO_NODE_SIZE, videoNodeData } from '../shared/media'
+import { matchesMediaSignature } from './media-references'
 import type { TextDeliveryResult } from '../shared/text-delivery'
 import { isBusyAgentState, parseForceFlag, type ControlScope } from '../shared/control-scope'
 import { isLaunchShell } from '../shared/agents/pane'
@@ -299,7 +301,7 @@ function token(): string {
   return randomBytes(4).toString('hex')
 }
 
-function nextId(prefix: 'term' | 'sticky' | 'group' | 'editor'): string {
+function nextId(prefix: 'term' | 'sticky' | 'group' | 'editor' | 'video'): string {
   return `${prefix}-${Date.now().toString(36)}-${token()}`
 }
 
@@ -1174,16 +1176,26 @@ export class HeadlessNodeFactory {
   }
 
   showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.showFile('image', sourceNodeId, args, verified)
+  }
+
+  showVideo(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.showFile('video', sourceNodeId, args, verified)
+  }
+
+  private showFile(kind: 'image' | 'video', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    const verb = `show-${kind}`
+    const label = kind === 'image' ? 'image' : 'media'
     return this.runExclusive(async () => {
-      if (!verified) return { ok: false, error: 'show-image-identity-refused: requires verified node identity' }
+      if (!verified) return { ok: false, error: `${verb}-identity-refused: requires verified node identity` }
       const flagError = unsupportedFlags(args, new Set(['path']))
-      if (flagError) return { ok: false, error: `show-image: ${flagError}` }
+      if (flagError) return { ok: false, error: `${verb}: ${flagError}` }
       const rawPath = args.path?.trim()
-      if (!rawPath || rawPath.includes('\0')) return { ok: false, error: 'show-image requires --path to an image file' }
+      if (!rawPath || rawPath.includes('\0')) return { ok: false, error: `${verb} requires --path to ${kind === 'image' ? 'an image' : 'a media'} file` }
       const source = sourceProject(await this.readWorkspace(), sourceNodeId)
-      if (!source || !sourceCanControl(source.node, this.deps.agentIdOf)) return { ok: false, error: 'show-image-source-refused: requires a control-capable source in exactly one saved project' }
+      if (!source || !sourceCanControl(source.node, this.deps.agentIdOf)) return { ok: false, error: `${verb}-source-refused: requires a control-capable source in exactly one saved project` }
       if (source.project.ssh || source.node.ssh || source.node.sshRemoteTmux || source.project.unavailable) {
-        return { ok: false, error: 'show-image-host-refused: remote images require their own filesystem adapter; no local fallback' }
+        return { ok: false, error: `${verb}-host-refused: remote ${kind === 'image' ? 'images' : 'media'} require their own filesystem adapter; no local fallback` }
       }
       const resolvePath = (project: Project, node: CanvasNodeState): string | undefined => {
         const expanded = expandHomePath(rawPath)
@@ -1192,30 +1204,42 @@ export class HeadlessNodeFactory {
         return cwd && path.isAbsolute(cwd) ? path.resolve(cwd, expanded) : undefined
       }
       const filePath = resolvePath(source.project, source.node)
-      if (!filePath) return { ok: false, error: 'show-image-path-refused: use an absolute path when the source has no absolute cwd' }
-      if (!isImagePath(filePath)) return { ok: false, error: 'show-image-type-refused: this file type has no image preview' }
+      if (!filePath) return { ok: false, error: `${verb}-path-refused: use an absolute path when the source has no absolute cwd` }
+      if (kind === 'image' ? !isImagePath(filePath) : !mediaMime(filePath)) return { ok: false, error: `${verb}-type-refused: this file type has no ${label} preview` }
       try {
         const stat = await fs.stat(filePath)
-        if (!stat.isFile() || stat.size > FS_READ_BINARY_MAX_BYTES) return { ok: false, error: 'show-image-file-refused: requires a regular image file within the binary preview size limit' }
+        if (!stat.isFile() || (kind === 'image' && stat.size > FS_READ_BINARY_MAX_BYTES)) return { ok: false, error: `${verb}-file-refused: requires a regular ${label} file${kind === 'image' ? ' within the binary preview size limit' : ''}` }
         await fs.access(filePath, fs.constants.R_OK)
-      } catch { return { ok: false, error: 'show-image-file-refused: image is missing or unreadable' } }
-      const id = nextId('editor')
+      } catch { return { ok: false, error: `${verb}-file-refused: ${label} is missing or unreadable` } }
+      if (kind === 'video') {
+        try {
+          const handle = await fs.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+          try {
+            if (!(await handle.stat()).isFile()) return { ok: false, error: 'show-video-file-refused: requires a regular media file' }
+            const bytes = Buffer.alloc(32)
+            const read = await handle.read(bytes, 0, bytes.length, 0)
+            if (!matchesMediaSignature(mediaMime(filePath)!, bytes.subarray(0, read.bytesRead))) return { ok: false, error: 'show-video-type-refused: media signature does not match the file type' }
+          } finally { await handle.close() }
+        } catch { return { ok: false, error: 'show-video-file-refused: media is unreadable or a symbolic link' } }
+      }
+      const id = nextId(kind === 'image' ? 'editor' : 'video')
       let editStarted = false
       try {
         const edited = await this.contentWriter.edit((workspace): ServerControlReply => {
           const fresh = sourceProject(workspace, sourceNodeId)
           if (!fresh || fresh.project.id !== source.project.id || fresh.project.ssh || fresh.project.unavailable ||
             fresh.node.ssh || fresh.node.sshRemoteTmux || !sourceCanControl(fresh.node, this.deps.agentIdOf) ||
-            resolvePath(fresh.project, fresh.node) !== filePath) return { ok: false, error: 'show-image-source-changed: inspect the source project before retrying' }
+            resolvePath(fresh.project, fresh.node) !== filePath) return { ok: false, error: `${verb}-source-changed: inspect the source project before retrying` }
           storedGeometryNodes(fresh.project.nodes)
-          const size = resolveDefaultNodeSize(this.deps.settings().defaultNodeSizes?.editor, EDITOR_NODE_SIZE, NODE_MIN_SIZES.editor)
-          fresh.project.nodes.push({ id, kind: 'editor', position: placeRight(fresh.project, fresh.node, size),
-            size, ...editorNodeData(filePath), openedBy: sourceNodeId })
+          const nodeKind = kind === 'image' ? 'editor' : 'video'
+          const size = resolveDefaultNodeSize(this.deps.settings().defaultNodeSizes?.[nodeKind], kind === 'image' ? EDITOR_NODE_SIZE : VIDEO_NODE_SIZE, NODE_MIN_SIZES[nodeKind])
+          fresh.project.nodes.push({ id, kind: nodeKind, position: placeRight(fresh.project, fresh.node, size),
+            size, ...(kind === 'image' ? editorNodeData(filePath) : videoNodeData(filePath)), openedBy: sourceNodeId })
           const ropes = [...(fresh.project.ropes ?? [])]
           addEdge(ropes, sourceNodeId, id, 'ctrl')
           fresh.project.ropes = ropes
           editStarted = true
-          return { ok: true, message: `showing image ${id}`, result: { id } }
+          return { ok: true, message: `showing ${kind} ${id}`, result: { id } }
         })
         if (edited.saved) {
           this.ownership.record(id, { sourceNodeId, projectId: source.project.id })
@@ -1223,7 +1247,7 @@ export class HeadlessNodeFactory {
         }
         return edited.value
       } catch (error) {
-        return { ok: false, error: editStarted ? `show-image-save-uncertain: inspect list before repeating; ${String(error)}` : String(error) }
+        return { ok: false, error: editStarted ? `${verb}-save-uncertain: inspect list before repeating; ${String(error)}` : String(error) }
       }
     })
   }

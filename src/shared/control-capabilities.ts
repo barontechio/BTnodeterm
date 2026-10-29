@@ -12,7 +12,7 @@ export const CONTROL_SUPPORT = {
   'open-claude': 'partial',
   'open-agent': 'partial',
   'show-image': 'partial',
-  'show-video': 'unsupported',
+  'show-video': 'partial',
   'show-web': 'unsupported',
   'open-browser': 'unsupported',
   group: 'supported',
@@ -53,6 +53,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  'show-video': 'Local audio/video files; authenticated owner streaming with browser-dependent codec support. No SSH fallback.',
   'open-worktree': 'Local projects only; prepares shared paths and successful trust-gated setup before binding.',
   'close-worktree': 'Unbind keeps an existing checkout; removal requires owner confirmation and missing checkouts require recovery.',
   verify: 'Local Claude, Codex and Gemini reviewers; automatic release requires verified current-session state.',

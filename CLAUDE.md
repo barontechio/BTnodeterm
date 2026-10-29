@@ -35,6 +35,14 @@ returns its path. Unbind keeps files and sessions and refuses a missing/unreadab
 recovered. Removal still needs owner confirmation. `shared/cold-open.ts` supplies stored frame
 placement and cwd inheritance for both renderer and host opens.
 
+Audio/video formats and node data live in `shared/media.ts`. Server uses `core/media-references.ts`
+behind owner-only scoped RPCs and the authenticated `server/media.ts` HTTP route. References carry
+no URL path, remain reusable for seeking, expire unless renewed, and are revoked on client departure
+or explicit release. Every open rechecks the persisted local node, canonical path and inode, then
+streams from that checked descriptor with backpressure and cancellation. Format signatures, resource
+counts and pending I/O are bounded. HTTP session authentication is mandatory even with a valid
+reference. Desktop's native media protocol is unchanged; relay and SSH playback stay refused here.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

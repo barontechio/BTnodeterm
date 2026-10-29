@@ -80,6 +80,9 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
 ]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
+  IPC.mediaAllowScoped,
+  IPC.mediaRenew,
+  IPC.mediaRelease,
   IPC.projectSetupRun,
   IPC.projectSetupCancel,
   IPC.projectSetupConsentSubmit,

@@ -323,6 +323,7 @@ export async function initServerCanvasControl(
       projectIdsForNode: (id) => deps.workspaceStore.projectIdsForNode(id), service: deps.reportIssue
     }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),
     showImage: (sourceNodeId, args, verified) => factory.showImage(sourceNodeId, args, verified),
+    showVideo: (sourceNodeId, args, verified) => factory.showVideo(sourceNodeId, args, verified),
     board: (sourceNodeId, args) => factory.board(sourceNodeId, args),
     assign: (sourceNodeId, args) => factory.assign(sourceNodeId, args),
     geometry: (verb, sourceNodeId, args) => factory.geometry(verb, sourceNodeId, args),

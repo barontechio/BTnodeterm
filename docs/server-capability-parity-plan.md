@@ -26,6 +26,10 @@ the same core service in both editions; grouped Server opens inherit a verified 
 and automatic recovery of missing checkout sessions remain dependent on the owner confirmation
 and execution coordination work below. The PR 07 snapshot passed 24,275 tests with one obsolete
 shutdown-order source assertion; retaining the expected cleanup order fixes that assertion.
+The PR 08 snapshot passes all 24,288 tests (109 skipped) and both builds. Local audio/video
+streaming and `show-video` are connected through scoped, expiring owner references and authenticated
+HTTP Range responses. PR 09 is sequenced with host execution coordination before enabling it:
+the existing renderer `/branch` flow has no exclusion against restart/account changes.
 
 Baseline inspected on 2026-10-29:
 

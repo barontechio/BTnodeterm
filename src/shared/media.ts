@@ -20,3 +20,7 @@ export function mediaMime(path: string): string | undefined {
 /** A host media reference is bound to the persisted node that requested it. */
 export interface MediaScope { projectId: string; nodeId: string }
 export const VIDEO_NODE_SIZE = { width: 640, height: 420 }
+export function videoNodeData(filePath: string, sshFs?: boolean) {
+  return { title: filePath.split('/').pop() || 'video', color: '#bf5af2', group: null, filePath,
+    ...(sshFs ? { sshFs: true } : {}) }
+}

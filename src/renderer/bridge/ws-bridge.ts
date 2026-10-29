@@ -256,6 +256,19 @@ const namingFailed = (e: unknown): GitResult => ({
 /** Build the real `pty` / `workspace` / `projectSettings` / `settings` namespaces (plus the
  *  top-level `userDataDir`) over an RpcClient, mirroring the preload's
  *  invoke(→request)/send(→cast) split exactly. */
+export function buildMediaApi(client: RpcClient): Pick<NodeTerminalApi, 'media'> {
+  const tokenOf = (url: string): string => {
+    try { const parsed = new URL(url, 'http://media.local'); return parsed.pathname === '/media' ? parsed.searchParams.get('ref') ?? '' : '' } catch { return '' }
+  }
+  return { media: {
+    allow: (file, scope) => client.request(IPC.mediaAllowScoped, file, scope) as Promise<string>,
+    renew: (url) => client.request(IPC.mediaRenew, tokenOf(url)) as Promise<boolean>,
+    release: (url) => client.request(IPC.mediaRelease, tokenOf(url)) as Promise<void>,
+    allowSsh: async () => ({ ok: false, error: 'Playing media from an SSH host is not available in the browser.' }),
+    writeHtml: async () => { throw new Error('HTML previews require an isolated content origin configured on this host.') }
+  } }
+}
+
 export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'control'> {
   return {
     control: {
@@ -1506,6 +1519,7 @@ export async function installWsBridge(): Promise<boolean> {
   const api: NodeTerminalApi = {
     ...stubApi,
     ...buildControlApi(client),
+    ...buildMediaApi(client),
     ...buildTranscriptSearchApi(client),
     ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),

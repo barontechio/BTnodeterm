@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
   buildControlApi,
+  buildMediaApi,
   buildTranscriptSearchApi,
   buildBoardCommentDeliveryApi,
   buildFilesApi,
@@ -31,6 +32,21 @@ function fakeClient() {
     }
   }
 }
+
+describe('Server media protocol', () => {
+  it('uses scoped references and renews/releases the opaque token without passing URL paths', async () => {
+    const c = fakeClient()
+    const media = buildMediaApi(c as never).media
+    await media.allow('/clip.mp4', { projectId: 'p', nodeId: 'v' })
+    await media.renew!('/media?ref=opaque')
+    await media.release!('/media?ref=opaque')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.mediaAllowScoped, args: ['/clip.mp4', { projectId: 'p', nodeId: 'v' }] },
+      { kind: 'request', method: IPC.mediaRenew, args: ['opaque'] },
+      { kind: 'request', method: IPC.mediaRelease, args: ['opaque'] }
+    ])
+  })
+})
 
 describe('transcript search protocol', () => {
   it('uses an additive channel so an old host cannot silently ignore account scope', async () => {

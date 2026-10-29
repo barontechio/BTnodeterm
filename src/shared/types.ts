@@ -1741,8 +1741,11 @@ export interface FilesApi {
 }
 
 export interface MediaApi {
-  /** Allow an absolute local path to be served, and return its nt-media:// URL. */
-  allow(absPath: string): Promise<string>
+  /** Desktop returns nt-media://; Server requires a saved node scope and returns an HTTP reference. */
+  allow(absPath: string, scope?: import('./media').MediaScope): Promise<string>
+  /** Optional Server reference lifecycle; native protocol URLs need neither operation. */
+  renew?(url: string): Promise<boolean>
+  release?(url: string): Promise<void>
   /**
    * Allow a file that lives on an SSH project's HOST: main pulls it into a local cache over the
    * project's ControlMaster (skipped when the cached copy's size still matches the remote), then
