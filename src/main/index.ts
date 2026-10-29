@@ -5525,11 +5525,11 @@ app.on('before-quit', (e) => {
     return
   }
   quitting = true // from here on, window close-events must NOT be turned into hide
-  coreTeams?.stop()
-  coreTeams = null
   destroyNotchHud()
   backgroundTray?.destroy()
   backgroundTray = undefined
+  coreTeams?.stop()
+  coreTeams = null
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log
   // honest. Clearing the ref too keeps a hook edge that lands during the quit flush (the pty
   // teardown window below) from re-holding an assertion nothing will ever release.
