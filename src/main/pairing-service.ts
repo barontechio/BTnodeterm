@@ -109,7 +109,8 @@ async function mintRelayDevice(
               priorDeviceToken: body.priorDeviceToken
             }
       ),
-      signal: ctrl.signal
+      signal: ctrl.signal,
+      redirect: 'error'
     })
     if (!res.ok) return null
     const json = (await res.json().catch(() => ({}))) as Partial<RelayDeviceResponse>

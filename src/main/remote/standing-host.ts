@@ -154,7 +154,8 @@ async function mintHostToken(
       // popChallenge and popProof travel together or not at all: the backend treats a half-present
       // proof as pop_invalid, which would repeat on every retry and so stop phone access.
       body: JSON.stringify({ ...base, ...(proof ?? {}) }),
-      signal: ctrl.signal
+      signal: ctrl.signal,
+      redirect: 'error'
     })
     if (res.status === 403) {
       const refused = popRefusalOf(403, await res.json().catch(() => null))
