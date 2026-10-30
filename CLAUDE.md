@@ -94,6 +94,12 @@ Shells supply their own agent/askpass lifetimes, status and hook coordinates. Re
 flush before disconnect and re-owe a dropped trailing write. A transfer or remote read failure is
 never evidence that a host file is absent.
 
+`withGitRemoteResolver` preserves a request's Git destination through asynchronous operations
+without changing the native global fallback for existing callers. `GitService.registerIpc` accepts
+a sender-aware scope that captures a connection before the first await. Explicit local scopes
+must hide global remote state; disconnected or replaced remote targets must fail before local Git.
+Server's per-connection policy and connection-identity checks belong in its adapter.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

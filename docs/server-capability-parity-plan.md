@@ -78,6 +78,13 @@ Native/OpenSSH process runners and remote workspace reconciliation/throttling ar
 core services consumed by Desktop. Server routing and streaming transfers still require their
 separate PR 16 adapter and multi-client scope validation.
 
+A third independent upstream export, [SSH services #1322](https://github.com/eneskirca/nodeterm/pull/1322),
+is based directly on upstream/main and passes 24,166 tests (109 skipped), typecheck and both builds.
+The integrated SSH runner snapshot passes 24,379 tests (109 skipped) and both builds. A new optional
+Git request scope captures each caller's resolver through awaits, including an explicit local mode
+and an unavailable-remote refusal. The Server adapter still needs connection identity, project
+routing and transfer validation before SSH is enabled.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

@@ -195,6 +195,11 @@ process-wide child gate and native/OpenSSH backend choice. Inject the owning she
 askpass services. Remote workspace reconciliation/throttling is shared in `core/remote-workspace-io.ts`;
 flush its trailing writes before ending masters, and preserve checked absence versus read failure.
 
+Multi-client Git must capture its remote resolver per request with `withGitRemoteResolver`.
+`GitService.registerIpc` accepts an optional sender-aware request scope. An explicit local resolver
+hides the native global fallback; an unavailable remote must refuse before any local command.
+The host adapter must also revalidate its captured connection identity before each remote effect.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not
