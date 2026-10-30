@@ -73,18 +73,24 @@ export function isMuxControlCommand(args: readonly string[]): boolean {
  * released, including when the work throws — the runner this wraps resolves rather than rejects,
  * but a limiter that can leak a permit is a limiter that eventually wedges a whole project.
  */
+export class SshChildCancelledError extends Error {
+  constructor() { super('ssh-queued-command-cancelled') }
+}
+
 export class SshChildGate {
   private active = new Map<string, number>()
-  private waiting = new Map<string, (() => void)[]>()
+  private waiting = new Map<string, Array<{ grant(): void }>>()
 
   constructor(private limit: number = SSH_CHILD_CONCURRENCY) {}
 
   /** Run `fn` under this argv's budget. Mux control commands bypass the queue entirely. */
-  async run<T>(args: readonly string[], fn: () => Promise<T>): Promise<T> {
+  async run<T>(args: readonly string[], fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw new SshChildCancelledError()
     if (isMuxControlCommand(args)) return fn()
     const key = controlPathOf(args) ?? ''
-    await this.acquire(key)
+    await this.acquire(key, signal)
     try {
+      if (signal?.aborted) throw new SshChildCancelledError()
       return await fn()
     } finally {
       this.release(key)
@@ -101,16 +107,33 @@ export class SshChildGate {
     return this.waiting.get(controlPath)?.length ?? 0
   }
 
-  private acquire(key: string): Promise<void> {
+  private acquire(key: string, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new SshChildCancelledError())
     const n = this.active.get(key) ?? 0
     if (n < this.limit) {
       this.active.set(key, n + 1)
       return Promise.resolve()
     }
-    return new Promise<void>((resolve) => {
+    return new Promise<void>((resolve, reject) => {
+      let waiting = true
+      const entry = { grant: () => {
+        waiting = false; signal?.removeEventListener('abort', cancel); resolve()
+      } }
+      const cancel = () => {
+        if (!waiting) return
+        waiting = false
+        const queue = this.waiting.get(key)
+        const index = queue?.indexOf(entry) ?? -1
+        if (queue && index >= 0) queue.splice(index, 1)
+        if (queue?.length === 0) this.waiting.delete(key)
+        signal?.removeEventListener('abort', cancel)
+        reject(new SshChildCancelledError())
+      }
       const q = this.waiting.get(key)
-      if (q) q.push(resolve)
-      else this.waiting.set(key, [resolve])
+      if (q) q.push(entry)
+      else this.waiting.set(key, [entry])
+      signal?.addEventListener('abort', cancel, { once: true })
+      if (signal?.aborted) cancel()
     })
   }
 
@@ -121,7 +144,7 @@ export class SshChildGate {
       if (q && q.length === 0) this.waiting.delete(key)
       // The permit is handed straight to the waiter — `active` never dips, so a burst cannot
       // slip past the limit in the gap between one child finishing and the next starting.
-      next()
+      next.grant()
       return
     }
     const n = (this.active.get(key) ?? 1) - 1

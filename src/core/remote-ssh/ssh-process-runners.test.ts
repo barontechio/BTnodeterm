@@ -87,4 +87,18 @@ describe('SSH execution destination at the queue boundary', () => {
     expect(pending).toHaveLength(1); pending[0]()
     expect(await ordinary).toEqual({ code: 0, stdout: 'executed' })
   })
+
+  it('settles a cancelled queued request without waiting for the occupied transport slots', async () => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '0')
+    const runners = factory(); const controller = new AbortController()
+    const running = Array.from({ length: SSH_CHILD_CONCURRENCY }, () => runners.run(args))
+    const queued = runners.withQueuedExecutionCheck(() => true, () => runners.run(args), { signal: controller.signal })
+    await Promise.resolve(); await Promise.resolve()
+    expect(pending).toHaveLength(SSH_CHILD_CONCURRENCY)
+    controller.abort()
+    expect(await queued).toEqual({ code: 255, stdout: '' })
+    expect(pending).toHaveLength(SSH_CHILD_CONCURRENCY)
+    for (const done of pending) done()
+    await Promise.all(running)
+  })
 })

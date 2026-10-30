@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { findSshBinary, nativeMux, useNativeSsh } from './native/native-runtime'
 import { runScpArgv, runSshArgv, startNativeMaster } from './native/native-invoke'
 import { findExecutableSync, shellPathNow } from '../exec-path'
-import { SshChildGate } from './ssh-child-gate'
+import { SshChildGate, SshChildCancelledError } from './ssh-child-gate'
 import { probeAgentSockToPin } from './agent-probe'
 import { MASTER_STDERR_CAP } from './ssh-project-limits'
 import type { SshProjectRunners } from './ssh-project'
@@ -48,11 +48,11 @@ export interface SshProcessRunnerOptions extends Omit<SshProjectRunners, Transpo
 }
 export interface ScopedSshProjectRunners extends SshProjectRunners {
   /** Host-only request identity for queued commands; composes with transport generation checks. */
-  withQueuedExecutionCheck<T>(current: () => boolean, work: () => Promise<T> | T): Promise<T>
+  withQueuedExecutionCheck<T>(current: () => boolean, work: () => Promise<T> | T, options?: { signal?: AbortSignal }): Promise<T>
 }
-type CommandScope = { active: boolean; current(): boolean; parent?: CommandScope }
+type CommandScope = { active: boolean; current(): boolean; parent?: CommandScope; abort: AbortController }
 function scopeCurrent(scope: CommandScope | undefined): boolean {
-  try { return !scope || scope.active && scope.current() === true && scopeCurrent(scope.parent) }
+  try { return !scope || scope.active && !scope.abort.signal.aborted && scope.current() === true && scopeCurrent(scope.parent) }
   catch { return false }
 }
 /** OpenSSH/native transport composition shared by the native and headless shells. */
@@ -62,11 +62,19 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
   const scopes = new AsyncLocalStorage<CommandScope>()
   return {
     ...rest,
-    withQueuedExecutionCheck: async (current, work) => {
-      const scope: CommandScope = { current, active: true, parent: scopes.getStore() }
-      if (!scopeCurrent(scope)) throw new Error('ssh-request-stale')
-      try { return await scopes.run(scope, work) }
-      finally { scope.active = false }
+    withQueuedExecutionCheck: async (current, work, options) => {
+      const scope: CommandScope = { current, active: true, parent: scopes.getStore(), abort: new AbortController() }
+      const cleanups: Array<() => void> = []
+      for (const signal of [scope.parent?.abort.signal, options?.signal]) {
+        if (!signal) continue
+        const cancel = () => scope.abort.abort()
+        if (signal.aborted) cancel()
+        else { signal.addEventListener('abort', cancel, { once: true }); cleanups.push(() => signal.removeEventListener('abort', cancel)) }
+      }
+      try {
+        if (!scopeCurrent(scope)) throw new Error('ssh-request-stale')
+        return await scopes.run(scope, work)
+      } finally { scope.active = false; scope.abort.abort(); for (const cleanup of cleanups) cleanup() }
     },
     spawnMaster: native ? (args) => startNativeMaster(nativeMux(), args) : (args, env) => {
       // Capture the master's stderr (stdin/stdout stay ignored) so a failed connect can report the
@@ -180,6 +188,9 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
             child.stdin?.end(stdin)
           }
         })
+      }, scope?.abort.signal).catch((error: unknown) => {
+        if (error instanceof SshChildCancelledError) return { code: 255, stdout: '' }
+        throw error
       })
     },
     // Deliberately NOT through `sshChildGate`: after a sleep the gate is typically full of children
