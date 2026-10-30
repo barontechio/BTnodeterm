@@ -316,6 +316,7 @@ export const IPC = {
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see
    *  src/shared/canvas-order.ts). Args (both directions): [projectId: string, CanvasMutation]. */
   canvasMut: 'canvas:mut',
+  canvasMutationRejected: 'canvas:mutation-rejected',
   /** Which projects this core's canvas authority governs (request → `string[]`): a client publishes
    *  its canvas ops for them even when nobody else is attached, because the authority writes only
    *  what it hears as ops (docs/hosted-team-relay.md). Server Edition only; the desktop answers none. */

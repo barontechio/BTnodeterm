@@ -506,6 +506,7 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
  * sends one is not a relay tab doing its job.
  */
 export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
+  IPC.canvasMutationRejected,
   // A whole-workspace write from a peer would replace the host's other projects.
   IPC.workspaceSave,
   // Moving a project's storage writes and deletes host files (issue #1145); host-only.

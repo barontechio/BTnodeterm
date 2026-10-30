@@ -984,6 +984,7 @@ export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas
   return {
     canvas: {
       mutate: (projectId, mutation) => client.cast(IPC.canvasMut, projectId, mutation),
+      onMutationRejected: (listener) => client.subscribe(IPC.canvasMutationRejected, listener as Listener),
       onMutation: (listener) => client.subscribe(IPC.canvasMut, listener as Listener)
     }
   }

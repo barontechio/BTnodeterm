@@ -1509,6 +1509,9 @@ export function Canvas() {
   useEffect(() => session.api.pty.onInputBlocked?.(() => {
     setNotice({ kind: 'info', text: 'This terminal is completing another action. Keyboard input was not sent; try again when it finishes.' })
   }), [session.api])
+  useEffect(() => session.api.canvas.onMutationRejected?.((_projectId, message) => {
+    setNotice({ kind: 'error', text: message, sticky: true })
+  }), [session.api])
   const [zoomPct, setZoomPct] = useState(100)
   // Canvas lock (bottom-left Controls): freezes the CAMERA against gestures, namely pan (drag +
   // scroll) and zoom (pinch / Cmd+wheel / double-click). Nodes stay draggable and connectable:

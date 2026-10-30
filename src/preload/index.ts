@@ -663,6 +663,7 @@ const api: NodeTerminalApi = {
   // Our own mutation coming back is the ACK that tells us where it landed in that order; the renderer
   // recognizes it by `src` and does not re-apply it (src/shared/canvas-order.ts).
   canvas: {
+    onMutationRejected: subscribe<[string, string]>(IPC.canvasMutationRejected),
     mutate: (projectId, mutation) => ipcRenderer.send(IPC.canvasMut, projectId, mutation),
     onMutation: (listener) => {
       const handler = (

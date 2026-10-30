@@ -78,6 +78,9 @@ describe('access policy', () => {
     expect(decideAccess('req', IPC.boardLogAppend, ['P', entry('event')], ctx('editor'))).toEqual({ allow: true })
   })
   it('outbound: non-shared canvas and agent events are dropped for non-editors only', () => {
+    const refusal = (project: string) => JSON.stringify({ t: 'ev', channel: IPC.canvasMutationRejected, args: [project, 'Recovery pending.'] })
+    expect(filterOutboundEvent(refusal('P'), ctx('viewer'))).toBe(true)
+    expect(filterOutboundEvent(refusal('Q'), ctx('commenter'))).toBe(false)
     const mutQ = JSON.stringify({ t: 'ev', channel: IPC.canvasMut, args: ['Q', {}] })
     const statusN2 = JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId: 'n2' }] })
     const statusN1 = JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId: 'n1' }] })

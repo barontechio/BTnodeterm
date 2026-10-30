@@ -1981,3 +1981,11 @@ Resolve dangling symlink ancestors too: an alias to a removed checkout must not 
 Unverifiable paths refuse while recovery facts exist; an empty journal adds no path-resolution IO.
 Existing live co-attachments remain usable. Binding admission and the removal/recovery UI still
 belong to the worktree domain adapter.
+
+Client canvas admission must answer optimistic edits. `setClientMutationAdmission` retires a
+refused sender's pending slot with a sender-only acknowledgement; that value reaches neither the
+authority nor another client. Publish the canonical correction separately, without the sender's
+source tag and with causality after the refusal, then send an addressed project-scoped notice.
+This preserves ordering across pending edits and optimistic deletes. A missing canonical target
+requires an explicit reload notice. The hook grants no backend or storage rights: domain/store
+checks still precede every durable write and physical effect.

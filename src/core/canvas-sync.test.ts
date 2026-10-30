@@ -6,6 +6,7 @@ import {
   publishCanvasMutation,
   reflectTargets,
   setReflectedListener,
+  setClientMutationAdmission,
   stampMutation,
   isCanvasMutation,
   MUTATION_MAX_BYTES
@@ -70,8 +71,57 @@ beforeEach(() => {
   initCanvasSync()
 })
 afterEach(() => {
+  setClientMutationAdmission(null)
   setReflectedListener(null)
   resetPlatformForTests()
+})
+
+describe('host admission of optimistic client mutations', () => {
+  it.each(['upsert', 'remove'] as const)('retires a refused %s and converges to the canonical node without sending the refused value to peers', (op) => {
+    t.setClients([1, 2]); t.p.isOwnerClient = (id) => id === 1
+    const canonical = { ...node('n1', 10), pendingLaunch: { after: [], command: 'owner-only recovery', manualOnly: true } }
+    setClientMutationAdmission(() => ({ reason: 'Recovery is pending.', canonical: { op: 'upsert', node: canonical } }))
+    const observed: CanvasMutation[] = []
+    setReflectedListener((_id, mutation) => { observed.push(mutation) })
+    const sender = createCanvasOrder('sender'); const peer = createCanvasOrder('peer')
+    const intent = sender.stamp(op === 'remove' ? { op, id: 'n1', src: 'sender' } : { op, node: node('n1', 999), src: 'sender' })
+    sender.onLocal(intent, 'p'); t.cast(1, 'p', intent)
+    const own = t.sent.filter((event) => event.to === 1 && event.channel === IPC.canvasMut).map((event) => event.args[1] as CanvasMutation)
+    const other = t.sent.filter((event) => event.to === 2 && event.channel === IPC.canvasMut).map((event) => event.args[1] as CanvasMutation)
+    expect(own).toHaveLength(2); expect(sender.accept(own[0], 'p')).toBe(false)
+    expect(sender.accept(own[1], 'p')).toBe(true); expect(peer.accept(other[0], 'p')).toBe(true)
+    expect(other).toHaveLength(1)
+    expect(other[0]).toMatchObject({ op: 'upsert', node: { position: { x: 10 } } })
+    expect((other[0] as Extract<CanvasMutation, { op: 'upsert' }>).node.pendingLaunch).toBeUndefined()
+    expect(own[1]).toMatchObject({ node: { pendingLaunch: { command: 'owner-only recovery' } } })
+    expect(observed).toHaveLength(1); expect(observed[0]).toMatchObject({ node: { position: { x: 10 } } })
+    expect(t.sent.filter((event) => event.channel === IPC.canvasMutationRejected)).toEqual([{ to: 1, channel: IPC.canvasMutationRejected, args: ['p', 'Recovery is pending.'] }])
+  })
+
+  it('converges after multiple local edits remain pending for the same node', () => {
+    t.setClients([1]); const sender = createCanvasOrder('sender')
+    setClientMutationAdmission(() => ({ reason: 'Reserved.', canonical: { op: 'upsert', node: node('n1', 10) } }))
+    const attempts = [20, 30].map((x) => sender.stamp({ op: 'upsert' as const, node: node('n1', x), src: 'sender' }))
+    attempts.forEach((intent) => sender.onLocal(intent)); attempts.forEach((intent) => t.cast(1, 'p', intent))
+    const frames = t.sent.filter((event) => event.channel === IPC.canvasMut).map((event) => event.args[1] as CanvasMutation)
+    const accepted = frames.filter((frame) => sender.accept(frame, 'p'))
+    expect(accepted.at(-1)).toMatchObject({ node: { position: { x: 10 } } })
+    expect(accepted).toHaveLength(1)
+  })
+
+  it('refuses host lookup failures and never corrects a different node', () => {
+    t.setClients([1, 2])
+    setClientMutationAdmission(() => { throw new Error('lookup unavailable') })
+    t.cast(1, 'p', { op: 'remove', id: 'n1', src: 'sender' })
+    expect(t.sent.some((event) => event.to === 2)).toBe(false)
+    expect(t.sent.some((event) => event.channel === IPC.canvasMutationRejected)).toBe(true)
+    t.sent.length = 0
+    setClientMutationAdmission(() => ({ reason: 'Reserved.', canonical: { op: 'upsert', node: node('another') } }))
+    t.cast(1, 'p', { op: 'remove', id: 'n1', src: 'sender' })
+    expect(t.sent.some((event) => event.to === 2)).toBe(false)
+    // Core transactions have their own admission before publication; this hook grants no rights.
+    expect(publishCanvasMutation('p', { op: 'upsert', node: node('core-created') })).toBe(true)
+  })
 })
 
 describe('reflectTargets', () => {

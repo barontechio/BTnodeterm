@@ -491,6 +491,7 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.relayHostedSharedChanged,
   // Server→client events (see the doc comment): what a non-editor receives is VIEW_EVENTS.
   IPC.ptyInputBlocked,
+  IPC.canvasMutationRejected,
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
   IPC.workspaceExternalChange,
@@ -558,6 +559,7 @@ export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
   // Addressed to a typing client; the only payload is the node whose input was refused.
   [IPC.ptyInputBlocked]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.canvasMut]: (a, ctx) => sharedProject(a[0], ctx),
+  [IPC.canvasMutationRejected]: (a, ctx) => sharedProject(a[0], ctx),
   [IPC.agentStatus]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.agentSubagentActivity]: (a, ctx, owners) => {
     const toolUseId = field(a[0], 'toolUseId')

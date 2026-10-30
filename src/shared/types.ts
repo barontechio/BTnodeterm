@@ -3546,12 +3546,14 @@ export interface ContextApi {
 export interface CanvasApi {
   /**
    * Publish one local node mutation for `projectId` (a project IS a canvas — a mutation is only
-   * ever applied to the canvas it was made on). Fire-and-forget; the reflector fans it out to every
-   * OTHER attached client and never echoes it back to the sender.
+   * ever applied to the canvas it was made on). The reflector echoes its ordered acknowledgement.
+   * A host refusal retires that pending slot, then publishes the canonical state and a notice.
    */
   mutate(projectId: string, mutation: CanvasMutation): void
-  /** Fires with each PEER's mutation (project id + mutation). Returns unsubscribe. */
+  /** Fires with ordered peer/core mutations and our acknowledgements. Returns unsubscribe. */
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
+  /** Addressed host refusal; a canonical correction may arrive on onMutation. Older hosts omit it. */
+  onMutationRejected?(listener: (projectId: string, message: string) => void): () => void
 }
 
 /**

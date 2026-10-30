@@ -54,6 +54,45 @@ import {
 import { sanitizeInboundMutation } from '../shared/node-exec'
 import { type ClientId } from '../shared/presence'
 import type { CanvasMutation, MutationStamp } from '../shared/types'
+import { oneLine } from '../shared/one-line'
+
+export interface ClientMutationRejection { reason: string; canonical?: CanvasMutation }
+type ClientMutationAdmission = (projectId: string, mutation: CanvasMutation) => ClientMutationRejection | null
+const clientAdmissions = new WeakMap<CorePlatform, ClientMutationAdmission>()
+
+/** Host-owned domain admission before a client op enters the total order. Core publishers keep
+ * their own transaction checks. A refused optimistic edit receives a separate canonical op,
+ * without its source tag, plus an addressed notice; it must not disappear without an answer.
+ */
+export function setClientMutationAdmission(admit: ClientMutationAdmission | null): void {
+  if (admit) clientAdmissions.set(platform(), admit)
+  else clientAdmissions.delete(platform())
+}
+
+function clientMutationRefused(p: CorePlatform, senderId: number, projectId: string, mutation: CanvasMutation, fromOwner: boolean): boolean {
+  const admit = clientAdmissions.get(p)
+  if (!admit) return false
+  let rejection: ClientMutationRejection | null
+  try { rejection = admit(projectId, mutation) }
+  catch { rejection = { reason: 'The host could not validate this edit. Reload the project before retrying.' } }
+  if (!rejection) return false
+  // Retire this sender's optimistic pending slot first. The refused value reaches neither the
+  // authority nor another client. FIFO then lets the separate correction supersede that value.
+  fanOutMutation({ clientIds: () => [senderId], sendTo: p.sendTo.bind(p), isOwnerClient: p.isOwnerClient?.bind(p) },
+    projectId, stampMutation(mutation, ++seq), fromOwner)
+  const target = mutation.op === 'upsert' ? mutation.node.id : mutation.op === 'remove' ? mutation.id : undefined
+  const correction = isCanvasMutation(rejection.canonical) ? sanitizeCanvasMutation(rejection.canonical, true) : null
+  const correctedTarget = correction?.op === 'upsert' ? correction.node.id : correction?.op === 'remove' ? correction.id : undefined
+  if (correction && target && correctedTarget === target && isCanvasMutation(correction)) {
+    delete correction.src
+    correction.seen = seq
+    const stamped = stampMutation(correction, ++seq)
+    tellListener(projectId, stamped)
+    fanOutMutation(p, projectId, stamped, true)
+  }
+  p.sendTo(senderId, IPC.canvasMutationRejected, projectId, oneLine(rejection.reason || 'The host refused this edit. Reload the project.').slice(0, 512))
+  return true
+}
 
 // The ingest guard (`isCanvasMutation`) and its size cap live in `shared`, because the PUBLISHER
 // must reach the same verdict BEFORE it casts: a mutation this reflector refuses is dropped
@@ -236,6 +275,7 @@ export function initCanvasSync(): void {
     const fromOwner = p.isOwnerClient?.(senderId) === true
     const clean = sanitizeCanvasMutation(mutation, fromOwner)
     if (!clean) return
+    if (clientMutationRefused(p, senderId, projectId, clean, fromOwner)) return
     const stamped = stampMutation(clean, ++seq)
     tellListener(projectId, stamped)
     fanOutMutation(
