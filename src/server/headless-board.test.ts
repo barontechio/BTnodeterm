@@ -143,4 +143,30 @@ describe('Server board automation', () => {
     expect(await factory.showImage('src', { path: imagePath }, true)).toMatchObject({ ok: false, error: expect.stringContaining('host-refused') })
     expect((await read()).nodes).toHaveLength(5); expect(ops).toEqual([])
   })
+
+  it('refuses a source path replaced after open and closes its descriptor without saving a node', async () => {
+    const file = path.join(dir, 'raced.png'); fs.writeFileSync(file, 'original image')
+    const before = await store.load(); const open = fs.promises.open.bind(fs.promises)
+    let swapped = false; let previewHandle: Awaited<ReturnType<typeof fs.promises.open>> | undefined
+    const intercepted = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+      const handle = await open(...args)
+      if (String(args[0]) === file && !swapped) {
+        previewHandle = handle; swapped = true; fs.renameSync(file, `${file}.old`); fs.writeFileSync(file, 'replacement')
+      }
+      return handle
+    })
+    try {
+      expect(await factory.showImage('src', { path: file }, true)).toMatchObject({ ok: false, error: expect.stringContaining('file-refused') })
+      expect(swapped).toBe(true); expect(previewHandle?.fd).toBe(-1)
+      expect(await store.load()).toEqual(before); expect(ops).toEqual([])
+    } finally { intercepted.mockRestore() }
+  })
+
+  it.skipIf(process.platform === 'win32')('refuses a final symbolic link without creating an image node', async () => {
+    const file = path.join(dir, 'actual.png'); fs.writeFileSync(file, 'image')
+    const link = path.join(dir, 'linked.png'); fs.symlinkSync(file, link)
+    const before = await store.load()
+    expect(await factory.showImage('src', { path: link }, true)).toMatchObject({ ok: false, error: expect.stringContaining('file-refused') })
+    expect(await store.load()).toEqual(before)
+  })
 })

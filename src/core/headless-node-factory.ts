@@ -1209,22 +1209,23 @@ export class HeadlessNodeFactory {
       const filePath = resolvePath(source.project, source.node)
       if (!filePath) return { ok: false, error: `${verb}-path-refused: use an absolute path when the source has no absolute cwd` }
       if (kind === 'image' ? !isImagePath(filePath) : !mediaMime(filePath)) return { ok: false, error: `${verb}-type-refused: this file type has no ${label} preview` }
+      // Inspect the opened descriptor; a path stat/access before open can become stale.
       try {
-        const stat = await fs.stat(filePath)
-        if (!stat.isFile() || (kind === 'image' && stat.size > FS_READ_BINARY_MAX_BYTES)) return { ok: false, error: `${verb}-file-refused: requires a regular ${label} file${kind === 'image' ? ' within the binary preview size limit' : ''}` }
-        await fs.access(filePath, fs.constants.R_OK)
-      } catch { return { ok: false, error: `${verb}-file-refused: ${label} is missing or unreadable` } }
-      if (kind === 'video') {
+        const handle = await fs.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
         try {
-          const handle = await fs.open(filePath, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
-          try {
-            if (!(await handle.stat()).isFile()) return { ok: false, error: 'show-video-file-refused: requires a regular media file' }
+          const stat = await handle.stat()
+          const named = await fs.lstat(filePath)
+          if (!stat.isFile() || !named.isFile() || (stat.ino !== 0 && (stat.dev !== named.dev || stat.ino !== named.ino)) ||
+            (kind === 'image' && stat.size > FS_READ_BINARY_MAX_BYTES)) {
+            return { ok: false, error: `${verb}-file-refused: requires a regular ${label} file${kind === 'image' ? ' within the binary preview size limit' : ''}` }
+          }
+          if (kind === 'video') {
             const bytes = Buffer.alloc(32)
             const read = await handle.read(bytes, 0, bytes.length, 0)
             if (!matchesMediaSignature(mediaMime(filePath)!, bytes.subarray(0, read.bytesRead))) return { ok: false, error: 'show-video-type-refused: media signature does not match the file type' }
-          } finally { await handle.close() }
-        } catch { return { ok: false, error: 'show-video-file-refused: media is unreadable or a symbolic link' } }
-      }
+          }
+        } finally { await handle.close() }
+      } catch { return { ok: false, error: `${verb}-file-refused: ${label} is unreadable or a symbolic link` } }
       const id = nextId(kind === 'image' ? 'editor' : 'video')
       let editStarted = false
       try {
