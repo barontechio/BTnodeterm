@@ -14,7 +14,7 @@ import type { CorePlatform } from '../core/platform'
 interface Dependencies {
   platform: Pick<CorePlatform, 'clientIds' | 'isOwnerClient'>
   enabled: boolean
-  workspace: Pick<WorkspaceStore, 'projectIdsForNode' | 'getNodeResolved' | 'projectTargetInfo' | 'sshProjectIdForNode'>
+  workspace: Pick<WorkspaceStore, 'projectIdsForNode' | 'getNodeForHostAction' | 'projectTargetInfo' | 'sshProjectIdForNode' | 'relayNodePlacements'>
   pty: Pick<PtyManager, 'sshRemoteForNode'>
   settings(): Settings
   sessionOf(nodeId: string): string | undefined
@@ -43,10 +43,11 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     finally { abort.abort(); unsubscribe() }
   }
   const isRemoteNode = (id: string) => !!deps.workspace.sshProjectIdForNode(id) ||
-    isRemoteSessionNode(deps.workspace.getNodeResolved(id)) || !!deps.pty.sshRemoteForNode(id)
+    !!deps.pty.sshRemoteForNode(id) || deps.workspace.relayNodePlacements(id).some((p) =>
+      !!p.projectServer || isRemoteSessionNode(p.node))
   const supported = (agentId: string | undefined, nodeId: string | undefined) => {
     if (!deps.enabled || !nodeId) return false
-    const node = deps.workspace.getNodeResolved(nodeId)
+    const node = deps.workspace.getNodeForHostAction(nodeId)
     const ids = deps.workspace.projectIdsForNode(nodeId)
     if (ids.length !== 1 || !deps.workspace.projectTargetInfo(ids[0])?.ssh) return false
     return !!node?.agentId && capabilityAgentId(node.agentId) === 'claude' &&
@@ -56,7 +57,7 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     if (!isRemoteNode(nodeId)) return undefined
     if (!supported(undefined, nodeId)) return null
     const ids = deps.workspace.projectIdsForNode(nodeId)
-    const node = deps.workspace.getNodeResolved(nodeId)
+    const node = deps.workspace.getNodeForHostAction(nodeId)
     const project = ids.length === 1 ? deps.workspace.projectTargetInfo(ids[0]) : null
     if (!project?.ssh || !node || node.kind !== 'terminal' || node.pendingLaunch) return null
     const ref = deps.ssh.refForProject(ids[0])

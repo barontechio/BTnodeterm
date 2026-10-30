@@ -145,6 +145,19 @@ describe('confirmed host node write', () => {
     expect(send).not.toHaveBeenCalled(); expect(execution.isBusy('target')).toBe(false)
   })
 
+  it('refuses a machine-local held launch armed after approval during pane inspection', async () => {
+    broker.connect(1)
+    paneOwner.mockImplementationOnce(async () => owner).mockImplementationOnce(async () => {
+      await change((target) => { target.pendingLaunch = { after: [], command: 'claude --resume elsewhere', executor: 'server' } })
+      return owner
+    })
+    const pending = run(); approve(await prompt())
+    expect(await pending).toMatchObject({ ok: false, result: { outcome: 'refused' } })
+    expect(send).not.toHaveBeenCalled()
+    expect(workspace.getNodeResolved('target')?.pendingLaunch).toBeUndefined()
+    expect(workspace.getNodeForHostAction('target')?.pendingLaunch?.command).toBe('claude --resume elsewhere')
+  })
+
   it('reports uncertainty after owner departure during a dispatch and accepts a normal hook state transition', async () => {
     broker.connect(1); const hold = deferred()
     send.mockImplementationOnce(async () => { await hold.promise; return { sent: true } })

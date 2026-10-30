@@ -33,7 +33,7 @@ import {
 } from '../shared/project-settings'
 import { readProjectCapabilities, type ProjectCapability } from '../shared/project-capabilities'
 import type { CapabilityAckMap } from './project-capability-consent'
-import { carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
+import { applyLocalNodeExec, carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
 import { collisionSeed, derivedProjectId, freshProjectId } from '../shared/project-id'
 import {
   pruneLayoutViewports,
@@ -145,7 +145,7 @@ const contentHash = (content: string): string => createHash('sha256').update(con
  * migrated entry answers with its own `localExec`; an entry still owed the one-time migration also
  * hoists what its file carried from before the trust boundary (@shared/node-exec).
  */
-function localExecOverlay(e: IndexEntryV3, f: ProjectFileV1): LocalNodeExecMap | undefined {
+function localExecOverlay(e: IndexEntryV3, f: Pick<ProjectFileV1, 'nodes'>): LocalNodeExecMap | undefined {
   if (e.execMigrated) return e.localExec
   const hoisted = hoistLegacyNodeExec(f.nodes)
   return hoisted ? { ...hoisted, ...e.localExec } : e.localExec
@@ -2437,6 +2437,20 @@ export class WorkspaceStore {
     if (!hit) return undefined
     if (hit.ssh) return routeSshProjectNode(hit.node, hit.ssh)
     return hit.root ? resolveNodes([hit.node], hit.root)[0] : hit.node
+  }
+
+  /** Host action snapshot, including this machine's exec overlay. Never a shared/wire record.
+   * Matches load's trust rules without disk IO, migration bookkeeping or first-project ambiguity.
+   */
+  getNodeForHostAction(nodeId: string): CanvasNodeState | undefined {
+    const ids = this.projectIdsForNode(nodeId)
+    if (ids.length !== 1) return undefined
+    const entry = this.index?.entries.find((e) => (e.project?.id ?? e.id) === ids[0])
+    const hit = this.findNode(nodeId)
+    if (!entry || !hit) return undefined
+    const owned = entry.project ? hit.node : applyLocalNodeExec([hit.node], localExecOverlay(entry, { nodes: [hit.node] }))[0]
+    const resolved = hit.ssh ? routeSshProjectNode(owned, hit.ssh) : hit.root ? resolveNodes([owned], hit.root)[0] : owned
+    return structuredClone(resolved)
   }
 
   private findNode(

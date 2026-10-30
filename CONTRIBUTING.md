@@ -1926,3 +1926,9 @@ ALS through `NodeExecutionCoordinator.backend` after dispatch validation. Only t
 may create `backendCallback` wrappers; they retain physical-generation checks and competing-action
 fences when later invoked. Application promises stay action-bound and cannot use an expired claim
 to start a backend. Never expose these host internals as a callback RPC or use them for user input.
+
+Host execution decisions use `WorkspaceStore.getNodeForHostAction`, a unique-node, cloned snapshot
+that reapplies this machine's exec overlay with the same trust rules as `load`. Shared records and
+`getNodeResolved` deliberately omit held commands/shell fields and cannot prove their absence.
+Keep this accessor internal; it does not change shared serialization or create a wire API. Remote
+classification still examines every saved placement, even when ambiguity prevents an action snapshot.

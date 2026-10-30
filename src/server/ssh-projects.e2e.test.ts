@@ -92,7 +92,8 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
         title: 'Remote', cwd: remote, color: '#000', group: null, position: { x: 0, y: 0 }, size: { width: 640, height: 440 } }
       transcripts = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings, sessionOf: () => sid,
         pty: { sshRemoteForNode: () => undefined }, ssh: service, workspace: {
-          projectIdsForNode: () => savedTarget ? ['fixture'] : [], getNodeResolved: () => node,
+          projectIdsForNode: () => savedTarget ? ['fixture'] : [], getNodeForHostAction: () => node,
+          relayNodePlacements: () => [{ projectId: 'fixture', node }],
           sshProjectIdForNode: () => 'fixture', projectTargetInfo: () => savedTarget ? { name: 'Fixture', ssh: savedTarget } : null
         } })
       registerTranscriptIpc({ rpcScope: transcripts.rpcScope, isRemoteNode: transcripts.isRemoteNode,

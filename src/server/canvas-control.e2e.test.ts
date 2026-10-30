@@ -91,6 +91,14 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBe('Owner session title')
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'private')).toBeNull()
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude')).toBeNull()
+      const armed = await request(IPC.workspaceLoad) as Awaited<ReturnType<WorkspaceStore['load']>>
+      const source = armed.projects.find((project) => project.id === 'p')!.nodes.find((node) => node.id === 'source')!
+      source.pendingLaunch = { after: [], command: 'claude --resume another-session', executor: 'server' }
+      await request(IPC.workspaceSave, armed)
+      expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBeNull()
+      delete source.pendingLaunch
+      await request(IPC.workspaceSave, armed)
+      expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBe('Owner session title')
       expect(await request(IPC.licenseStatus)).toMatchObject({ active: false })
       expect(await request(IPC.watchLinkCreate, { nodeId: 'source', role: 'viewer', ttlSeconds: 3600, label: 'Fixture', title: 'Builder' })).toEqual({ ok: false, error: 'not-entitled' })
       await request(IPC.ownerConfirmationConnect)

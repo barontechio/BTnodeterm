@@ -12,7 +12,7 @@ import type { WorkspaceStore } from './workspace-store'
 
 interface Runtime { agentId?: string; sessionId?: string; state?: AgentState; verified: boolean }
 interface Dependencies {
-  workspace: Pick<WorkspaceStore, 'load' | 'persistedCanvases' | 'projectTargetInfo'>
+  workspace: Pick<WorkspaceStore, 'load' | 'persistedCanvases' | 'projectTargetInfo' | 'getNodeForHostAction'>
   pty: Pick<PtyManager, 'nodeExecutionIdentity' | 'runNodeAction' | 'paneOwner' | 'sendToEmptyPrompt'>
   confirmations: Pick<OwnerConfirmationBroker, 'request'>
   settings(): Settings
@@ -36,7 +36,11 @@ export class ConfirmedNodeWrite {
   private cachedWorkspace(): Workspace {
     const projects = this.deps.workspace.persistedCanvases().flatMap((canvas) => {
       const info = this.deps.workspace.projectTargetInfo(canvas.id)
-      return info ? [{ ...canvas, ...info, color: '', viewport: { x: 0, y: 0, zoom: 1 } }] : []
+      const nodes = canvas.nodes.flatMap((node) => {
+        const owned = this.deps.workspace.getNodeForHostAction(node.id)
+        return owned ? [owned] : []
+      })
+      return info ? [{ ...canvas, ...info, nodes, color: '', viewport: { x: 0, y: 0, zoom: 1 } }] : []
     })
     return { version: 2, activeProjectId: '', projects }
   }

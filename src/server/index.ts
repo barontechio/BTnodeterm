@@ -545,7 +545,7 @@ export async function startServer(
     owner: (id) => platform.isOwnerClient?.(id) === true,
     target: (nodeId) => {
       const projects = workspaceStore.projectIdsForNode(nodeId)
-      const node = workspaceStore.getNodeResolved(nodeId)
+      const node = workspaceStore.getNodeForHostAction(nodeId)
       const entry = mirrorEntry(nodeId)
       const project = projects.length === 1 ? workspaceStore.projectTargetInfo(projects[0]) : null
       if (!project || !node?.agentId || node.kind !== 'terminal' || node.pendingLaunch || !entry?.sessionId || !entry.agentId ||

@@ -20,7 +20,8 @@ function fixture() {
   const run = vi.fn(async () => result)
   const api = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings,
     sessionOf: () => sid, pty: { sshRemoteForNode: () => undefined }, workspace: {
-      projectIdsForNode: () => ids, getNodeResolved: () => node,
+      projectIdsForNode: () => ids, getNodeForHostAction: () => node,
+      relayNodePlacements: () => ids.map((projectId) => ({ projectId, node })),
       sshProjectIdForNode: () => remote ? 'p' : undefined,
       projectTargetInfo: () => ({ name: 'Project', cwd: '/repo', ...(remote ? { ssh: { server: conn, remoteCwd: '/repo' } } : {}) })
     }, ssh: { refForProject: () => connected ? { conn, controlPath: '/cp', remoteCwd: '/repo' } : undefined,
@@ -36,6 +37,13 @@ function fixture() {
 }
 
 describe('Server SSH transcript routing and caller lifetime', () => {
+  it('keeps an ambiguous standalone SSH record remote even without a connected project', async () => {
+    const f = fixture(); f.local(); f.setIds(['one', 'two']); f.node.ssh = { host: 'offline', user: 'fixture' }
+    expect(f.api.isRemoteNode('node')).toBe(true)
+    expect(await f.api.rpcScope(1, () => f.api.reader.readPage(q, page))).toMatchObject({ ok: false })
+    expect(f.run).not.toHaveBeenCalled(); f.api.dispose()
+  })
+
   it('reads only on an authenticated owner request and preserves local delegation for guests', async () => {
     const f = fixture()
     expect(await f.api.reader.readPage(q, page)).toMatchObject({ ok: false, reason: 'remote-reader-permission-required' })
