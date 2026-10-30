@@ -28,7 +28,7 @@ describe('relay attach routing is wired in the desktop shell', () => {
     )
   })
   it('a connection reports setup-done exactly where it reports connected', () => {
-    const src = read('main/remote-ssh/ssh-project.ts')
+    const src = read('core/remote-ssh/ssh-project.ts')
     expect(src).toMatch(/entry\.setupDone = true\n\s*this\.emitStatus\(\{ projectId, status: 'connected' \}\)/)
   })
 })

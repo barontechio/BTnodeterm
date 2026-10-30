@@ -60,7 +60,7 @@ describe('agent-integration consent wiring (#744)', () => {
   })
 
   it('RemoteHooks cannot be built without a consent plan', () => {
-    expect(code('main/remote-ssh/remote-hooks.ts')).toMatch(
+    expect(code('core/remote-ssh/remote-hooks.ts')).toMatch(
       /constructor\(\s*private r: RemoteRunner,\s*private integrations: \(conn: SshConnection\) => RemoteIntegrationPlan/
     )
   })
