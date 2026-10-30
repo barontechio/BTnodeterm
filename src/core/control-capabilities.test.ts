@@ -22,6 +22,9 @@ describe('control capability discovery', () => {
     expect(report.verbs.find((v) => v.verb === 'settings')).toMatchObject({
       support: 'partial', limitation: expect.stringContaining('individual confirmation')
     })
+    expect(report.verbs.find((v) => v.verb === 'write')).toMatchObject({
+      support: 'partial', limitation: expect.stringContaining('empty composer')
+    })
     expect(serverSupportsControl('list')).toBe(true)
     expect(serverSupportsControl('browser')).toBe(false)
     for (const unknown of ['constructor', '__proto__', 'toString', 'LIST', '']) {

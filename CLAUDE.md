@@ -11349,3 +11349,21 @@ partial/unknown delivery, with no resend. The SessionStart idle rescue latch sto
 agent and receive time; foreign/missing idle identity never creates proof or changes the
 renderer-visible session. These boundaries have behavioral regressions in
 `core/windows-delivery-safety.test.ts` and the mirror/client suites.
+
+### Host node execution and confirmed input
+
+`core/node-execution.ts` supplies bounded host-only exclusion through
+`PtyManager.runNodeAction`. Claims reject existing queued writes, controller deliveries, creates
+and teardown. An expired owner/deadline cancels the permit but retains exclusion until dispatched
+work settles. Check current saved target and physical generation at dispatch; an expired async
+continuation cannot write or create another node. Do not serialize an owner dialog inside a
+workspace/settings/node queue, expose a generic callback RPC, or mistake a renderer restart mutex
+for cross-tab host ownership. Existing multi-step restart/account flows still need their own
+coordinated domain adapters.
+
+Server's `ConfirmedNodeWrite` is initially local Claude only: verified idle session, kernel-proven
+foreground PID set, empty styled composer, unchanged source/target/account binding, existing
+creator/project policy and single-use exact-text owner approval. A draft/dialog refusal writes
+nothing. Possible paste or uncertain submit is never resent. Mark the existing handover tracker
+and withdraw older outcomes inside exclusion before returning a submitted/uncertain result; the
+next hook may not have arrived. Desktop retains its existing confirmation/waiver orchestration.

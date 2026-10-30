@@ -923,6 +923,7 @@ export async function startServer(
         ptyManager,
         settings: () => settingsStore.get(),
         settingsControl: (id, args, verified) => settingsControl.run(id, args, verified),
+        confirmations: ownerConfirmations,
         boardLog,
         projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
         requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),

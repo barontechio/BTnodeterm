@@ -58,6 +58,11 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
         request.end(new URLSearchParams({ nodeId: 'source', payload: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'fixture-session', cwd }) }).toString())
       })
       expect(hookStatus).toBe(204)
+      // Saved identity and a signed hook are insufficient for terminal input: there is no live
+      // verified foreground pane in this fixture. The real CLI must receive a pre-send refusal.
+      await expect(cli('write', '--node', 'source', '--text', 'do not dispatch')).rejects.toMatchObject({
+        stderr: expect.stringContaining('write-refused:')
+      })
 
       socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, { headers: { cookie: `nt_session=${session}` } })
       let requestId = 0

@@ -1875,3 +1875,14 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+**Host terminal actions coordinate at the PTY boundary.** `PtyManager.runNodeAction` is a
+host-only bounded exclusion, never a callback RPC or a renderer mutex. Acquire after consent,
+reject pending writes/creates/teardowns, bind the saved execution identity and exact physical
+generation, and check the permit at dispatch. Cancellation does not release a still-running
+backend operation. Detached expired continuations must not escape onto a new node. Raw input
+refusals are addressed and throttled; relay/scoped-guest event policy must attribute their node.
+`ConfirmedNodeWrite` uses the existing creator ledger, confirmation broker and handover tracker.
+Preserve drafts, distinguish pre-send refusal from uncertain input, and mark submitted/uncertain
+work before releasing exclusion so a delayed hook cannot authorize a second send. Keep Desktop's
+existing confirmation waivers until its orchestration has an explicit shared adapter.

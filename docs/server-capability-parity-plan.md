@@ -136,9 +136,23 @@ deliveries, creates and teardowns. Keyboard input receives an addressed, throttl
 headless/raw/background writes, semantic launch, keys, recycle and destruction cannot enter
 another action's node. Expired async continuations cannot create or write a different node.
 Physical controller delivery remains fenced after its caller's response deadline. The focused
-PTY/coordinator suite passes 724 tests (6 skipped), with typecheck. A fake session-host snapshot
+PTY/coordinator suite passes 724 tests (6 skipped); the complete foundation passes 24,427 tests
+(109 skipped), typecheck and both builds. A fake session-host snapshot
 is now explicitly isolated even when a real bundle exists on disk. No new write/branch command
 is enabled by this foundation alone; their target/account/pane and consent adapters remain gates.
+
+The first PR 13 `write` adapter is now implemented in core and connected to Server: a verified
+local Claude terminal, current idle state, kernel-proven foreground process, empty styled composer,
+unchanged saved execution/account/session identity and individual owner approval are all required.
+Creator/project scope reuses the factory's existing process-local ownership ledger. Approval waits
+outside queues; execution takes the host node claim and rechecks the target. A draft refusal sends
+nothing; a possible paste/unknown submit reports uncertainty and never retries. Successful and
+uncertain dispatches mark the existing handover tracker before releasing the node and withdraw
+older outcomes, so late hooks cannot make a second write reuse the previous idle state. Desktop
+retains its existing confirmation/waiver flow; the shared PTY boundary supplies its exclusion checks.
+Other agents and SSH writes remain explicitly unavailable until their input/identity readers meet
+the same checks. Branching, removal and the remaining account/restart orchestration still require
+their own coordinated adapters.
 
 Baseline inspected on 2026-10-29:
 

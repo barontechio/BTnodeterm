@@ -30,7 +30,7 @@ export const CONTROL_SUPPORT = {
   branch: 'unsupported',
   rename: 'partial',
   color: 'supported',
-  write: 'unsupported',
+  write: 'partial',
   close: 'partial',
   run: 'partial',
   board: 'partial',
@@ -53,6 +53,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  write: 'Local verified idle Claude panes with an empty composer, within operator scope. Requires an attached owner and individual confirmation; uncertain input must never be resent.',
   'show-web': 'External HTTP(S) URLs use a sandboxed iframe; static local HTML requires a distinct configured HTTPS preview hostname. Local scripts and network resource loads are disabled.',
   'show-video': 'Local audio/video files; authenticated owner streaming with browser-dependent codec support. No SSH fallback.',
   'open-worktree': 'Local projects only; prepares shared paths and successful trust-gated setup before binding.',

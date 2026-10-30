@@ -518,11 +518,23 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
 
   it('keeps every deferred or unknown verb a clean permanent edition refusal', async () => {
     const handler = createServerEditionControlHandler(actions())
-    for (const verb of ['browser', 'write', 'not-a-verb']) {
+    for (const verb of ['browser', 'not-a-verb']) {
       const reply = await handler({ verb, nodeId: 'term-source', args: {}, verified: true })
       expect(reply, verb).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
       expect(reply.message, verb).toContain('do not retry')
     }
+  })
+
+  it('routes a valid write only through the installed confirmed adapter', async () => {
+    const a = { ...actions(), write: vi.fn(async () => ({ ok: true, message: 'sent' })) }
+    const handler = createServerEditionControlHandler(a)
+    const args = { node: 'term-target', text: 'Review this' }
+    expect(await handler({ verb: 'write', nodeId: 'term-source', args, verified: false })).toMatchObject({ ok: false })
+    expect(a.write).not.toHaveBeenCalled()
+    expect(await handler({ verb: 'write', nodeId: 'term-source', args, verified: true })).toMatchObject({ ok: true })
+    expect(a.write).toHaveBeenCalledWith('term-source', args, true)
+    const absent = createServerEditionControlHandler(actions())
+    expect(await absent({ verb: 'write', nodeId: 'term-source', args, verified: true })).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
   })
 
   it('routes every geometry verb with its complete flags after identity validation', async () => {

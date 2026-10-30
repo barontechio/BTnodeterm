@@ -753,9 +753,9 @@ Consequences worth knowing:
   (agent tails self-cleared only on `SessionEnd`, so a node closed *without* one left an
   idle file-tail); the server now untracks agent tails on node close, at desktop parity.
   See [Phase 3c](#phase-3c-follow-up-hardening).
-- **SSH-remote agent tails are N/A** — the server has no SSH-project manager, so the
-  SSH branch of the desktop hook-wiring block is dropped (the raw listener falls straight
-  through to the local logic).
+- **SSH-remote agent tails were deferred in Phase 3b.** The opt-in SSH adapter now provides
+  project connections and filesystem/setup services; remote transcript/context bindings remain
+  pending. Remote records are refused instead of being read from this server's local histories.
 
 ## Phase 3c: follow-up hardening
 
@@ -795,6 +795,15 @@ or close only a node it opened during the current Server process run. Link, grou
 sticky updates, dependency targets, message delivery, and close validate their complete target set
 before any write or PTY kill; an unowned member refuses the whole operation. Queued messages repeat
 the creator check at flush time in addition to the existing verified and per-project switch gates.
+
+`write --node <id> --text <text>` supports an existing local Claude pane with verified idle state,
+a proven foreground process and an empty composer. It obeys the configured creator/project scope
+and requires an attached owner UI to approve the exact target and text for each request. SSH and
+other agent backends refuse this adapter. Host node exclusion blocks competing input and teardown;
+saved account/session or physical-pane replacement invalidates approval. A draft stays untouched.
+An uncertain delivery is reported explicitly and must not be resent: inspect the terminal. Both
+submitted and uncertain input retain the existing pending-work hold until recovery or a completed
+new turn, covering the interval before a new hook arrives. Text is limited to 64 KiB.
 
 **Wider reach: `--control-scope project`.** `NODETERM_SERVER_CONTROL_SCOPE=project` (or
 `--control-scope project`; default `creator`, an unknown value fails the boot) lets an agent act on
@@ -920,7 +929,10 @@ to this server's account. Desktop's SSH lifecycle retains its existing adapter.
 The project manager, remote hook installation/freshness, filesystem operations, atomic writes and
 host inventory now live in core and are consumed by Desktop. Native prompts, credentials/agent
 lifetime, IPC and local media URLs remain shell adapters. This extraction alone does not enable
-Server SSH projects or transfers; their owner adapter and host capability checks are still pending.
+Server SSH projects by itself. The first owner adapter is now available through
+`NODETERM_SERVER_SSH=1` / `--ssh-projects`, disabled by default; see
+[Server SSH projects](server-ssh-projects.md). Transfers and remote media remain explicitly
+unavailable, and transcript/context bindings are still pending.
 Saved SSH inventory changes acknowledge only after durable owner-only persistence.
 
 ## Manual browser smoke checklist

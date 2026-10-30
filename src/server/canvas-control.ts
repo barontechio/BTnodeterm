@@ -1,4 +1,6 @@
 import fs from 'node:fs'
+import { ConfirmedNodeWrite } from '../core/confirmed-node-write'
+import type { OwnerConfirmationBroker } from '../core/owner-confirmation'
 import type { ControlScope } from './control-scope'
 import path from 'node:path'
 
@@ -72,6 +74,7 @@ export interface ServerCanvasControlDeps {
   ptyManager: PtyManager
   settings(): Settings
   settingsControl?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<import('./headless-node-factory').ServerControlReply>
+  confirmations?: Pick<OwnerConfirmationBroker, 'request'>
   boardLog: BoardLogHandlers
   cliCaps?: () => Promise<ClaudeCliCaps>
   /** grok's own `--session-id` probe; defaults to the real one. See HeadlessNodeFactoryDeps. */
@@ -248,6 +251,23 @@ export async function initServerCanvasControl(
 
   factoryRef = factory
 
+  const nodeWrites = deps.confirmations ? new ConfirmedNodeWrite({
+    workspace: deps.workspaceStore, pty: deps.ptyManager, confirmations: deps.confirmations,
+    settings: deps.settings, scope: () => factory.controlScope,
+    ownsSpawn: (source, target) => factory.ownsSpawn(source, target),
+    handedOver: (id) => stationHandovers.isHandedOver(id),
+    onInputDispatched: (id, at) => {
+      stationHandovers.markHandedOver(id, at)
+      stationOutcomes.withdrawBefore(id, at)
+    },
+    stopped: () => stopped,
+    runtime: (id) => {
+      const entry = mirrorEntry(id)
+      return { agentId: entry?.agentId, sessionId: entry?.sessionId, state: entry?.state,
+        verified: entry?.stateVerified === true && !entry.restored && !entry.idleInferred }
+    }
+  }) : undefined
+
   const messaging: AgentMessagingDeps = {
     ...ptyPaneProbeDeps(deps.ptyManager),
     // Server delivery has no renderer/xterm echo stream. Capture the headless pane instead and
@@ -321,6 +341,7 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    write: nodeWrites ? (nodeId, args, verified) => nodeWrites.run(nodeId, args, verified) : undefined,
     orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),
     worktree: (verb, nodeId, args, verified) => factory.worktree(verb, nodeId, args, verified),
     reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {
