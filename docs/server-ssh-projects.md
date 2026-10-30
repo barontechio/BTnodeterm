@@ -32,6 +32,13 @@ are unknown, not a clean miss. Python/runtime and unsafe-tree refusals have acti
 Requests expire after 30 seconds, with at most 32 active reads and two per node; owner departure
 cancels queued work, and already dispatched work retains its slot until the transport settles.
 
+On Linux arm64/Node 22.23.3, a local command benchmark reading a 256 KiB window from a 1 MiB
+transcript measured median 17.89/18.87/44.42 ms for 1/128/4,096 project entries. The existing
+Desktop POSIX reader with an already known pathname measured 3.00/2.93/3.15 ms. These are warm-cache
+command/filesystem costs, ten samples after two warmups, excluding SSH latency; concurrent
+validation was running. The strict discovery cost buys verified account/file selection and is
+currently paid only on demand, with no new idle polling. It is not a host/network latency promise.
+
 Browser upload/download and SSH media capabilities currently report unavailable. Context/usage/memory
 bindings, remaining agent readers, setup/worktree automation and development-server forwarding remain
 separate delivery gates in [the parity plan](server-capability-parity-plan.md). Read-only histories
