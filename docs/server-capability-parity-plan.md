@@ -215,10 +215,16 @@ raw-hook tail setup for saved/live remote records, and releases earlier local ta
 
 The independent [host terminal coordinator #1329](https://github.com/eneskirca/nodeterm/pull/1329)
 exports the single/group execution boundary, owner lifetimes, addressed input notices and relay
-policy directly on upstream/main: 24,179 tests (109 skipped), typecheck and both builds. It adds
+policy directly on upstream/main: 24,183 tests (109 skipped), typecheck and both builds. It adds
 no command or dependency and retains domain authorization/consent as the adapter's responsibility.
 Upstream workflows for #1327–#1329 require maintainer authorization; local validation is not upstream
 acceptance.
+
+The confirmed Server CLI branch snapshot `e5cf8529` passes 24,538 tests (109 skipped),
+typecheck, Desktop production build and Server build. It includes private execution-overlay
+revalidation, separate backend lifecycle context, fixed-command submit dispatch tracking and
+reservation of the original-resume node before publication. A deterministic SSH fixture now
+distinguishes mux argv from legal ControlPath strings containing `-O`.
 
 Baseline inspected on 2026-10-29:
 
