@@ -121,6 +121,11 @@ export function sshExtraArgsEnableLocalExec(extraArgs: string | undefined): bool
   return stripLocalExecArgs(parseExtraArgs(extraArgs)).dropped.length > 0
 }
 
+/** Transport target identity, excluding display labels and host-derived agent provenance. */
+export function sshEndpointKey(conn: SshConnection): string {
+  return JSON.stringify([conn.host, conn.user, conn.port ?? 22, conn.identityFile ?? '', conn.extraArgs ?? ''])
+}
+
 /** A saved server in the app's SSH store. `label` is required for display. */
 export interface SshServer extends SshConnection {
   id: string

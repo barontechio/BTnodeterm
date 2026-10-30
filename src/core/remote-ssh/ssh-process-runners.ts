@@ -42,10 +42,12 @@ export interface SshProcessRunnerOptions extends Omit<SshProjectRunners, Transpo
   agent: Pick<AppSshAgent, 'env' | 'start' | 'scheduleStop'>
   askpass: Pick<AskpassServer, 'envFor' | 'wasCancelledBy' | 'isPromptingAny' | 'askedBy'>
   askpassScriptPath?: string
+  /** Capture before queueing; recheck immediately before an exec can use its control socket. */
+  captureExecutionCheck?(args: readonly string[]): () => boolean
 }
 /** OpenSSH/native transport composition shared by the native and headless shells. */
 export function makeSshProjectRunners(options: SshProcessRunnerOptions): SshProjectRunners {
-  const { agent: appSshAgent, askpass: askpassServer, askpassScriptPath, ...rest } = options
+  const { agent: appSshAgent, askpass: askpassServer, askpassScriptPath, captureExecutionCheck, ...rest } = options
   const ssh = sshBin(); const scp = scpBin(); const native = useNativeSsh()
   return {
     ...rest,
@@ -118,9 +120,11 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): SshProj
     // `MaxSessions` every excess child silently becomes a full login — enough of those at once
     // and sshd's `MaxStartups` resets some outright, which the app sees as a dropped terminal.
     // Mux control commands and the terminals themselves are never queued (see ssh-child-gate.ts).
-    run: (args, stdin, timeoutMs) =>
-      sshChildGate.run(args, () =>
-        native
+    run: (args, stdin, timeoutMs) => {
+      const current = captureExecutionCheck?.(args)
+      return sshChildGate.run(args, () => {
+        if (current && !current()) return Promise.resolve({ code: 255, stdout: '' })
+        return native
           ? // Still gated: sshd's MaxSessions bounds channels on ONE connection just as it bounds
             // mux clients on a ControlMaster.
             runSshArgv(nativeMux(), args, { stdin, timeoutMs: timeoutMs ?? 15000 }).then((r) => ({
@@ -154,7 +158,8 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): SshProj
             child.stdin?.end(stdin)
           }
         })
-      ),
+      })
+    },
     // Deliberately NOT through `sshChildGate`: after a sleep the gate is typically full of children
     // hung on the very master this probes, and queueing behind them would time the queue.
     probe: (args, timeoutMs) =>

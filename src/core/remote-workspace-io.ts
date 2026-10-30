@@ -1,4 +1,5 @@
 import path from 'path'
+import { sshEndpointKey } from '../shared/ssh'
 import type { Project } from '../shared/types'
 import type { RemoteReadResult, RemoteWorkspaceIO } from './workspace-store'
 import { PROJECT_DIR, PROJECT_FILE } from './workspace-files'
@@ -6,7 +7,7 @@ import { PROJECT_SETTINGS_FILE } from '../shared/project-settings'
 import type { SshFs, SshFsRef } from './ssh-fs'
 
 /** Resolves an SSH project's live control master; null while disconnected. */
-type RefResolver = (projectId: string) => SshFsRef | null
+type RefResolver = (projectId: string) => (SshFsRef & { remoteCwd?: string }) | null
 
 export interface RemoteWorkspaceIOWithFlush extends RemoteWorkspaceIO {
   /** Runs every pending throttled trailing write NOW. Call before the masters are killed at quit. */
@@ -39,18 +40,26 @@ export function makeRemoteWorkspaceIO(
   const remotePath = (ssh: NonNullable<Project['ssh']>, file: string): string =>
     path.posix.join(ssh.remoteCwd, PROJECT_DIR, file)
 
+  const matchingRef = (projectId: string, target: NonNullable<Project['ssh']>) => {
+    const ref = resolveRef(projectId)
+    if (!ref || sshEndpointKey(ref.conn) !== sshEndpointKey(target.server) ||
+      (ref.remoteCwd !== undefined && ref.remoteCwd !== target.remoteCwd)) return null
+    return ref
+  }
+
   return {
     async read(projectId, ssh): Promise<RemoteReadResult> {
-      const ref = resolveRef(projectId)
+      const ref = matchingRef(projectId, ssh)
       if (!ref) return { status: 'error' }
       return sshFs.readTextChecked(ref, remotePath(ssh, PROJECT_FILE))
     },
     async write(projectId, ssh, content) {
+      ssh = structuredClone(ssh)
       const run = async (): Promise<boolean> => {
         lastWrite.set(projectId, Date.now())
         // Re-resolve at fire time: a trailing write scheduled before a reconnect must use the
         // live master, and a dead one must report the drop instead of throwing.
-        const ref = resolveRef(projectId)
+        const ref = matchingRef(projectId, ssh)
         if (!ref) return false
         try {
           return await sshFs.writeText(ref, remotePath(ssh, PROJECT_FILE), content)
@@ -58,7 +67,7 @@ export function makeRemoteWorkspaceIO(
           return false
         }
       }
-      if (!resolveRef(projectId)) return false
+      if (!matchingRef(projectId, ssh)) return false
       const since = Date.now() - (lastWrite.get(projectId) ?? 0)
       if (since >= WRITE_THROTTLE_MS) {
         // Cancel any pending trailing write so a stale older payload can't fire AFTER this newer
@@ -80,7 +89,7 @@ export function makeRemoteWorkspaceIO(
       return true
     },
     async readSettings(projectId, ssh): Promise<RemoteReadResult> {
-      const ref = resolveRef(projectId)
+      const ref = matchingRef(projectId, ssh)
       if (!ref) return { status: 'error' }
       return sshFs.readTextChecked(ref, remotePath(ssh, PROJECT_SETTINGS_FILE))
     },
@@ -90,7 +99,7 @@ export function makeRemoteWorkspaceIO(
     // make "Save" mean "maybe, in five seconds" — so this goes straight to the wire and reports the
     // real outcome. The store's cache-first write already makes a false here non-fatal.
     async writeSettings(projectId, ssh, content) {
-      const ref = resolveRef(projectId)
+      const ref = matchingRef(projectId, ssh)
       if (!ref) return false
       try {
         return await sshFs.writeText(ref, remotePath(ssh, PROJECT_SETTINGS_FILE), content)
