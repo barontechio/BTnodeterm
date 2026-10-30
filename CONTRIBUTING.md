@@ -1762,3 +1762,12 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+**Host terminal actions coordinate at the PTY boundary.** `PtyManager.runNodeAction` and
+`runNodeActions` are bounded host-only exclusions, never callback RPCs or renderer mutexes.
+Acquire after consent and recheck saved execution/physical identity at dispatch. A group claims
+every member synchronously or none; pending pane/control/create/teardown work refuses the claim.
+Cancellation retains all fences until dispatched work settles, and detached expired continuations
+cannot create or write another node. Raw input refusals are addressed and throttled, with relay
+policy attributing their node. Domain services still own authorization, consent and recovery;
+this primitive neither authorizes removal nor reserves a filesystem path.

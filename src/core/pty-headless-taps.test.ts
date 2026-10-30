@@ -147,4 +147,54 @@ describe('PtyManager headless taps (#925)', () => {
     expect(warn).toHaveBeenCalledWith('[pty] output tap failed', 'boom')
     warn.mockRestore()
   })
+
+  it('fences all competing entry points and addresses a throttled notice only to the typing client', async () => {
+    const m = await manager()
+    const r = await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    await fake.handlers[IPC.ptyCreate](1, { cols: 80, rows: 24, persistKey: 'n1' })
+    let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const identity = m.nodeExecutionIdentity('n1')
+    const action = m.runNodeAction('n1', 'branch', { current: () => m.nodeExecutionIdentity('n1') === identity }, async () => {
+      expect(m.writeHeadless('n1', 'owned')).toBe(true)
+      await hold
+    })
+    m.write(1, r.sessionId, 'other-tab')
+    m.write(1, r.sessionId, 'more')
+    expect(m.writeHeadless('n1', 'other-launch')).toBe(false)
+    await expect(m.backgroundWrite('n1', 'background')).resolves.toBe(false)
+    await expect(m.controlInput(r.sessionId, { kind: 'keys', data: 'remote' })).resolves.toBe(false)
+    await expect(m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })).rejects.toThrow('busy')
+    await expect(m.recycleSession(null, 'n1')).rejects.toThrow('busy')
+    await expect(m.destroySession(null, 'n1')).rejects.toThrow('busy')
+    expect(spawned[0].killed).toBe(false)
+    expect(spawned[0].writes).toEqual(['owned'])
+    expect(fake.sent.filter((e) => e.channel === IPC.ptyInputBlocked)).toEqual([
+      { to: 1, channel: IPC.ptyInputBlocked, args: [{ nodeId: 'n1' }] }
+    ])
+    await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' })
+    expect(m.writeHeadless('n2', 'independent')).toBe(true)
+    release(); await action
+    m.write(1, r.sessionId, 'after')
+    expect(spawned[0].writes).toEqual(['owned', 'after'])
+    await m.killAll()
+  })
+
+  it('does not acquire over a queued write, and refuses expired continuations before they create a replacement', async () => {
+    const m = await manager()
+    await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    const write = m.backgroundWrite('n1', 'queued')
+    await expect(m.runNodeAction('n1', 'account', { current: () => true }, () => {})).rejects.toThrow('busy')
+    await write
+    let late!: Promise<unknown>; let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    await m.runNodeAction('n1', 'write', { current: () => true }, () => {
+      late = hold.then(() => m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' }))
+    })
+    void late.catch(() => {})
+    release(); await expect(late).rejects.toThrow('expired')
+    expect(spawned).toHaveLength(1)
+    await m.killAll()
+    await expect(m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' })).rejects.toThrow('stopped')
+  })
 })

@@ -561,6 +561,7 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.agentSeedIdentity,
   // Server→client events (a client cannot invoke them; what a scoped guest RECEIVES is decided by
   // `filterScopedEvent`).
+  IPC.ptyInputBlocked,
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
   IPC.workspaceExternalChange,

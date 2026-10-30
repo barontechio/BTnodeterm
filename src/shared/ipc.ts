@@ -3,6 +3,8 @@
 export const IPC = {
   ptyCreate: 'pty:create',
   ptyWrite: 'pty:write',
+  /** Addressed to the typing client when a host action currently owns this node. No input bytes. */
+  ptyInputBlocked: 'pty:input-blocked',
   ptyResize: 'pty:resize',
   ptyFlow: 'pty:flow',
   ptyKill: 'pty:kill',

@@ -11223,3 +11223,11 @@ partial/unknown delivery, with no resend. The SessionStart idle rescue latch sto
 agent and receive time; foreign/missing idle identity never creates proof or changes the
 renderer-visible session. These boundaries have behavioral regressions in
 `core/windows-delivery-safety.test.ts` and the mirror/client suites.
+
+Host terminal exclusion lives in `core/node-execution.ts` and `PtyManager.runNodeAction(s)`.
+Claims are bounded, owner-lifetime/deadline aware and reject existing pane/control/create/teardown
+work. A batch captures an immutable member set and acquires all or none in one async context.
+Cancellation invalidates execution but retains every fence until the effect settles; expired
+continuations cannot escape onto new/different nodes. Raw-input refusal events go only to the
+typing client and carry a node id for relay filtering. Domain authorization, exact target binding,
+consent, path ownership and recovery remain the caller service's responsibility.

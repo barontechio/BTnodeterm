@@ -1473,6 +1473,8 @@ export interface PtyApi {
   readSessionName(sessionId: string, accountId?: string, agentId?: string): Promise<string | null>
   /** Listens for PTY output. Returns an unsubscribe function. */
   onData(sessionId: string, listener: (data: string) => void): () => void
+  /** Optional for older hosts. An exclusive host action refused this client's keyboard input. */
+  onInputBlocked?(listener: (event: { nodeId: string }) => void): () => void
   /** Fires when the PTY process exits. Returns an unsubscribe function. */
   onExit(sessionId: string, listener: (exitCode: number) => void): () => void
   /** The authoritative size of a co-attached session: min(cols) × min(rows) over all subscribers
