@@ -295,6 +295,10 @@ export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'contr
     control: {
       capabilities: () => client.request(IPC.controlCapabilities).catch(() => null) as
         ReturnType<NonNullable<NodeTerminalApi['control']>['capabilities']>,
+      branchClaude: async (id, at) => {
+        try { return await client.request(IPC.controlBranchClaude, id, at) as import('@shared/conversation-branch').ConversationBranchReply }
+        catch { return { ok: false, error: 'The branch result could not be confirmed. Inspect the terminal and canvas before repeating branch.' } }
+      },
       runLaunch: async (id, command) => {
         const uncertain = (error: unknown): HostLaunchReply => ({ ok: false, started: false,
           error: `Launch could not be confirmed; inspect the session before repeating. ${error instanceof Error ? error.message : String(error)}` })

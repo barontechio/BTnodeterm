@@ -29,8 +29,8 @@ shutdown-order source assertion; retaining the expected cleanup order fixes that
 The PR 08 snapshot passes all 24,288 tests (109 skipped) and both builds. Local audio/video
 streaming and `show-video` are connected through scoped, expiring owner references and authenticated
 HTTP Range responses. The first PR 09 Server CLI adapter now uses owner-confirmed host execution,
-fresh branch/runtime proof and a reserved original-resume node. The existing renderer `/branch`
-flow still needs its coordinated Desktop/UI adapter for restart/account exclusion.
+fresh branch/runtime proof and a reserved original-resume node. Desktop and Server UI now use the
+same transaction through an owner-only entry; remaining restart/account orchestration is separate.
 The PR 10 snapshot passes all 24,302 tests (109 skipped) and both builds. External URL previews
 and optional isolated static HTML previews are now connected. Static HTML intentionally keeps
 scripts disabled: resource CSP alone cannot contain a script's self-navigation. Script-enabled
@@ -160,7 +160,7 @@ older outcomes, so late hooks cannot make a second write reuse the previous idle
 retains its existing confirmation/waiver flow; the shared PTY boundary supplies its exclusion checks.
 Other agents and SSH writes remain explicitly unavailable until their input/identity readers meet
 the same checks. Removal and the remaining account/restart orchestration still require their own
-coordinated adapters. Server CLI branching is described below; the legacy renderer path remains pending.
+coordinated adapters. Shared CLI/UI branching is described below.
 
 The Server message-envelope adapter now also lives in core and delegates to a compound
 PtyManager operation. One pane-write slot spans capture, paste, settlement and Enter, preventing
@@ -395,15 +395,19 @@ These are four independent leaf PRs that can proceed after their own mutation/po
 
 ### PR 09 Share conversation branching
 
-The first Server CLI implementation is connected through `ConfirmedNodeBranch`. It shares saved
+The CLI and UI implementations are connected through `ConfirmedNodeBranch`. It shares saved
 target/account policy with `write`, verifies the original transcript and foreground pane, requires
 individual owner approval, and holds a node claim through fixed typed submission and fresh
 marker/runtime correlation. A dispatch notice permits only the expected target session transition.
 The original-resume continuation claims its new id before canvas publication and binds account,
 folder, model, owner lifetime and physical generation through launch. It preserves a durable manual
 recovery command on failure and reports a confirmed branch separately from an uncertain effect.
-This first adapter is local POSIX tmux Claude only, excludes the caller and bounds pending branch
-intents to one per target/32 per host. Desktop/UI coordination remains an acceptance gate below.
+This adapter is local POSIX tmux Claude only and bounds pending branch intents to one per target/32
+per host. Agent calls exclude the caller and require individual approval. Direct owner actions use
+their actual document lifetime, with no invented caller or creator grant, and create the original
+beside the source or at the validated menu position. Renderer branching saves first and invokes only the host operation; missing or
+lost replies never fall back to raw input. Relay tabs omit owner actions rather than inheriting
+the viewer's local control namespace. Native CLI uses the same confirmed agent entry.
 
 - Extract the existing Claude branching workflow, including parking/resuming the correct session, transcript availability, account identity and per-node execution locks.
 - Preserve the current node/new node conversation mapping and refuse unsupported providers explicitly.

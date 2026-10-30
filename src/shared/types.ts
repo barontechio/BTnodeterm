@@ -4591,6 +4591,8 @@ export interface NodeTerminalApi {
     capabilities(): Promise<import('./control-capabilities').ControlCapabilityReport | null>
     /** Null means an older host; transport errors must return a refusal, never a legacy fallback. */
     runLaunch?(nodeId: string, expectedCommand: string): Promise<import('./headless-launch').HostLaunchReply | null>
+    /** Owner action on the host. Missing support or a lost reply must never fall back to raw input. */
+    branchClaude?(nodeId: string, at?: import('./conversation-branch').ConversationBranchPosition): Promise<import('./conversation-branch').ConversationBranchReply>
   }
   pty: PtyApi
   workspace: WorkspaceApi

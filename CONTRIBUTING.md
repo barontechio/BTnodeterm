@@ -1947,4 +1947,6 @@ account-directory identity and machine-local held launches. Branch approval stay
 only the actual Enter dispatch permits a target session transition. Require fresh pane output and
 the matching verified new runtime before opening the original. Its continuation reserves the new
 node before publication, preserves launch recovery, and uses the existing delivery/creator ledgers.
-Legacy Desktop/renderer branch orchestration remains a separate adapter, not an implicit guarantee.
+Desktop and Server UI branching use the separate authenticated-owner entry with the real document
+lifetime. A direct human action creates no agent grant; agent CLI branching still requires its own
+confirmed caller/project policy. Never forward owner actions to a relay viewer's local desktop.

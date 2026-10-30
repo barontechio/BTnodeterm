@@ -90,6 +90,8 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
         const id = ++requestId; pending.set(id, { resolve, reject }); socket!.send(JSON.stringify({ t: 'req', id, method, args } satisfies RpcRequest))
       })
       expect(await request(IPC.licenseCapabilities)).toMatchObject({ enabled: true, hostContext: 'server' })
+      expect(await request(IPC.controlBranchClaude, 'source')).toMatchObject({ ok: false, error: expect.stringContaining('branch-refused:') })
+      expect((await store.load()).projects.flatMap((project) => project.nodes).some((node) => node.title.endsWith('(original)'))).toBe(false)
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBe('Owner session title')
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'private')).toBeNull()
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude')).toBeNull()

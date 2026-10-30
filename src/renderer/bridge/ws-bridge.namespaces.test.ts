@@ -198,6 +198,16 @@ describe('Server board comment delivery', () => {
 })
 
 describe('buildControlApi', () => {
+  it('branches once through the owner host RPC and never falls back after a missing or lost reply', async () => {
+    const request = vi.fn(async () => ({ ok: true, newNodeId: 'copy' }))
+    expect(await buildControlApi({ request } as never).control!.branchClaude!('node', { x: 10, y: 20 })).toMatchObject({ ok: true, newNodeId: 'copy' })
+    expect(request).toHaveBeenCalledExactlyOnceWith(IPC.controlBranchClaude, 'node', { x: 10, y: 20 })
+    for (const code of ['E_NO_HANDLER', 'E_DISCONNECTED']) {
+      const missing = vi.fn(async () => { throw { code } })
+      expect(await buildControlApi({ request: missing } as never).control!.branchClaude!('node')).toMatchObject({ ok: false })
+      expect(missing).toHaveBeenCalledTimes(1)
+    }
+  })
   it('negotiates host-owned launch recovery and never falls back after a lost reply', async () => {
     const request = vi.fn(async (method: string) => method === IPC.controlCapabilities ? { hostLaunches: true } : { ok: true, started: true })
     const api = buildControlApi({ request } as never)

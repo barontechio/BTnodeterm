@@ -2,31 +2,29 @@ import { describe, it, expect, vi } from 'vitest'
 import type { NodeTerminalApi } from '@shared/types'
 import { branchClaudeSession } from './claudeBranch'
 
-const fakeApi = (over: { sendText?: unknown; capture?: unknown }): NodeTerminalApi =>
-  ({ pty: { sendText: over.sendText, capture: over.capture } }) as unknown as NodeTerminalApi
+const fakeApi = (branchClaude?: unknown) => {
+  const sendText = vi.fn(); const capture = vi.fn()
+  return { api: { control: { branchClaude }, pty: { sendText, capture } } as unknown as NodeTerminalApi, sendText, capture }
+}
 
 describe('branchClaudeSession', () => {
-  it('does not create a branch or poll after an unsubmitted paste', async () => {
-    const capture = vi.fn()
-    const sendText = vi.fn(async () => 'pasted-not-submitted')
-    const result = await branchClaudeSession(fakeApi({ sendText, capture }), 'node-1')
-    expect(result).toMatchObject({ ok: false, error: expect.stringContaining('Do not resend') })
-    expect(capture).not.toHaveBeenCalled()
-    expect(sendText).toHaveBeenCalledTimes(1)
+  it('requires host support without a raw input or capture fallback', async () => {
+    const f = fakeApi()
+    expect(await branchClaudeSession(f.api, 'node-1')).toMatchObject({ ok: false })
+    expect(f.capture).not.toHaveBeenCalled(); expect(f.sendText).not.toHaveBeenCalled()
   })
-  it('sends /branch through the passed api, not the global', async () => {
-    const sendText = vi.fn(async () => true)
-    const capture = vi.fn(async () => 'run claude -r abcdef12-3456 in a new terminal')
-    const res = await branchClaudeSession(fakeApi({ sendText, capture }), 'node-1')
-    expect(sendText).toHaveBeenCalledWith('node-1', '/branch')
-    expect(capture).toHaveBeenCalledWith('node-1')
-    expect(res).toEqual({ ok: true, originalId: 'abcdef12-3456' })
+  it('returns the host durable-node result through the passed session api', async () => {
+    const reply = { ok: true, newNodeId: 'resume-node' }; const branch = vi.fn(async () => reply)
+    const f = fakeApi(branch)
+    expect(await branchClaudeSession(f.api, 'node-1', { x: 10, y: 20 })).toBe(reply)
+    expect(branch).toHaveBeenCalledWith('node-1', { x: 10, y: 20 })
+    expect(f.capture).not.toHaveBeenCalled(); expect(f.sendText).not.toHaveBeenCalled()
   })
 
-  it('fails without polling when the session is not persistent (sendText false)', async () => {
-    const capture = vi.fn()
-    const res = await branchClaudeSession(fakeApi({ sendText: vi.fn(async () => false), capture }), 'node-1')
-    expect(res.ok).toBe(false)
-    expect(capture).not.toHaveBeenCalled()
+  it('does not repeat a branch after a lost reply', async () => {
+    const branch = vi.fn(async () => { throw new Error('reply lost') }); const f = fakeApi(branch)
+    expect(await branchClaudeSession(f.api, 'node-1')).toMatchObject({ ok: false, error: expect.stringContaining('before repeating') })
+    expect(branch).toHaveBeenCalledOnce()
+    expect(f.capture).not.toHaveBeenCalled(); expect(f.sendText).not.toHaveBeenCalled()
   })
 })

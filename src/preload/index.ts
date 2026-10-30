@@ -937,7 +937,8 @@ const api: NodeTerminalApi = {
   userDataDir: () => ipcRenderer.invoke(IPC.appUserDataDir),
   control: {
     capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities),
-    runLaunch: (nodeId, command) => ipcRenderer.invoke(IPC.controlRunLaunch, nodeId, command)
+    runLaunch: (nodeId, command) => ipcRenderer.invoke(IPC.controlRunLaunch, nodeId, command),
+    branchClaude: (nodeId, at) => ipcRenderer.invoke(IPC.controlBranchClaude, nodeId, at)
   },
   ownerConfirmation: {
     connect: () => ipcRenderer.invoke(IPC.ownerConfirmationConnect),

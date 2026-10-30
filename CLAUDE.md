@@ -11398,4 +11398,7 @@ is never repeated. A confirmed branch's original-resume transaction reserves its
 publication, binds its physical generation and retains failed launches for recovery. Private exec
 checks use `getNodeForHostAction`, never a shared record that omits pending commands. Backend
 resources/callbacks leave node-action ALS; expired application continuations do not. The legacy
-renderer/Desktop branch path still needs a coordinated domain adapter.
+renderer/Desktop branch path now invokes the same host service through its owner-only entry.
+That entry uses the real document lifetime and never fabricates an agent caller or creator grant.
+The UI saves first; unsupported hosts or lost replies cannot fall back to raw input. Relay tabs
+omit owner control actions so remote ids cannot target the viewer's local desktop.

@@ -98,8 +98,8 @@ export function controlCapabilities(edition: ControlEdition, enabled: boolean): 
     enabled,
     verbs: (Object.keys(CONTROL_SUPPORT) as ControlVerb[]).map((verb) => ({
       verb,
-      support: edition === 'desktop' ? 'supported' : CONTROL_SUPPORT[verb],
-      ...(edition === 'server' && serverSupportsControl(verb) && SERVER_LIMITATIONS[verb]
+      support: edition === 'desktop' && verb !== 'branch' ? 'supported' : CONTROL_SUPPORT[verb],
+      ...((edition === 'server' || verb === 'branch') && serverSupportsControl(verb) && SERVER_LIMITATIONS[verb]
         ? { limitation: SERVER_LIMITATIONS[verb] } : {})
     }))
   }

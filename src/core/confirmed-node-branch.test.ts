@@ -9,6 +9,7 @@ import { fakePlatform, type FakePlatform } from './platform-fake'
 import { DEFAULT_SETTINGS, type CanvasNodeState } from '../shared/types'
 import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import { IPC } from '../shared/ipc'
+import { OwnerLifetimes } from './owner-lifetimes'
 
 const originalId = 'c7e85670-0899-4094-abfb-261243f1fe37'
 const newId = 'a341740a-a387-4b90-9acb-ec8a5a2ac33f'
@@ -54,12 +55,64 @@ describe('confirmed host Claude branch and real original-resume transaction', ()
       runtime: (id) => ({ agentId: 'claude', verified: true, sessionId: id === 'target' ? runtimeId : 'caller', state: 'done' }),
       confirmations: broker, originalAvailable: vi.fn(async () => true),
       onInputDispatched: vi.fn(() => { handed = true }), resumeOriginal: (...args) => factory.resumeClaudeOriginal(...args),
+      resumeOriginalFromOwner: (...args) => factory.resumeClaudeOriginalFromOwner(...args),
       pty: { runNodeAction: (...args) => pty.runNodeAction(...args), nodeExecutionIdentity: (id) => pty.nodeExecutionIdentity(id),
         paneOwner: vi.fn(async () => foreground), canBranchClaude: vi.fn(() => true),
         captureSession: vi.fn(async () => frame), branchClaudeInEmptyPrompt: submit } }
     branch = new ConfirmedNodeBranch(deps)
   })
   afterEach(() => { broker.dispose(); factory.stop(); resetPlatformForTests() })
+
+  it('branches a human-owned pane without an agent creator grant or a second approval dialog', async () => {
+    const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
+    await store.updateWorkspace((workspace) => { workspace.projects[0].nodes.shift(); return workspace })
+    // The fixture's fake hook update must target by identity when there is no caller node.
+    submit.mockImplementationOnce(async (_id, notice) => {
+      notice(); runtimeId = newId
+      frame = `Branched conversation. You are now in the new branch (session ${newId}). Use /resume ${originalId} to return.`
+      await store.updateWorkspace((workspace) => { workspace.projects[0].nodes[0].agentSessionId = newId; return workspace })
+      return { sent: true }
+    })
+    const at = { x: -240, y: 640 }
+    const pending = branch.runFromOwner('target', owner, at); at.x = 900
+    const reply = await pending
+    expect(reply, JSON.stringify(reply)).toMatchObject({ ok: true, newNodeId: expect.any(String) })
+    const project = (await store.load()).projects[0]
+    const copy = project.nodes.find((candidate) => candidate.id === reply.newNodeId)!
+    expect(copy.agentSessionId).toBe(originalId)
+    expect(copy.position).toEqual({ x: -240, y: 640 })
+    expect(factory.ownsSpawn('target', copy.id)).toBe(false)
+    expect(project.ropes ?? []).toEqual([])
+    expect(pty.sends.find((send) => send.nodeId === copy.id)?.text).toContain(`--resume ${originalId}`)
+    expect(host.sent.filter((event) => event.channel === IPC.ownerConfirmationRequest)).toEqual([])
+    owners.dispose()
+  })
+
+  it('refuses a departed owner and retains an in-flight owner fence until dispatch settles', async () => {
+    const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
+    let release!: () => void; const hold = new Promise<void>((resolve) => { release = resolve })
+    submit.mockImplementationOnce(async (_id, notice) => { notice(); await hold; return { sent: true } })
+    const pending = branch.runFromOwner('target', owner)
+    await vi.waitFor(() => expect(submit).toHaveBeenCalledOnce())
+    owners.forget(1)
+    await expect(pty.runNodeAction('target', 'write', { current: () => true }, () => {})).rejects.toThrow('busy')
+    release()
+    expect(await pending).toMatchObject({ ok: false, result: { outcome: 'uncertain' } })
+    expect(await branch.runFromOwner('target', owner)).toMatchObject({ ok: false, result: { outcome: 'refused' } })
+    expect(submit).toHaveBeenCalledTimes(1)
+    expect((await store.load()).projects[0].nodes).toHaveLength(2)
+    owners.dispose()
+  })
+
+  it('retains runtime and account guards for a direct human branch', async () => {
+    const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
+    const runtime = deps.runtime; deps.runtime = (id) => ({ ...runtime(id), verified: false })
+    expect(await branch.runFromOwner('target', owner)).toMatchObject({ ok: false })
+    deps.runtime = runtime
+    await store.updateWorkspace((workspace) => { workspace.projects[0].nodes[1].accountId = 'missing'; return workspace })
+    expect(await branch.runFromOwner('target', owner)).toMatchObject({ ok: false })
+    expect(submit).not.toHaveBeenCalled(); owners.dispose()
+  })
 
   it('waits for individual owner consent, proves the new session and opens the original under the same coordinator', async () => {
     const pending = run(); const request = await prompt()

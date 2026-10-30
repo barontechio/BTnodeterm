@@ -35,9 +35,10 @@ describe('control capability discovery', () => {
     }
   })
 
-  it('reports Desktop implementations without applying Server limitations', () => {
+  it('reports Desktop implementations and the shared coordinated branch limitation', () => {
     const report = controlCapabilities('desktop', true)
-    expect(report.verbs.every((v) => v.support === 'supported' && v.limitation === undefined)).toBe(true)
+    expect(report.verbs.filter((v) => v.verb !== 'branch').every((v) => v.support === 'supported' && v.limitation === undefined)).toBe(true)
+    expect(report.verbs.find((v) => v.verb === 'branch')).toMatchObject({ support: 'partial', limitation: expect.stringContaining('POSIX tmux') })
     report.verbs.length = 0
     expect(controlCapabilities('desktop', true).verbs).toHaveLength(VERBS_FOR_TEST.length)
   })

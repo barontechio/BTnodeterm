@@ -9421,8 +9421,7 @@ export function Canvas() {
 
   // Run Claude's /branch in this node, then open a new node that resumes the original
   // conversation (claude -r <ORIGINAL_ID>). The source node stays on the new branch.
-  // We already know the current session id from the hooks; only fall back to parsing the
-  // terminal output if it's unknown.
+  // The host reserves input, proves the new session and durably opens the original beside it.
   const branchClaude = useCallback(
     async (
       nodeId: string,
@@ -9430,45 +9429,14 @@ export function Canvas() {
     ): Promise<{ ok: boolean; error?: string; newNodeId?: string }> => {
       const source = nodesRef.current.find((n) => n.id === nodeId) as CanvasNode | undefined
       if (!source) return { ok: false, error: `no node with id ${nodeId}` }
-      const known = useAgentStatus.getState().byId[nodeId]?.sessionId
-      let originalId = known
-      if (known) {
-        const delivery = await api.pty.sendText(nodeId, '/branch')
-        if (delivery !== true) return { ok: false, error: delivery === 'pasted-not-submitted' ? TEXT_NOT_SUBMITTED : 'Branch delivery failed.' }
-      } else {
-        const res = await branchClaudeSession(api, nodeId)
-        if (!res.ok || !res.originalId) {
-          const error = res.error ?? 'Branch failed.'
-          // The error dialog is for humans; agent-CLI calls get the error in the reply instead.
-          if (opts?.interactive !== false) {
-            setConfirm({ message: error, alert: true, onConfirm: () => setConfirm(null) })
-          }
-          return { ok: false, error }
-        }
-        originalId = res.originalId
+      if (!(await persist())) return { ok: false, error: 'Save the canvas successfully before branching this conversation.' }
+      const result = await branchClaudeSession(api, nodeId, opts?.at)
+      if (!result.ok && opts?.interactive !== false) {
+        setConfirm({ message: result.error ?? 'Branch failed.', alert: true, onConfirm: () => setConfirm(null) })
       }
-      const copy = duplicateNode(source)
-      copy.data = {
-        ...copy.data,
-        // Built fresh here (never re-wrapping a persisted command), so it is flagged exactly once.
-        initialCommand: withPermissionMode(
-          // The branched copy stays in the project it was branched from, so it comes back through
-          // that project's wrapper exactly like the source node did.
-          `${claudeLaunchCommand(useProjects.getState().activeProjectId)} -r ${originalId}`,
-          'claude',
-          activePermissionMode()
-        ),
-        title: `${source.data.title} (original)`
-      }
-      copy.selected = true
-      // Where the user right-clicked when the action came from the node menu; beside the source
-      // otherwise (the agent-CLI `branch` verb and the header action have no cursor).
-      const placed = placeSpawned(copy, opts?.at ?? besideNode(source))
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
-      markDirty()
-      return { ok: true, newNodeId: placed.id }
+      return result
     },
-    [api, setNodes, markDirty, placeSpawned, besideNode]
+    [api, persist, setConfirm]
   )
 
   // Transfer this agent's full conversation to a different agent. We render the source

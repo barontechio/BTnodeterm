@@ -817,8 +817,15 @@ before publishing/persisting it, then resumes the original with its saved accoun
 trusted project launcher. A failed launch keeps its exact command for manual recovery; the reply
 distinguishes a confirmed branch with an incomplete copy from an uncertain branch command. The
 continuation rechecks owner lifetime and the physical generation before typing. SSH, Windows,
-session-host and Zellij branch delivery remain unavailable. The legacy Desktop/renderer branch
-path still needs its own coordinated adapter; these CLI guarantees do not describe that UI path.
+session-host and Zellij branch delivery remain unavailable.
+
+The UI branch action uses the same host transaction on Desktop and Server, with the new original
+node placed beside its source or at the menu's validated canvas position. A direct authenticated-owner click requires no additional agent
+confirmation and creates no agent creator grant. Owner reload/disconnect invalidates the operation;
+dispatched work retains its fence until settled. The UI saves current canvas edits first and never
+falls back to raw `/branch` input on an older host or a lost reply. Relay tabs cannot invoke these
+owner actions on either the host or the viewer's local desktop. Desktop CLI branching uses the
+confirmed agent entry and the same local POSIX tmux/account/session restrictions.
 
 Mounted agent nodes now read their session titles through the owner WebSocket API, using the same
 per-agent reader as the host sweep. Requests carry the node id so equal conversation ids on

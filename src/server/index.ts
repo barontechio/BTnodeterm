@@ -61,6 +61,7 @@ import {
 } from '../core/project-setup-handlers'
 import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
+import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
@@ -649,6 +650,9 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  const branchOwners = registerConversationBranchIpc(platform, (id, owner, at) => canvasControl
+    ? canvasControl.branchFromOwner(id, owner, at)
+    : Promise.resolve({ ok: false, error: 'Enable Server canvas control to branch a conversation.' }))
   registerHostLaunchIpc(platform, (id, command) => canvasControl ? canvasControl.runFromOwner(id, command) :
     Promise.resolve({ ok: false, started: false, error: 'Enable Server canvas control to run this host-owned launch.' }))
   registerBoardCommentDeliveryIpc(platform, {
@@ -1126,6 +1130,7 @@ export async function startServer(
   const dropUiClient = (uiId: number): void => {
     workspaceStore.forgetClient(uiId)
     ownerConfirmations.forgetClient(uiId)
+    branchOwners.forget(uiId)
     codexAccounts.forgetClient(uiId)
     licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
@@ -1356,6 +1361,7 @@ export async function startServer(
         remoteTranscripts.dispose()
         mediaReferences.dispose()
         ownerConfirmations.dispose()
+        branchOwners.dispose()
         codexAccounts.dispose()
         webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
@@ -1438,6 +1444,7 @@ export async function startServer(
       remoteTranscripts.dispose()
       mediaReferences.dispose()
       ownerConfirmations.dispose()
+      branchOwners.dispose()
       codexAccounts.dispose()
       webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so

@@ -72,6 +72,7 @@ import {
 } from '../shared/agents/config'
 import { assembleLaunchCommand, assembleResumeCommand } from '../shared/agents/launch'
 import { isClaudeBranchSessionId } from './claude-branch'
+import { isConversationBranchPosition, type ConversationBranchPosition } from '../shared/conversation-branch'
 import type { NodeExecutionKind, NodeExecutionOptions, NodeExecutionPermit } from './node-execution'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
@@ -941,13 +942,24 @@ export class HeadlessNodeFactory {
   /** Host-only continuation of a proven branch effect. No renderer callback or resume flag RPC. */
   resumeClaudeOriginal(sourceId: string, targetId: string, originalId: string,
     current: () => boolean): Promise<ServerControlReply> {
+    return this.resumeClaudeOriginalImpl(sourceId, targetId, originalId, current, false)
+  }
+
+  /** Host-only continuation for a human owner; never records an agent creator grant. */
+  resumeClaudeOriginalFromOwner(targetId: string, originalId: string, current: () => boolean, at?: ConversationBranchPosition): Promise<ServerControlReply> {
+    return this.resumeClaudeOriginalImpl(targetId, targetId, originalId, current, true, at ? { ...at } : undefined)
+  }
+
+  private resumeClaudeOriginalImpl(sourceId: string, targetId: string, originalId: string,
+    current: () => boolean, owner: boolean, at?: ConversationBranchPosition): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       let persistedId: string | undefined
       try {
         const pty = this.deps.ptyManager; const store = this.deps.workspaceStore
         if (!pty.runNodeAction || !pty.nodeExecutionIdentity || !store.getNodeForHostAction ||
           !store.projectIdsForNode || !store.projectTargetInfo) throw new Error('host node exclusion/routing is unavailable')
-        if (!isClaudeBranchSessionId(originalId) || sourceId === targetId) throw new Error('invalid branch continuation')
+        if (!isClaudeBranchSessionId(originalId) || (!owner && sourceId === targetId)) throw new Error('invalid branch continuation')
+        if (at !== undefined && !isConversationBranchPosition(at)) throw new Error('invalid branch position')
         const select = (workspace: Workspace) => {
           if (this.stopped || !current()) throw new Error('branch approval or target expired')
           const source = sourceProject(workspace, sourceId)
@@ -955,7 +967,7 @@ export class HeadlessNodeFactory {
           const target = hits.length === 1 ? hits[0] : undefined
           if (!source || !target || source.project.id !== target.project.id || target.project.unavailable ||
             target.project.ssh || isRemoteSessionNode(source.node) || isRemoteSessionNode(target.node) ||
-            !sourceCanControl(source.node, this.deps.agentIdOf) || !this.ownsMutation(sourceId, targetId, workspace, target.project) ||
+            (!owner && (!sourceCanControl(source.node, this.deps.agentIdOf) || !this.ownsMutation(sourceId, targetId, workspace, target.project))) ||
             target.node.kind !== 'terminal' || target.node.agentId !== 'claude' || target.node.pendingLaunch)
             throw new Error('branch source/target is no longer available in caller scope')
           const account = target.node.accountId ? this.deps.settings().claudeAccounts.find((a) => a.id === target.node.accountId) : undefined
@@ -1006,14 +1018,14 @@ export class HeadlessNodeFactory {
             if (fresh.binding !== before.binding) throw new Error('branch execution/account settings changed')
             const project = fresh.target.project; const target = fresh.target.node
             const size = terminalSize(fresh.settings)
-            const node: CanvasNodeState = { id, kind: 'terminal', position: placeRight(project, target, size), size,
+            const node: CanvasNodeState = { id, kind: 'terminal', position: at ?? placeRight(project, target, size), size,
               title: `${target.title || 'Claude'} (original)`, titleAuto: false, color: target.color,
               group: null, tags: [], agentId: 'claude', agentSessionId: originalId,
               ...(target.accountId ? { accountId: target.accountId } : {}),
               ...(target.agentModel ? { agentModel: target.agentModel } : {}), cwd: target.cwd || project.cwd,
               pendingLaunch: { after: [], command, executor: 'server', attempted: true, manualOnly: true } }
             project.nodes.push(node)
-            const ropes = project.ropes ??= []; addEdge(ropes, sourceId, id, 'ctrl')
+            if (!owner) { const ropes = project.ropes ??= []; addEdge(ropes, sourceId, id, 'ctrl') }
             const bridges = project.bridges ??= []; addEdge(bridges, sourceId, id, 'link')
             expectedCopy = copyBinding(project, node)
             return { project, node }
@@ -1021,7 +1033,7 @@ export class HeadlessNodeFactory {
           if (!committed.saved) throw new Error('original resume could not be saved')
           persistedId = id
           const { project, node } = committed.value
-          this.ownership.record(id, { sourceNodeId: sourceId, projectId: project.id })
+          if (!owner) this.ownership.record(id, { sourceNodeId: sourceId, projectId: project.id })
           await this.publishPersisted([project.id])
           const launched = await this.startCreated(project, [node], new Map([[id, command]]), true, () => permit.current(), () => {
             generation = pty.nodeExecutionIdentity!(id); born = true

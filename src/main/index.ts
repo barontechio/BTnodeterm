@@ -148,6 +148,8 @@ import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../cor
 import { HeadlessNodeFactory } from '../core/headless-node-factory'
 import { useHostTeamPlanner } from '../core/team-control-route'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
+import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
+import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { isRemoteSessionNode } from '../shared/worktree'
@@ -312,6 +314,7 @@ import { agentAccountColor } from '../shared/agents/account-color'
 import { canChat, capabilityAgentId } from '../shared/agents/config'
 import {
   setRemoteTranscriptReader,
+  transcriptPresence,
   TITLE_TAIL_BYTES,
   SESSION_ID_RE
 } from '../core/transcript-reader'
@@ -492,6 +495,7 @@ if (NT_MULTI && process.platform === 'darwin') app.commandLine.appendSwitch('use
 const corePlatform = electronPlatform()
 initPlatform(corePlatform)
 const ownerConfirmations = new OwnerConfirmationBroker(corePlatform)
+let branchOwners: ReturnType<typeof registerConversationBranchIpc> | undefined
 registerOwnerConfirmationIpc(corePlatform, ownerConfirmations)
 
 const settingsStore = new SettingsStore()
@@ -1361,6 +1365,7 @@ function createWindow(): BrowserWindow {
   releaseOnRendererDeparture(win, win.webContents, () => {
     workspaceStore.forgetClient(presenceId)
     ownerConfirmations.forgetClient(presenceId)
+    branchOwners?.forget(presenceId)
     forgetCodexAccountOwner(presenceId)
     forgetSshPassphraseOwner(presenceId)
     dropGitHubClient?.(presenceId)
@@ -4556,6 +4561,18 @@ app.whenReady().then(async () => {
   })
   registerHostLaunchIpc(corePlatform, (id, command) => coreTeams ? coreTeams.runFromOwner(id, command) :
     Promise.resolve({ ok: false, started: false, error: 'Host launch scheduler is stopped.' }))
+  const nodeBranches = new ConfirmedNodeBranch({ workspace: workspaceStore, pty: ptyManager,
+    confirmations: ownerConfirmations, settings: () => settingsStore.get(), scope: () => 'project',
+    ownsSpawn: (source, target) => coreTeams?.ownsSpawn(source, target) === true,
+    handedOver: (id) => stationHandovers.isHandedOver(id), stopped: () => !coreTeams,
+    runtime: (id) => { const entry = mirrorEntry(id); return { agentId: entry?.agentId, sessionId: entry?.sessionId,
+      state: entry?.state, verified: entry?.stateVerified === true && !entry.restored && !entry.idleInferred } },
+    originalAvailable: async (id, accountId) => await transcriptPresence(id, accountId) === 'present',
+    resumeOriginal: (...args) => coreTeams ? coreTeams.resumeClaudeOriginal(...args) : Promise.resolve({ ok: false, error: 'Host control stopped.' }),
+    resumeOriginalFromOwner: (...args) => coreTeams ? coreTeams.resumeClaudeOriginalFromOwner(...args) : Promise.resolve({ ok: false, error: 'Host control stopped.' }),
+    onInputDispatched: (id, at) => { stationHandovers.markHandedOver(id, at); stationOutcomes.withdrawBefore(id, at) }
+  })
+  branchOwners = registerConversationBranchIpc(corePlatform, (id, owner, at) => nodeBranches.runFromOwner(id, owner, at))
   const readControlCapabilities = registerControlCapabilities('desktop', () => true)
   const settingsControl = new SettingsControl({ workspace: workspaceStore, settings: settingsStore,
     confirmations: ownerConfirmations, runtime: (id) => ({ agentId: mirrorEntry(id)?.agentId, sessionId: mirrorEntry(id)?.sessionId }),
@@ -4565,6 +4582,7 @@ app.whenReady().then(async () => {
     // stamps the new work with it, so a turn the typed text starts is always later.
     const requestAt = Date.now()
     if (verb === 'capabilities') return controlCapabilitiesReply(readControlCapabilities(), args, verified)
+    if (verb === 'branch') return nodeBranches.run(nodeId, args, verified)
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`
@@ -5560,6 +5578,7 @@ app.on('before-quit', (e) => {
   coreTeams?.stop()
   coreTeams = null
   ownerConfirmations.dispose()
+  branchOwners?.dispose()
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log
   // honest. Clearing the ref too keeps a hook edge that lands during the quit flush (the pty
   // teardown window below) from re-holding an assertion nothing will ever release.

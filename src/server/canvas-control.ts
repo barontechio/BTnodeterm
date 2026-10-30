@@ -106,6 +106,8 @@ export interface ServerCanvasControlDeps {
 }
 
 export interface ServerCanvasControl {
+  branchFromOwner(nodeId: string, owner: import('../core/owner-lifetimes').AccountOwner,
+    at?: import('../shared/conversation-branch').ConversationBranchPosition): Promise<import('../shared/conversation-branch').ConversationBranchReply>
   runFromOwner(nodeId: string, command: string): Promise<HostLaunchReply>
   deliverBoardComment(raw: unknown): Promise<AgentMessageReply>
   handler: ReturnType<typeof createServerEditionControlHandler>
@@ -272,7 +274,8 @@ export async function initServerCanvasControl(
   const nodeWrites = nodeActionDeps ? new ConfirmedNodeWrite(nodeActionDeps) : undefined
   const nodeBranches = nodeActionDeps ? new ConfirmedNodeBranch({ ...nodeActionDeps,
     originalAvailable: async (id, accountId) => await transcriptPresence(id, accountId) === 'present',
-    resumeOriginal: (...args) => factory.resumeClaudeOriginal(...args)
+    resumeOriginal: (...args) => factory.resumeClaudeOriginal(...args),
+    resumeOriginalFromOwner: (...args) => factory.resumeClaudeOriginalFromOwner(...args)
   }) : undefined
 
   const messaging: AgentMessagingDeps = {
@@ -462,6 +465,8 @@ export async function initServerCanvasControl(
     stationOutcomes,
     stationHandovers,
     runFromOwner: (id, command) => factory.runFromOwner(id, command),
+    branchFromOwner: (id, owner, at) => nodeBranches ? nodeBranches.runFromOwner(id, owner, at) :
+      Promise.resolve({ ok: false, error: 'Owner branching is unavailable on this host.' }),
     deliverBoardComment: (raw) => stopped ? Promise.resolve({ ok: false,
       error: 'Board comment delivery is stopped.', result: { kind: 'notPermitted', reason: 'control-disabled' }
     }) : deliverBoardCommentFromUi(raw, messaging),

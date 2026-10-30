@@ -38,7 +38,18 @@ export class LocalClaudeActionTarget {
 
   snapshot(workspace: Workspace, sourceId: string, targetId: string, requireIdle: boolean,
     transition?: ClaudeActionSessionTransition): LocalClaudeActionSnapshot {
-    if (transition && (transition.nodeId !== targetId || sourceId === targetId)) throw new Error('invalid target session transition')
+    return this.resolve(workspace, sourceId, targetId, requireIdle, transition, false)
+  }
+
+  /** Host-only owner entry; a human action has no agent caller or creator grant. */
+  snapshotForOwner(workspace: Workspace, targetId: string, requireIdle: boolean,
+    transition?: ClaudeActionSessionTransition): LocalClaudeActionSnapshot {
+    return this.resolve(workspace, targetId, targetId, requireIdle, transition, true)
+  }
+
+  private resolve(workspace: Workspace, sourceId: string, targetId: string, requireIdle: boolean,
+    transition: ClaudeActionSessionTransition | undefined, owner: boolean): LocalClaudeActionSnapshot {
+    if (transition && (transition.nodeId !== targetId || (!owner && sourceId === targetId))) throw new Error('invalid target session transition')
     if (this.deps.stopped()) throw new Error('host control is stopped')
     const find = (id: string): { project: Project; node: CanvasNodeState } => {
       const hits = workspace.projects.flatMap((project) => project.nodes.filter((node) => node.id === id).map((node) => ({ project, node })))
@@ -50,10 +61,10 @@ export class LocalClaudeActionTarget {
     if (source.project.ssh || target.project.ssh || isRemoteSessionNode(source.node) || isRemoteSessionNode(target.node))
       throw new Error('SSH input is unavailable on this adapter')
     const caller = this.deps.runtime(sourceId); const runtime = this.deps.runtime(targetId)
-    if (!caller.verified || !caller.sessionId || !canControlCanvas((source.node.agentId || caller.agentId) as AgentId))
+    if (!owner && (!caller.verified || !caller.sessionId || !canControlCanvas((source.node.agentId || caller.agentId) as AgentId)))
       throw new Error('caller session is not verified')
-    const owns = this.deps.ownsSpawn(sourceId, targetId); const scope = this.deps.scope()
-    if (scope !== 'project' && !owns) throw new Error('target was not created by this caller during this host run')
+    const owns = owner ? false : this.deps.ownsSpawn(sourceId, targetId); const scope = owner ? 'owner' : this.deps.scope()
+    if (!owner && scope !== 'project' && !owns) throw new Error('target was not created by this caller during this host run')
     // Other backends need their own measured empty-composer reader before they can accept this verb.
     if (target.node.kind !== 'terminal' || target.node.agentId !== 'claude' || runtime.agentId !== 'claude' || !runtime.verified || !runtime.sessionId)
       throw new Error('target must be a verified local Claude terminal')
