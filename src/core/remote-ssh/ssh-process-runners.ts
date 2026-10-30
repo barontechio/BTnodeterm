@@ -1,4 +1,5 @@
 import { spawn, execFile, execFileSync } from 'node:child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { findSshBinary, nativeMux, useNativeSsh } from './native/native-runtime'
 import { runScpArgv, runSshArgv, startNativeMaster } from './native/native-invoke'
 import { findExecutableSync, shellPathNow } from '../exec-path'
@@ -45,12 +46,28 @@ export interface SshProcessRunnerOptions extends Omit<SshProjectRunners, Transpo
   /** Capture before queueing; recheck immediately before an exec can use its control socket. */
   captureExecutionCheck?(args: readonly string[]): () => boolean
 }
+export interface ScopedSshProjectRunners extends SshProjectRunners {
+  /** Host-only request identity for queued commands; composes with transport generation checks. */
+  withQueuedExecutionCheck<T>(current: () => boolean, work: () => Promise<T> | T): Promise<T>
+}
+type CommandScope = { active: boolean; current(): boolean; parent?: CommandScope }
+function scopeCurrent(scope: CommandScope | undefined): boolean {
+  try { return !scope || scope.active && scope.current() === true && scopeCurrent(scope.parent) }
+  catch { return false }
+}
 /** OpenSSH/native transport composition shared by the native and headless shells. */
-export function makeSshProjectRunners(options: SshProcessRunnerOptions): SshProjectRunners {
+export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedSshProjectRunners {
   const { agent: appSshAgent, askpass: askpassServer, askpassScriptPath, captureExecutionCheck, ...rest } = options
   const ssh = sshBin(); const scp = scpBin(); const native = useNativeSsh()
+  const scopes = new AsyncLocalStorage<CommandScope>()
   return {
     ...rest,
+    withQueuedExecutionCheck: async (current, work) => {
+      const scope: CommandScope = { current, active: true, parent: scopes.getStore() }
+      if (!scopeCurrent(scope)) throw new Error('ssh-request-stale')
+      try { return await scopes.run(scope, work) }
+      finally { scope.active = false }
+    },
     spawnMaster: native ? (args) => startNativeMaster(nativeMux(), args) : (args, env) => {
       // Capture the master's stderr (stdin/stdout stay ignored) so a failed connect can report the
       // real ssh error instead of a generic timeout. Buffer is capped so a chatty host can't grow it
@@ -122,8 +139,13 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): SshProj
     // Mux control commands and the terminals themselves are never queued (see ssh-child-gate.ts).
     run: (args, stdin, timeoutMs) => {
       const current = captureExecutionCheck?.(args)
+      const scope = scopes.getStore()
+      const allowed = () => {
+        try { return scopeCurrent(scope) && (!current || current() === true) } catch { return false }
+      }
+      if (!allowed()) return Promise.resolve({ code: 255, stdout: '' })
       return sshChildGate.run(args, () => {
-        if (current && !current()) return Promise.resolve({ code: 255, stdout: '' })
+        if (!allowed()) return Promise.resolve({ code: 255, stdout: '' })
         return native
           ? // Still gated: sshd's MaxSessions bounds channels on ONE connection just as it bounds
             // mux clients on a ControlMaster.
