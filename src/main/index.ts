@@ -606,6 +606,7 @@ let sshProjectManager: ReturnType<typeof initSshProject> | undefined
 // workspace store's `onPersist`, the license callback and the quit handler read it at call time (the
 // boot workspace load's `onPersist` runs before the assignment — a later `const` would be a TDZ throw).
 let watchLinks: WatchLinkService | null = null
+let licenseClient: ReturnType<typeof initLicense> | undefined
 
 // The standalone Codex relay bundle (`out/main/codex-relay.js`, built by scripts/build-codex-relay.mjs
 // after electron-vite build), uploaded to a Linux host for managed Codex accounts. Read once, beside
@@ -4878,7 +4879,7 @@ app.whenReady().then(async () => {
   initTelemetry(() => settingsStore.get())
   // A license change (activate, refresh, a lapsed token replaced) re-arms every live link the API
   // refused: a link host whose 7-day entitlement expired under it stops minting until then (R41).
-  initLicense(() => watchLinks?.onEntitlementChanged())
+  licenseClient = initLicense(() => watchLinks?.onEntitlementChanged())
   // Lazy getter: sshProjectManager is created just below, so a remote account op (which only runs
   // after the user has connected an SSH project) always sees the live manager.
   initClaudeAccounts(() => sshProjectManager)
@@ -5627,7 +5628,8 @@ app.on('before-quit', (e) => {
     requestRendererFlush(getMainWindow()?.webContents, ipcMain).then(() => remoteWorkspaceIO.flush()),
     remoteWorkspaceIO.flush(),
     ptyManager.killAll(),
-    watchLinksStopped
+    watchLinksStopped,
+    licenseClient?.dispose()
   ])
   void Promise.race([flush, new Promise((r) => setTimeout(r, 1500))])
     // Then let whisper go. A dictation still transcribing when Electron tears down the main

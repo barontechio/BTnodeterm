@@ -227,6 +227,57 @@ describe('license entitlement refresh', () => {
     expect(status.active).toBe(false)
   })
 
+  it('stops an in-flight refresh and all future timer work on disposal', async () => {
+    let began!: () => void; const started = new Promise<void>((resolve) => { began = resolve })
+    fetchMock.mockImplementationOnce((_url, init) => new Promise((_resolve, reject) => {
+      began(); init.signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+    }))
+    const { initLicense } = await import('./license')
+    const service = initLicense()
+    await started; await service.dispose(); await refreshed()
+    const count = fetchMock.mock.calls.length
+    await vi.advanceTimersByTimeAsync(24 * HOUR)
+    expect(fetchMock).toHaveBeenCalledTimes(count)
+    expect(sent()).toEqual([])
+    expect(() => fake.handlers[IPC.licenseStatus]()).toThrow('owner-expired')
+  })
+
+  it('serializes activation and deactivation so a late activation cannot restore a removed key', async () => {
+    let answer!: (value: unknown) => void
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    fetchMock.mockResolvedValueOnce(jsonResponse({}))
+    const { initLicense } = await import('./license'); const service = initLicense(undefined, { background: false })
+    const activation = fake.handlers[IPC.licenseActivate]('new-key')
+    const deactivation = fake.handlers[IPC.licenseDeactivate]()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    answer(jsonResponse({ token: mint(3600) }))
+    await activation; await deactivation
+    const stored = JSON.parse(readFileSync(path.join(h.userData, 'license.json'), 'utf8'))
+    expect(stored.key).toBeUndefined(); expect(stored.token).toBeUndefined()
+    if (process.platform !== 'win32') expect((await fsp.stat(path.join(h.userData, 'license.json'))).mode & 0o777).toBe(0o600)
+    await service.dispose()
+  })
+
+  it('refuses a reply after owner departure and preserves disk state on an atomic write failure', async () => {
+    let answer!: (value: unknown) => void; let current = true
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    const { initLicense } = await import('./license'); const service = initLicense(undefined, { background: false, current: () => current })
+    const activation = Promise.resolve(fake.handlers[IPC.licenseActivate]('new-key')); void activation.catch(() => {})
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    current = false; answer(jsonResponse({ token: mint(3600) }))
+    await expect(activation).rejects.toThrow('owner-expired'); expect(sent()).toEqual([])
+    current = true
+    const previous = JSON.stringify({ key: 'kept', lastSeen: 42 })
+    writeFileSync(path.join(h.userData, 'license.json'), previous)
+    fetchMock.mockResolvedValueOnce(jsonResponse({ token: mint(3600) }))
+    const rename = vi.spyOn(fsp, 'rename').mockRejectedValueOnce(Object.assign(new Error('disk failure'), { code: 'EIO' }))
+    try {
+      await expect(fake.handlers[IPC.licenseActivate]('new-key')).rejects.toThrow('disk failure')
+      expect(readFileSync(path.join(h.userData, 'license.json'), 'utf8')).toBe(previous)
+      expect(sent()).toEqual([])
+    } finally { rename.mockRestore(); await service.dispose() }
+  })
+
   it('a slow early write cannot walk the clock anchor backwards past a later one', async () => {
     // Regression for the SECOND flake in this file (it made the rollback test above fail ~4 runs
     // in 15 on a loaded box). bumpLastSeen is a read-modify-write of license.json, and the refresh
