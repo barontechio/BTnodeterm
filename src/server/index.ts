@@ -114,6 +114,7 @@ import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../
 import { createCanvasAuthority, type CanvasAuthority } from '../core/canvas-authority'
 import { wireAgentStatus } from './agent-status'
 import { initServerContextLink } from './context-link'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 import { registerChatCatalogIpc } from '../core/chat-catalog'
@@ -794,6 +795,7 @@ export async function startServer(
   // src/server/context-link.ts.
   const contextLink = initServerContextLink({
     ptyManager,
+    isRemoteNode: (id) => isRemoteWorkspaceNode(workspaceStore, ptyManager, id),
     canvases: () => workspaceStore.persistedCanvases()
   })
   // A governed project's outside edit goes to the canvas authority, which publishes the difference

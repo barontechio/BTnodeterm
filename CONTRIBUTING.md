@@ -1762,3 +1762,9 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+**Linked context must keep its current authorization.** Classify saved/disconnected remote
+placements independently of reader support. Missing remote read/capture adapters refuse rather
+than read local histories or an unmounted local pane. Recheck the selected edge's account/session,
+hook path and routing after asynchronous reads; discard stale results without invalidating
+title-only edits. Remote capture uses an explicit injected route, never a local fallback.

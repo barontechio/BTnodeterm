@@ -353,6 +353,7 @@ import { sessionName } from '../core/tmux-naming'
 import { posixQuote, sshHostKey, type SshConnection } from '../shared/ssh'
 import { buildHandoff, type HandoffRemote } from './handoff'
 import { contextLinkShimPath, initContextLink, setNodeTranscript } from '../core/context-link'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, canvasControlShimPath } from './canvas-control'
@@ -4789,7 +4790,8 @@ app.whenReady().then(async () => {
   // These three deps are the whole of what `src/core` cannot answer for itself. Fail-open
   // throughout — a failed remote read renders as "no transcript yet", never as an error.
   initContextLink(ptyManager, {
-    isRemoteNode: (nodeId) => !!ptyManager.sshRemoteForNode(nodeId),
+    isRemoteNode: (nodeId) => isRemoteWorkspaceNode(workspaceStore, ptyManager, nodeId),
+    captureRemoteTerminal: async (nodeId) => ptyManager.sshRemoteForNode(nodeId) ? ptyManager.captureSession(nodeId) : '',
     readRemoteFile: async (nodeId, filePath, maxBytes) => {
       const rt = ptyManager.sshRemoteForNode(nodeId)
       if (!rt) return null
