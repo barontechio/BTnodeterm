@@ -226,6 +226,14 @@ revalidation, separate backend lifecycle context, fixed-command submit dispatch 
 reservation of the original-resume node before publication. A deterministic SSH fixture now
 distinguishes mux argv from legal ControlPath strings containing `-O`.
 
+The shared owner/agent branch snapshot `52b034fc` passes 24,546 tests (109 skipped), typecheck,
+Desktop production build and Server build. Focused real-factory tests cover the direct owner
+transaction without a caller/creator grant, document departure during dispatch and menu-position
+snapshotting. A real Server owner WebSocket reaches the guarded entry; missing support, lost
+replies and relay tabs never fall through to raw input or the viewer's local owner API.
+The preceding confirmed-CLI delivery `37735924` passed Linux and Windows quality, Dependency
+review and both CodeQL analysis/gate checks. Each subsequent delivery needs its own remote checks.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
