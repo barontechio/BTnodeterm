@@ -346,6 +346,13 @@ describe('outbound filter: deny by default for non-editors', () => {
     expect(filterOutboundEvent(ev(IPC.githubIssuesChanged('P'), [1]), ctx('viewer'))).toBe(false)
   })
 
+  it('attributes a blocked-input notice to its shared node and never accepts it as a viewer method', () => {
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, { nodeId: 'n1' }), ctx('viewer'))).toBe(true)
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, { nodeId: 'n2' }), ctx('viewer'))).toBe(false)
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, {}), ctx('viewer'))).toBe(false)
+    expect(decideAccess('cast', IPC.ptyInputBlocked, [{ nodeId: 'n1' }], ctx('viewer')).allow).toBe(false)
+  })
+
   it('per-session terminal events are delivered', () => {
     for (const ch of [IPC.ptyExit('s'), IPC.ptySize('s'), IPC.ptyClosed('s'), IPC.ptyRecycled('s'), IPC.ptyResync('s')]) {
       expect(filterOutboundEvent(ev(ch, 0), ctx('viewer')), ch).toBe(true)
