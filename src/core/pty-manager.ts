@@ -7,6 +7,7 @@ import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { platform } from './platform'
 import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit } from './node-execution'
+import { sendSettledEnvelope as deliverSettledEnvelope, type SettledEnvelopeOptions } from './settled-envelope'
 import * as pty from 'node-pty'
 import { IPC } from '../shared/ipc'
 import { safeSessionProgram } from '../shared/node-exec'
@@ -6587,6 +6588,15 @@ export class PtyManager {
     opts?: { enter?: boolean; typedFor?: AgentId }
   ): Promise<TextDeliveryResult> {
     return this.serializePaneWrite(persistKey, () => this.sendTextNow(persistKey, text, opts))
+  }
+
+  /** Keep the entire paste/settle/submit operation in one queue slot, including capture awaits. */
+  async sendSettledEnvelope(persistKey: string, envelope: string, options?: SettledEnvelopeOptions): Promise<boolean> {
+    return this.serializePaneWrite(persistKey, () => deliverSettledEnvelope({
+      captureSession: (id) => this.captureSession(id),
+      // Already inside this pane's queue: taking sendText's public slot would deadlock.
+      sendText: (id, text, opts) => this.sendTextNow(id, text, opts)
+    }, persistKey, envelope, options))
   }
 
   /** Per-pane write chain: see `serializePaneWrite`. */

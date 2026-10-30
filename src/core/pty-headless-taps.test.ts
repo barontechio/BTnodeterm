@@ -197,4 +197,27 @@ describe('PtyManager headless taps (#925)', () => {
     await m.killAll()
     await expect(m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' })).rejects.toThrow('stopped')
   })
+
+  it('holds the pane queue between an envelope paste and its settled Enter', async () => {
+    const m = await manager()
+    // The backend acknowledgements are controlled; exclusion and the public compound operation
+    // are real. Hold the screen read AFTER paste, where two separate sendText calls had a gap.
+    const backend = m as unknown as { sendTextNow(id: string, text: string, opts?: { enter?: boolean }): Promise<boolean> }
+    const writes = vi.spyOn(backend, 'sendTextNow').mockResolvedValue(true)
+    let release!: (screen: string) => void
+    const screen = new Promise<string>((resolve) => { release = resolve })
+    vi.spyOn(m, 'captureSession').mockResolvedValueOnce('before').mockImplementationOnce(() => screen)
+    const delivery = m.sendSettledEnvelope('n1', 'message\nFOOTER')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(writes).toHaveBeenCalledTimes(1)
+    const competing = m.sendText('n1', 'competing')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(writes).toHaveBeenCalledTimes(1)
+    await expect(m.runNodeAction('n1', 'write', { current: () => true }, () => {})).rejects.toThrow('busy')
+    release('message\nFOOTER'); await expect(delivery).resolves.toBe(true)
+    await competing
+    expect(writes.mock.calls).toEqual([['n1', 'message\nFOOTER', { enter: false }], ['n1', '', { enter: true }], ['n1', 'competing', undefined]])
+    await expect(m.runNodeAction('n1', 'write', { current: () => true }, () => 'ready')).resolves.toBe('ready')
+    await m.killAll()
+  })
 })

@@ -1886,3 +1886,8 @@ refusals are addressed and throttled; relay/scoped-guest event policy must attri
 Preserve drafts, distinguish pre-send refusal from uncertain input, and mark submitted/uncertain
 work before releasing exclusion so a delayed hook cannot authorize a second send. Keep Desktop's
 existing confirmation waivers until its orchestration has an explicit shared adapter.
+
+Server message envelopes use `PtyManager.sendSettledEnvelope`: its one pane-queue slot includes
+capture, paste, settlement waits and Enter. Do not compose two public `sendText` calls around an
+unreserved wait. The implementation lives in `core/settled-envelope.ts`, with a Server compatibility
+export, and calls the private delivery path from inside the queue to avoid recursive deadlock.

@@ -154,6 +154,12 @@ Other agents and SSH writes remain explicitly unavailable until their input/iden
 the same checks. Branching, removal and the remaining account/restart orchestration still require
 their own coordinated adapters.
 
+The Server message-envelope adapter now also lives in core and delegates to a compound
+PtyManager operation. One pane-write slot spans capture, paste, settlement and Enter, preventing
+a competing application write or host action from entering the old gap between two public
+`sendText` calls. Its behavioral regression holds the post-paste read, queues a competing write,
+and checks submission finishes before that write. Partial/uncertain paste semantics are retained.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
