@@ -3,12 +3,11 @@
  *
  * Every one of these cases drives the shipped registration through the platform seam
  * (`fakePlatform().handlers[...]`), i.e. exactly what `ipcMain.handle` / the server's WS dispatch
- * invoke. Registering with NO deps is the Server Edition's own configuration: no canvas skill
- * (canvas control is not wired there) and no SSH manager, so a ctx carrying a projectId must still
- * take the local path.
+ * invoke. Both shells use the same lifecycle. Missing SSH wiring refuses an explicit
+ * remote context without touching local accounts.
  *
- * MUTATION: drop the consent lifecycle's `installIntoClaudeAccount` call, or let `remoteFor` treat
- * a projectId alone as remote → the install case and the local-fallback case redden.
+ * MUTATION: remove the integration install or restore the remote-to-local fallback and the
+ * lifecycle and refusal cases fail.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'fs'
@@ -149,7 +148,7 @@ describe('registerClaudeAccountsIpc — the seven channels', () => {
   })
 })
 
-describe('the remote leg is resolved lazily, and its absence falls back to LOCAL', () => {
+describe('the remote leg is resolved lazily without local fallback', () => {
   it('a ctx with a projectId takes the remote leg when one is wired', async () => {
     const calls: string[] = []
     registerClaudeAccountsIpc({
@@ -177,11 +176,15 @@ describe('the remote leg is resolved lazily, and its absence falls back to LOCAL
     expect(calls).toEqual([`add:p1:${res.id}`, `rm:p1:${res.id}`])
   })
 
-  it('a ctx with a projectId but NO wired remote takes the local path (Server Edition)', async () => {
+  it('refuses unavailable or invalid remote contexts without creating, polling or deleting locally', async () => {
     registerClaudeAccountsIpc({ remote: () => undefined })
-    const res = await call(IPC.claudeAccountsAdd, { projectId: 'p1' })
-    expect(res.configDir).toBe(accountConfigDir(userDataDir, res.id))
-    expect(existsSync(res.configDir)).toBe(true)
+    const local = await call(IPC.claudeAccountsAdd)
+    for (const ctx of [{ projectId: 'p1' }, {}, { projectId: '' }]) {
+      await expect(call(IPC.claudeAccountsAdd, ctx)).rejects.toThrow('ssh-')
+      await expect(call(IPC.claudeAccountsWaitLogin, local.id, ctx)).rejects.toThrow('ssh-')
+      await expect(call(IPC.claudeAccountsRemove, local.id, ctx)).rejects.toThrow('ssh-')
+      expect(existsSync(local.configDir)).toBe(true)
+    }
   })
 })
 
