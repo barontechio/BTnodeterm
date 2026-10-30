@@ -1771,3 +1771,9 @@ Cancellation retains all fences until dispatched work settles, and detached expi
 cannot create or write another node. Raw input refusals are addressed and throttled, with relay
 policy attributing their node. Domain services still own authorization, consent and recovery;
 this primitive neither authorizes removal nor reserves a filesystem path.
+
+Physical backend constructors, driver timers and lifecycle registration leave node-action ALS
+through `NodeExecutionCoordinator.backend` after dispatch validation. Only that backend context
+creates `backendCallback` wrappers; physical-generation checks and competing-action fences remain.
+Application promises stay action-bound and cannot start a backend from an expired claim. These
+host internals are never a callback RPC or a way to deliver user input.

@@ -6,6 +6,29 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 const options = { current: () => true }
 
 describe('host node execution ownership', () => {
+  it('detaches backend-owned resources while keeping application continuations action-bound', async () => {
+    const guard = new NodeExecutionCoordinator(); const hold = deferred()
+    let backend!: Promise<void>; let application!: Promise<void>; let escape!: Promise<void>
+    await guard.run('a', 'restart', options, () => {
+      backend = guard.backend(() => hold.promise.then(() => guard.assertAllowed('a')))
+      application = hold.promise.then(() => guard.assertAllowed('a'))
+      escape = hold.promise.then(() => guard.backend(() => guard.assertAllowed('a')))
+    })
+    void application.catch(() => {}); void escape.catch(() => {})
+    hold.resolve(); await backend
+    await expect(application).rejects.toThrow('expired'); await expect(escape).rejects.toThrow('expired')
+  })
+
+  it('backend callbacks retain competing-action fences even when invoked from that action', async () => {
+    const guard = new NodeExecutionCoordinator()
+    const callback = guard.backend(() => guard.backendCallback(() => guard.assertAllowed('a')))
+    await guard.run('a', 'restart', options, () => {
+      expect(() => callback()).toThrow('busy')
+      expect(() => guard.backendCallback(() => {})).toThrow('invalid')
+    })
+    expect(() => callback()).not.toThrow()
+  })
+
   it('claims a whole group atomically and owns each member from the same continuation', async () => {
     const guard = new NodeExecutionCoordinator(); const hold = deferred(); const ids = ['a', 'b']
     const work = guard.runMany(ids, 'worktree', options, async (permit) => {

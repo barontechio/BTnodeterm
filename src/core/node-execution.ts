@@ -41,6 +41,20 @@ export class NodeExecutionCoordinator {
 
   isBusy(nodeId: string): boolean { return this.active.has(nodeId) }
 
+  /** Start a backend-owned resource after dispatch validation, without inheriting the action.
+   * Long-lived process timers/listeners outlive the request that created their pane.
+   */
+  backend<T>(start: () => T): T {
+    this.context.getStore()?.permit.assertCurrent()
+    return this.context.exit(start)
+  }
+
+  /** Only physical backend lifecycle callbacks use this; caller continuations stay action-bound. */
+  backendCallback<A extends unknown[], R>(callback: (...args: A) => R): (...args: A) => R {
+    if (this.context.getStore()) throw new NodeExecutionError('invalid')
+    return (...args) => this.context.exit(() => callback(...args))
+  }
+
   /** Every mutation checks this at its point of dispatch, including continuations after expiry. */
   assertAllowed(nodeId: string): void {
     if (this.stopped) throw new NodeExecutionError('stopped')
