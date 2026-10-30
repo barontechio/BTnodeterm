@@ -102,6 +102,18 @@ compare the requested endpoint and folder at delayed dispatch, protecting Deskto
 agent adapter cannot unlink or unpublish another agent. Explicit unavailable Claude/Codex remote
 contexts refuse; Codex login cancellation interrupts its wait and drops late results.
 
+The independent [Claude remote refusal #1323](https://github.com/eneskirca/nodeterm/pull/1323)
+passes 24,164 tests (109 skipped), typecheck and both builds. The latest SSH export passes 24,170.
+The shared license lifecycle snapshot passes 24,404 tests (109 skipped), typecheck and both builds:
+requests/polls have a disposable host lifetime, mutations serialize, persistence is atomic/0600,
+and new device identities are published synchronously without replacing an existing installation.
+
+PR 20 now has its first Server adapter: `NODETERM_SERVER_LICENSE=1` / `--license` enables owner-only
+administration and the existing licensed Live Links service. Checkout opens in the requesting
+browser. Disabled/older hosts are distinguished from free enabled hosts; the normal Pro gate and
+backend entitlement checks remain mandatory. Owner departure, shutdown, atomic failure and UI
+capability fixtures cover the path. Full validation of this Server snapshot is in progress.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

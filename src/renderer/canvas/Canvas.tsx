@@ -3898,6 +3898,7 @@ export function Canvas() {
   // A primitive count, not the list: a push about one link's viewers must not re-render the canvas.
   // A pinned drawer is rendered only while a link is live (`liveChatShown`); the pin is kept.
   const liveLinkCount = useWatchLinks((s) => s.links.length)
+  const serverLicenseEnabled = useEntitlement((s) => s.serverLicenseEnabled)
   const liveChatRef = useRef(liveChat)
   liveChatRef.current = liveChat
   useEffect(() => {
@@ -3933,6 +3934,7 @@ export function Canvas() {
   const liveLinkFacts = useCallback(
     (projectId: string): LiveLinkAvailabilityFacts => ({
       serverEdition: isBrowserRuntime(),
+      serverLicenseEnabled: useEntitlement.getState().serverLicenseEnabled,
       source: sessionForProject(projectId).source,
       activeLinks: useWatchLinks.getState().links.length
     }),
@@ -19177,6 +19179,7 @@ export function Canvas() {
         activeLinks: useWatchLinks.getState().links.length,
         entitled: useEntitlement.getState().isPremium,
         serverEdition: isBrowserRuntime(),
+        serverLicenseEnabled,
         icon: <IconBroadcast />,
         chatIcon: <IconChat />,
         manage: () => {
@@ -20454,8 +20457,8 @@ export function Canvas() {
           {...liveLinkRemoteFor(liveLinkDialog)}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
-          // No license layer in the Server Edition (R43): never an Upgrade button there.
-          onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}
+          // Only configured Server hosts can offer checkout; relay targets stay unavailable.
+          onUpgrade={isBrowserRuntime() && !serverLicenseEnabled ? undefined : () => { void useEntitlement.getState().upgrade('pro').catch((error) => setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) })) }}
           onClose={closeLiveLinkDialog}
         />
       )}

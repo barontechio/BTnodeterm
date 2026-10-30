@@ -17,6 +17,7 @@ import { initPlatform } from '../core/platform'
 import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { SettingsStore } from '../core/settings-store'
 import { SettingsControl } from '../core/settings-control'
+import { registerServerLicense } from './license'
 import { registerServerCodexAccounts } from './codex-accounts'
 import { registerServerSshProjects, type ServerSshProjects } from './ssh-projects'
 import { ServerGitRequestScope } from './git-request-scope'
@@ -895,6 +896,7 @@ export async function startServer(
   // here because the onPersist closure runs at the boot load just below (a later `const` would be a
   // TDZ throw inside that load, which it would then report as a failed load).
   let watchLinks: WatchLinkService | null = null
+  let licenseClient: ReturnType<typeof registerServerLicense> | undefined
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
@@ -1091,6 +1093,7 @@ export async function startServer(
     workspaceStore.forgetClient(uiId)
     ownerConfirmations.forgetClient(uiId)
     codexAccounts.forgetClient(uiId)
+    licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
     sshProjects?.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
@@ -1265,20 +1268,18 @@ export async function startServer(
     authority.sharedChanged()
   }
 
-  // Live links (docs/live-links.md): the SAME core service the desktop registers, over the real seams.
-  // This edition has no license layer yet (`initLicense` is desktop-only), so the service is registered
-  // UNSUPPORTED with no entitlement (controller ruling R43): create answers `unsupported` — the browser
-  // shows "Live links need a Pro license on this server — not available in the Server Edition yet",
-  // never an Upgrade button — list answers [], and nothing is loaded, hosted or revoked. A server
-  // license layer (a named follow-up) changes `entitlement` and drops `unsupported`, nothing else.
-  // Headless, no keychain: the links file is a 0600 file in the data dir (spec D8). The workspace
-  // index was read above, so there is no load to wait for.
+  // The same entitlement verifier as Desktop, bound to this server's installation. An explicit
+  // opt-in avoids license API polling on terminal-only hosts; the owner receives its capabilities.
+  licenseClient = registerServerLicense({ platform, enabled: config.licenseEnabled === true && !otherServerHere,
+    onChanged: () => { watchLinks?.onEntitlementChanged() } })
+  // Live Links use the existing service and owner-only RPC. A second process on this data
+  // directory owns neither entitlement mutations nor link hosting.
   const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, () => undefined))
   watchLinks = createWatchLinkService({
     api: createWatchLinkApi({ apiBase: API_BASE }),
     relayUrl: RELAY_URL,
     store: new WatchLinkStore({ file: path.join(config.dataDir, 'watch-links.json') }),
-    entitlement: () => null,
+    entitlement: () => config.licenseEnabled && !otherServerHere ? getStoredEntitlement() : null,
     relayAllowed: () => true,
     nodeState: (nodeId) => workspaceNodeState(workspaceStore, nodeId),
     clients: {
@@ -1297,7 +1298,7 @@ export async function startServer(
     // host's tmux would run there, never in this core's Zellij.
     controlSupport: (nodeId) => (watchRemote(nodeId).requireRemote ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(platform, channel, ...args),
-    unsupported: true
+    unsupported: config.licenseEnabled !== true || otherServerHere
   })
   registerWatchLinkIpc(platform, watchLinks)
   // Two servers on one data dir would host (and revoke) each other's links.
@@ -1328,6 +1329,7 @@ export async function startServer(
         // Stop the live-link hosts while the pty layer is still up (their viewers leave cleanly),
         // bounded: the links file's last write must not hold the close on a stalled disk.
         await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
+        await licenseClient?.dispose()
         // Detach PTY clients — tmux sessions keep running (Phase 1 contract).
         sessionReaper.stop()
         pressure.stop()
@@ -1406,6 +1408,7 @@ export async function startServer(
       hosted.stop()
       // Stop the live-link hosts while the pty layer is still up (see the headless close() above).
       await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
+      await licenseClient?.dispose()
       // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
       // and been detached, a save from a still-attached tab is written un-overlaid, over its final
       // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued

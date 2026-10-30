@@ -5,6 +5,7 @@ import {
   buildClaudeAccountsApi,
   buildCodexAccountsApi,
   buildSshApi,
+  buildLicenseApi,
   buildControlApi,
   buildMediaApi,
   buildWebPreviewApi,
@@ -63,6 +64,32 @@ describe('Server SSH owner protocol', () => {
     api.sshProject.onPassphraseRequest(() => {}); api.sshProject.onPassphraseDismiss(() => {})
     expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseRequest, args: [] })
     expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseDismiss, args: [] })
+  })
+})
+
+describe('Server license checkout', () => {
+  it('opens during the click and closes an unused popup when the host refuses', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    const popup = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() }
+    const open = vi.fn(() => popup); vi.stubGlobal('window', { open })
+    try {
+      const status = { active: false }
+      request.mockResolvedValueOnce({ checkoutUrl: 'https://checkout.example.test/owner', status } as never)
+      const upgrading = buildLicenseApi(c as never).license.upgrade()
+      expect(open).toHaveBeenCalledOnce(); expect(popup.opener).toBeNull()
+      expect(await upgrading).toEqual(status)
+      expect(popup.location.replace).toHaveBeenCalledWith('https://checkout.example.test/owner')
+      request.mockRejectedValueOnce(new Error('license-disabled'))
+      await expect(buildLicenseApi(c as never).license.upgrade()).rejects.toThrow('license-disabled')
+      expect(popup.close).toHaveBeenCalledOnce()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('does not start a checkout if the browser blocks the window', async () => {
+    const c = fakeClient(); vi.stubGlobal('window', { open: () => null })
+    try {
+      await expect(buildLicenseApi(c as never).license.upgrade()).rejects.toThrow('Allow popups')
+      expect(c.calls).toEqual([])
+    } finally { vi.unstubAllGlobals() }
   })
 })
 

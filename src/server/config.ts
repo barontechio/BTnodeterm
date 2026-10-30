@@ -60,6 +60,8 @@ export type ServerConfig = {
   canvasControl?: boolean
   /** Opt-in server-host SSH context; credentials/config are this host's, never the viewer's. */
   sshProjects?: boolean
+  /** Enables host-bound licensing and licensed Live Links. Off by default, with no license polling. */
+  licenseEnabled?: boolean
   /**
    * Which nodes a canvas-control caller may read and act on (src/server/control-scope.ts):
    * `creator` (default) or `project`. Environment: NODETERM_SERVER_CONTROL_SCOPE; CLI:
@@ -228,6 +230,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
       ? truthy(args['canvas-control'])
       : truthy(env.NODETERM_SERVER_CANVAS_CONTROL)
   const sshProjects = args['ssh-projects'] !== undefined ? truthy(args['ssh-projects']) : truthy(env.NODETERM_SERVER_SSH)
+  const licenseEnabled = args.license !== undefined ? truthy(args.license) : truthy(env.NODETERM_SERVER_LICENSE)
   if (args['control-scope'] === true) {
     throw new Error('--control-scope needs a value: creator or project')
   }
@@ -316,6 +319,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     headless,
     canvasControl,
     sshProjects,
+    licenseEnabled,
     controlScope
   }
 }

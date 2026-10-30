@@ -157,9 +157,9 @@ export function passwordProblemText(pw: string): string | null {
   return problem === null ? null : PASSWORD_PROBLEM_TEXT[problem]
 }
 
-/** The R43 sentence — the Server Edition has no license layer yet. Never paired with an Upgrade button. */
+/** A disabled or older Server host cannot offer checkout. */
 export const SERVER_EDITION_UNSUPPORTED =
-  'Live links need a Pro license on this server — not available in the Server Edition yet'
+  'Live links require licensing to be enabled in this server’s host configuration.'
 const RELAY_TAB_UNSUPPORTED = 'Live links are created on the machine that runs this terminal.'
 const LIMIT_MACHINE = `Stop a live link first — ${MAX_LINKS_PER_MACHINE} can be active at once.`
 
@@ -192,10 +192,10 @@ export function stopAllElsewhereNote(): string {
  * Where "Stop all" is offered (R62): wherever the owner could have links to stop — this machine lists
  * one, or holds a Pro license (its links on OTHER machines are invisible here, and Stop all is the one
  * control that reaches them: an office desktop left sharing, a lost laptop whose links resume at
- * launch). Never in the Server Edition (R43: no license layer, nothing to stop).
+ * launch). Server offers it only when its host license layer is enabled.
  */
-export function showsStopAll(o: { serverEdition: boolean; entitled: boolean; activeLinks: number }): boolean {
-  return !o.serverEdition && (o.activeLinks > 0 || o.entitled)
+export function showsStopAll(o: { serverEdition: boolean; serverLicenseEnabled?: boolean; entitled: boolean; activeLinks: number }): boolean {
+  return (!o.serverEdition || o.serverLicenseEnabled === true) && (o.activeLinks > 0 || o.entitled)
 }
 
 /**
@@ -452,8 +452,8 @@ export function createErrorMessage(e: CreateWatchLinkError, surface: LiveLinkSur
  * `serverEdition` is `isBrowserRuntime()`, `relayTab` the node's project session — both read by the
  * caller.
  */
-export function shareDisabledReason(o: { serverEdition: boolean; relayTab: boolean; activeLinks: number }): string | null {
-  if (o.serverEdition) return SERVER_EDITION_UNSUPPORTED
+export function shareDisabledReason(o: { serverEdition: boolean; serverLicenseEnabled?: boolean; relayTab: boolean; activeLinks: number }): string | null {
+  if (o.serverEdition && o.serverLicenseEnabled !== true) return SERVER_EDITION_UNSUPPORTED
   if (o.relayTab) return RELAY_TAB_UNSUPPORTED
   if (o.activeLinks >= MAX_LINKS_PER_MACHINE) return LIMIT_MACHINE
   return null

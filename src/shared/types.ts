@@ -4172,6 +4172,7 @@ export interface LicenseDetail {
 }
 
 export interface LicenseApi {
+  capabilities?(): Promise<{ enabled: boolean; hostContext: 'server' } | null>
   /** Open Stripe checkout bound to this device and poll for the entitlement (no key paste).
    * `target` picks the link: 'seats' = the add-seats (quantity) link, else base Pro (default).
    * Returns the current status immediately; the active status arrives via onChange. */

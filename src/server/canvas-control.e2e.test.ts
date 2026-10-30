@@ -20,6 +20,7 @@ const run = promisify(execFile)
 
 describe.skipIf(process.platform === 'win32')('generated CLI through a real Server boot, hook authentication and owner WS', () => {
   it('persists canvas commands, refuses cross-project mutations and individually confirms settings', async () => {
+    vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     const root = testTmpDir('canvas-e2e-'); const dataDir = path.join(root, 'data'); const cwd = path.join(root, 'project')
     fs.mkdirSync(dataDir); fs.mkdirSync(cwd)
     initPlatform(fakePlatform({ userDataDir: dataDir }))
@@ -33,7 +34,7 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
     const auth = new Auth(dataDir); auth.setPassword('fixture-password'); const session = auth.createSession()
     let socket: WebSocket | undefined
     const server = await startServer({ dataDir, rendererDir: path.join(root, 'no-renderer'), host: '127.0.0.1', port: 0,
-      headless: false, insecureHttp: false, installHooks: false, canvasControl: true, controlScope: 'project' })
+      headless: false, insecureHttp: false, installHooks: false, licenseEnabled: true, canvasControl: true, controlScope: 'project' })
     try {
       const shim = path.join(dataDir, 'canvas-control', 'nodeterm.sh')
       const env = { ...process.env, NODETERM_CANVAS_CONTROL: '1', NODETERM_NODE_ID: 'source', NODETERM_HOOK_ENDPOINT: hookServer.endpointFilePath() }
@@ -75,6 +76,9 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       const request = (method: string, ...args: unknown[]) => new Promise<unknown>((resolve, reject) => {
         const id = ++requestId; pending.set(id, { resolve, reject }); socket!.send(JSON.stringify({ t: 'req', id, method, args } satisfies RpcRequest))
       })
+      expect(await request(IPC.licenseCapabilities)).toMatchObject({ enabled: true, hostContext: 'server' })
+      expect(await request(IPC.licenseStatus)).toMatchObject({ active: false })
+      expect(await request(IPC.watchLinkCreate, { nodeId: 'source', role: 'viewer', ttlSeconds: 3600, label: 'Fixture', title: 'Builder' })).toEqual({ ok: false, error: 'not-entitled' })
       await request(IPC.ownerConfirmationConnect)
       const changing = cli('settings', '--set', 'gridSize', '--value', '40')
       void changing.catch(() => {})
@@ -87,7 +91,7 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       expect(await changing).toContain('changed gridSize')
       expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'settings.json'), 'utf8')).gridSize).toBe(40)
     } finally {
-      socket?.terminate(); await server.close(); resetPlatformForTests()
+      socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs()
     }
   }, 30_000)
 })

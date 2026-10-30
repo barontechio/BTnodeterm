@@ -368,6 +368,7 @@ export const IPC = {
   /** renderer → main: the flush for that request id settled. */
   appFlushDone: 'app:flush-done',
   licenseActivate: 'license:activate',
+  licenseCapabilities: 'license:capabilities',
   licenseDeactivate: 'license:deactivate',
   licenseStatus: 'license:status',
   licenseChanged: 'license:changed',

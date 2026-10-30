@@ -1159,8 +1159,8 @@ export function buildTriggersApi(client: RpcClient): Pick<NodeTerminalApi, 'trig
 /**
  * The Server Edition's live links — the REAL bridge, backed by the same core service the desktop
  * registers (src/core/watch-link/service.ts). Its browser tabs are the server's own user (owner
- * clients), so the host-only `watchLink:` prefix does not refuse them. Until that edition has a license
- * layer the service answers create `unsupported` and list `[]` (R43). Kept OUT of every builder a relay
+ * clients), so the host-only `watchLink:` prefix does not refuse them. A disabled license layer
+ * answers create `unsupported` and list `[]`; enabled hosts retain the real entitlement gate. Kept OUT of every builder a relay
  * tab spreads (and out of the scoped-guest / access-policy BUILDERS lists): a relay tab shows another
  * machine's terminals, which are not this browser's to publish — relay-api.ts takes the inert stub.
  * A dropped socket answers create `network`; revoke and revokeAll reject, so the UI can say the stop
@@ -1424,6 +1424,33 @@ export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 's
   }
 }
 
+/** Open a browser window during the user's click, then navigate after the host returns checkout. */
+export function buildLicenseApi(client: RpcClient): Pick<NodeTerminalApi, 'license'> {
+  return { license: {
+    capabilities: () => client.request(IPC.licenseCapabilities).catch((error) => {
+      if ((error as { code?: string }).code === E_NO_HANDLER) return null
+      throw error
+    }) as ReturnType<NonNullable<NodeTerminalApi['license']['capabilities']>>,
+    getStatus: () => client.request(IPC.licenseStatus) as ReturnType<NodeTerminalApi['license']['getStatus']>,
+    activate: (key) => client.request(IPC.licenseActivate, key) as ReturnType<NodeTerminalApi['license']['activate']>,
+    deactivate: () => client.request(IPC.licenseDeactivate) as ReturnType<NodeTerminalApi['license']['deactivate']>,
+    detail: () => client.request(IPC.licenseDetail) as ReturnType<NodeTerminalApi['license']['detail']>,
+    releaseOthers: () => client.request(IPC.licenseRelease) as ReturnType<NodeTerminalApi['license']['releaseOthers']>,
+    onChange: (listener) => client.subscribe(IPC.licenseChanged, listener as Listener),
+    upgrade: async (target) => {
+      const popup = window.open('about:blank', '_blank')
+      if (!popup) throw new Error('Allow popups to open license checkout, then try again.')
+      popup.opener = null
+      try {
+        const response = await client.request(IPC.licenseUpgrade, target) as { status: Awaited<ReturnType<NodeTerminalApi['license']['getStatus']>>; checkoutUrl?: string }
+        if (!response.checkoutUrl || new URL(response.checkoutUrl).protocol !== 'https:') throw new Error('The host did not return a secure checkout URL.')
+        popup.location.replace(response.checkoutUrl)
+        return response.status
+      } catch (error) { popup.close(); throw error }
+    }
+  } }
+}
+
 export function buildCodexAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'codexAccounts'> {
   return { codexAccounts: {
     add: (ctx) => client.request(IPC.codexAccountsAdd, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['add']>,
@@ -1630,6 +1657,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildClaudeAccountsApi(client),
     ...buildCodexAccountsApi(client),
     ...buildSshApi(client),
+    ...buildLicenseApi(client),
     codex: buildCodexApi(client),
     // `claude` is assembled from two builders: `cliCaps` from the relay-shared one, and the
     // transcript reader from the Server-Edition-only one (which also supplies `chat`).
