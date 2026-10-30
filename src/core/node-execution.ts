@@ -9,6 +9,10 @@ export interface NodeExecutionPermit {
   current(): boolean
   assertCurrent(): void
 }
+export interface NodeExecutionBatchPermit extends NodeExecutionPermit {
+  /** An immutable snapshot of every node claimed atomically by this host operation. */
+  readonly nodeIds: readonly string[]
+}
 export interface NodeExecutionOptions {
   /** Physical backend generation and saved execution identity; never a renderer snapshot. */
   current(): boolean
@@ -16,7 +20,7 @@ export interface NodeExecutionOptions {
   timeoutMs?: number
 }
 type Entry = {
-  permit: NodeExecutionPermit
+  permit: NodeExecutionBatchPermit
   cancel(): void
   cleanup(): void
 }
@@ -49,10 +53,25 @@ export class NodeExecutionCoordinator {
 
   async run<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,
     work: (permit: NodeExecutionPermit) => Promise<T> | T): Promise<T> {
-    if (typeof nodeId !== 'string' || !nodeId || nodeId.length > 256 || nodeId.includes('\0')) throw new NodeExecutionError('invalid')
-    this.assertAllowed(nodeId)
-    if (this.active.has(nodeId)) throw new NodeExecutionError('busy')
-    if (this.active.size >= this.limit) throw new NodeExecutionError('capacity')
+    return this.runMany([nodeId], kind, options, work)
+  }
+
+  /** All-or-nothing host claim; nesting individual claims cannot own a whole worktree group. */
+  async runMany<T>(nodes: readonly string[], kind: NodeExecutionKind, options: NodeExecutionOptions,
+    work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
+    if (!Array.isArray(nodes)) throw new NodeExecutionError('invalid')
+    if (nodes.length > this.limit) throw new NodeExecutionError('capacity')
+    const nodeIds = Object.freeze([...nodes])
+    if (!nodeIds.length || new Set(nodeIds).size !== nodeIds.length || nodeIds.some((id) =>
+      typeof id !== 'string' || !id || id.length > 256 || id.includes('\0'))) throw new NodeExecutionError('invalid')
+    const checkClaims = () => {
+      for (const nodeId of nodeIds) {
+        this.assertAllowed(nodeId)
+        if (this.active.has(nodeId)) throw new NodeExecutionError('busy')
+      }
+      if (this.active.size + nodeIds.length > this.limit) throw new NodeExecutionError('capacity')
+    }
+    checkClaims()
     const timeout = options.timeoutMs ?? 30_000
     if (!Number.isFinite(timeout) || timeout < 1 || timeout > 120_000) throw new NodeExecutionError('invalid')
     const deadline = this.now() + timeout
@@ -64,13 +83,15 @@ export class NodeExecutionCoordinator {
       try { if (!options.current()) { cancel(); return false } } catch { cancel(); return false }
       return true
     }
-    const permit: NodeExecutionPermit = { nodeId, kind, signal: abort.signal, current,
+    const permit: NodeExecutionBatchPermit = { nodeId: nodeIds[0], nodeIds, kind, signal: abort.signal, current,
       assertCurrent: () => { if (!current()) throw new NodeExecutionError('expired') } }
     permit.assertCurrent()
+    // A host's freshness callback may synchronously enter another operation.
+    checkClaims()
     const timer = setTimeout(cancel, timeout); timer.unref?.()
     let unsubscribe = () => {}
     const entry: Entry = { permit, cancel, cleanup: () => { cancel(); clearTimeout(timer); try { unsubscribe() } catch { /* always release the fence */ } } }
-    this.active.set(nodeId, entry)
+    for (const nodeId of nodeIds) this.active.set(nodeId, entry)
     try {
       unsubscribe = options.owner?.onDeparture(cancel) ?? (() => {})
       return await this.context.run(entry, async () => {
@@ -81,7 +102,7 @@ export class NodeExecutionCoordinator {
       })
     } finally {
       entry.cleanup()
-      if (this.active.get(nodeId) === entry) this.active.delete(nodeId)
+      for (const nodeId of nodeIds) if (this.active.get(nodeId) === entry) this.active.delete(nodeId)
     }
   }
 

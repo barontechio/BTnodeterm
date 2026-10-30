@@ -11383,3 +11383,9 @@ outside request ALS so later lifecycle work does not inherit expired read identi
 Python 3/POSIX command opens verified no-follow descriptors, bounds discovery/windows/concurrency,
 and writes no host file. Unknown roots, missing runtimes, unsafe trees and failed reads never mean
 absence or authorize account/local fallback. Read-only histories do not grant remote control proof.
+
+`PtyManager.runNodeActions` / `NodeExecutionCoordinator.runMany` atomically claim a bounded immutable
+set of nodes under one async execution context. Nested single claims do not own a group. Refuse a
+busy member/capacity overflow before claiming any; owner departure keeps every fence until real
+work settles. Expired continuations remain invalid after release. This host-only primitive grants
+neither filesystem path ownership nor worktree-removal authority.
