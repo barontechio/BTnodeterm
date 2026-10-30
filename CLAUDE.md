@@ -71,6 +71,15 @@ existing rollout hardlink, containment and daemon capability primitives; no impl
 fallback. The UI persists account settings before every login terminal, including Retry. SSH stays
 behind an injected structural adapter, with explicit refusal when unavailable.
 
+SSH project orchestration lives in `core/remote-ssh/ssh-project.ts` with injected transport,
+authentication, integration and status runners. Remote hooks, freshness/tunnel repair, endpoint
+migration, `SshFs` and remote atomic writes are shared core services too. Old main paths re-export
+their implementations; native IPC, passphrase dialogs, ssh-agent lifetime and media-protocol URLs
+remain shell adapters. Preserve shared connection/gate budgets and all existing strict host,
+consent, partial-write and account-home guards. Source guards follow the actual core implementation.
+The SSH inventory also lives in core: FIFO mutations return only after 0600 atomic persistence,
+keep the old cache on failure and return copies to callers.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

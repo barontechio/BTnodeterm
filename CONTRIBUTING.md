@@ -178,6 +178,12 @@ lifetime, never just a numeric client id. Release reservations on reload/disconn
 keep prepare/commit/finish/rollback and account-removal exclusion. Login terminals require durable
 settings first. Credentials remain in the account's host-local home, never in RPC results.
 
+SSH project orchestration and its remote hooks/filesystem/atomic-write services live in core.
+`core/remote-ssh/ssh-project.ts` accepts transport/authentication/status runners; the native adapter
+keeps Electron prompts and IPC in main. Compatibility exports preserve old imports. Keep existing
+host-key, integration-consent, pending-kill, tunnel-repair and account-home checks when adding a shell.
+`core/ssh-store.ts` acknowledges serialized inventory edits only after owner-only atomic persistence.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

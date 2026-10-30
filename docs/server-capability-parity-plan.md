@@ -61,6 +61,13 @@ an individually approved settings change over an authenticated owner WebSocket. 
 files and tmux environment use the existing test sandboxes; it starts no agent CLI session.
 
 
+The managed Codex snapshot passes all 24,371 tests (109 skipped) and both builds. PR 15's project
+manager, remote hooks/freshness/tunnel repair, filesystem, atomic writes and SSH inventory have
+moved into core, with compatibility exports and native shell adapters. The focused SSH suite passes
+1,103 tests (5 skipped), including the existing real-shell truncation and transport fixtures.
+Server SSH wiring and a shared owner prompt adapter remain separate work; the extraction does not
+enable them by itself.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

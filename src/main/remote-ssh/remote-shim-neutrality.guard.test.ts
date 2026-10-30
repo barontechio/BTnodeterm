@@ -34,7 +34,7 @@ import { CONTEXT_SHIM_SCRIPT, buildContextShimScript } from '../../core/context-
 /** A root no real machine would produce, so a hit is unambiguously the one we baked in. */
 const SENTINEL_ROOT = '/nodeterm-guard-sentinel/codex-thread-nodes'
 
-const REMOTE_HOOKS = join(__dirname, 'remote-hooks.ts')
+const REMOTE_HOOKS = join(__dirname, '../../core/remote-ssh/remote-hooks.ts')
 
 /**
  * Identifiers `remote-hooks.ts` must never name. Each one is a way to obtain a shim body carrying

@@ -915,6 +915,14 @@ Server account administration currently supports local host accounts. An SSH con
 extracted SSH service refuses writes and returns an unknown identity for reads; it never falls back
 to this server's account. Desktop's SSH lifecycle retains its existing adapter.
 
+### Shared SSH implementation status
+
+The project manager, remote hook installation/freshness, filesystem operations, atomic writes and
+host inventory now live in core and are consumed by Desktop. Native prompts, credentials/agent
+lifetime, IPC and local media URLs remain shell adapters. This extraction alone does not enable
+Server SSH projects or transfers; their owner adapter and host capability checks are still pending.
+Saved SSH inventory changes acknowledge only after durable owner-only persistence.
+
 ## Manual browser smoke checklist
 
 Run against a real browser (this is the human-verified path; the automated harness
