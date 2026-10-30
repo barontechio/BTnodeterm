@@ -2,6 +2,7 @@ import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
 import { ServerSessionNames } from './session-names'
+import { createServerRemoteTranscripts } from './remote-transcripts'
 import { isRemoteSessionNode } from '../shared/worktree'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
 import { startTriggerService } from '../core/trigger-service'
@@ -677,22 +678,29 @@ export async function startServer(
   geminiTranscriptPathFor = (id) => geminiContextTail.pathFor(id)
   // Cursor NEEDS YOU, same seam as the desktop (core/agents/cursor-approval.ts).
   hookServer.setPaneReader((nodeId) => ptyManager.captureSession(nodeId))
+  const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
+    workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
+    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects })
   // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
   // Same call as the desktop's (hook-verified-parity.test.ts).
   wireClaudePaneOrigin({
     hooks: hookServer,
     paneOwner: (nodeId) => ptyManager.paneOwner(nodeId),
-    // No SSH-project manager here: such a node's pane is on another machine, never readable.
-    cannotRead: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId),
+    // Read-only history support does not grant remote terminal/control identity proof.
+    cannotRead: remoteTranscripts.isRemoteNode,
     on: (channel, cb) => platform.on(channel, cb),
     destroyChannel: IPC.ptyDestroy,
     recycleChannel: IPC.ptyRecycle
   })
-  // The ⌘M chat view + the find-bar's transcript index. Registered HERE rather than with the rest
-  // of the handlers because the hook-fed path authority is the tail created just above. No remote
-  // leg: the Server Edition runs ON the host whose transcripts it reads, so local resolution is
-  // the complete answer (an SSH-project node is a desktop-only concept here).
+  // Same core readers for both shells. SSH reads use an owner-bound target and strict remote
+  // descriptors; an unavailable remote must never fall through to this host's transcript tree.
   registerTranscriptIpc({
+    rpcScope: remoteTranscripts.rpcScope,
+    isRemoteNode: remoteTranscripts.isRemoteNode,
+    remoteAgentSupported: remoteTranscripts.supported,
+    readRemote: (q) => remoteTranscripts.reader.read(q),
+    readRemotePage: (q, page) => remoteTranscripts.reader.readPage(q, page),
+    remoteExists: (q) => remoteTranscripts.reader.exists(q),
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
@@ -701,7 +709,7 @@ export async function startServer(
   // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
   // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
   // server's own ~/.claude.
-  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
+  registerChatCatalogIpc({ isRemoteNode: remoteTranscripts.isRemoteNode })
   // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
   registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the
@@ -1117,6 +1125,7 @@ export async function startServer(
     licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
     sshProjects?.forgetClient(uiId)
+    remoteTranscripts.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
@@ -1247,6 +1256,7 @@ export async function startServer(
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     stopSessionNameSweep()
+    remoteTranscripts.dispose()
     return { close: async (): Promise<void> => {} }
   })
   if (otherServerHere) {
@@ -1338,6 +1348,7 @@ export async function startServer(
       port: 0, // nothing bound
       async close() {
         stopSessionNameSweep()
+        remoteTranscripts.dispose()
         mediaReferences.dispose()
         ownerConfirmations.dispose()
         codexAccounts.dispose()
@@ -1419,6 +1430,7 @@ export async function startServer(
     port,
     async close() {
       stopSessionNameSweep()
+      remoteTranscripts.dispose()
       mediaReferences.dispose()
       ownerConfirmations.dispose()
       codexAccounts.dispose()

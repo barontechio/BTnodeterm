@@ -18,7 +18,7 @@ describe('Server SSH owner surface', () => {
   }
   it('remains disabled without touching an agent or starting transport; guests cannot inspect capabilities', () => {
     const before = process.env.NODETERM_APP_AGENT_SOCK; const p = boot(false)
-    expect(p.handlers[IPC.sshProjectCapabilities](1)).toEqual({ enabled: false, filesystem: false, transfers: false, media: false, hostContext: 'server' })
+    expect(p.handlers[IPC.sshProjectCapabilities](1)).toEqual({ enabled: false, filesystem: false, transfers: false, media: false, transcriptAgents: [], hostContext: 'server' })
     expect(() => p.handlers[IPC.sshProjectCapabilities](3)).toThrow('owner-required')
     expect(() => p.handlers[IPC.sshConnectProject](1, 'p', { host: 'example.invalid', user: 'fixture' })).toThrow('ssh-disabled')
     expect(process.env.NODETERM_APP_AGENT_SOCK).toBe(before)

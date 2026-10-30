@@ -6,9 +6,8 @@
 // prevent: the Server Edition had no handler at all, its bridge stub rejected, and the chat panel
 // (which never caught the rejection) presented every browser session as an empty conversation.
 //
-// The remote (SSH-project) leg stays an injected dep: it needs a ControlMaster, which only the
-// Electron shell has. Absent deps ⇒ local-only, which is the correct and complete answer on the
-// server — it runs ON the host whose transcripts it is reading.
+// The remote leg stays injected: each shell owns its transport, request lifetime and host routing.
+// A recorded remote node must remain remote even when that optional adapter is unavailable.
 import fsp from 'node:fs/promises'
 import { IPC } from '../shared/ipc'
 import type { ChatTranscriptResult, TranscriptLine, TranscriptPresence } from '../shared/types'
@@ -56,12 +55,14 @@ export interface TranscriptQuery {
 }
 
 export interface TranscriptIpcDeps {
+  /** Optional host request lifetime. Defaults preserve Native/legacy handler signatures. */
+  rpcScope?<T>(clientId: number, operation: () => Promise<T>): Promise<T>
   /** Transcript path a live context tail already knows for this session (hook-fed — authoritative
    *  when present). Optional: the sessionId scan below finds any transcript in a standard root. */
   pathFor?(sessionId: string): string | undefined
   /**
    * Tail text of a REMOTE node's transcript, or null when this is not a remote session (or it
-   * could not be resolved). Electron-only — the server has no SSH-project manager.
+   * could not be resolved). Each shell injects its own authorized transport adapter.
    */
   readRemote?(q: TranscriptQuery): Promise<string | null>
   /**
@@ -70,7 +71,7 @@ export interface TranscriptIpcDeps {
    *
    * It must return `'unknown'` (not `null`) for a remote session it failed to ask, or the local
    * resolver would run against THIS machine's disk for a session that only ever existed on the
-   * host and report `absent` — the one answer that destroys a resume. Electron-only.
+   * host and report `absent` — the one answer that destroys a resume.
    */
   remoteExists?(q: TranscriptQuery): Promise<TranscriptPresence | null>
   /**
@@ -81,17 +82,18 @@ export interface TranscriptIpcDeps {
    * = it IS remote and the host LOOKED and has no such transcript (or there is no session id to look
    * for) — a clean miss, which is `found:false` WITHOUT `unreadable`. `data` is the file's
    * bytes from absolute offset `start` (one lookbehind byte included — see `parseChatWindow`).
-   * Electron-only.
    */
   readRemotePage?(q: TranscriptQuery, page: ChatTranscriptPage): Promise<RemoteTranscriptPage | null>
   /**
    * Is this node an SSH-project node — from the SHELL's own records (its workspace store, its live
    * pty), never from anything the renderer sends. Every channel below then applies `remoteOnly`:
    * a remote node whose remote leg cannot answer is a miss or a failure, never a read of THIS
-   * machine's disk (claude's cwd-newest fallback there adopts a stranger's local session). Absent
-   * (the Server Edition — it runs ON the host) = no node is remote, which is correct there.
+   * machine's disk (claude's cwd-newest fallback there adopts a stranger's local session).
+   * Shells without SSH support still classify saved remote records so they cannot read locally.
    */
   isRemoteNode?(nodeId: string): boolean
+  /** An installed host adapter may explicitly refuse unsupported remote harnesses. */
+  remoteAgentSupported?(agentId: string | undefined, nodeId: string | undefined): boolean
   /**
    * A REMOTE grok node's conversation, read ON the host (`createReadRemoteGrokChat`). `null` = not
    * a remote session (take the local path); `{ok:false}` = it IS remote and the host could not be
@@ -111,7 +113,7 @@ export interface TranscriptIpcDeps {
    * and read with the same ranged read claude's remote leg uses. Same conventions as
    * `readRemotePage`: `null` = not a remote node; `{ok:false}` = remote and unreadable (terminal —
    * never this machine's disk); `{ok:false, absent:true}` = the host looked and has no such rollout.
-   * Electron-only; the Server Edition runs on the host it reads.
+   * Optional per shell; missing support never permits a local read for a known remote node.
    */
   readRemoteCodexPage?(q: TranscriptQuery, page: ChatTranscriptPage): Promise<RemoteTranscriptPage | null>
   /** `opencode export <id>` for an opencode node's chat read. A test seam: absent = the real,
@@ -119,7 +121,8 @@ export interface TranscriptIpcDeps {
   opencodeExport?: OpencodeExportRun
 }
 
-export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } | { ok: false; absent?: true }
+export type RemoteTranscriptPage = { ok: true; data: Buffer; start: number } |
+  { ok: false; absent?: true; reason?: ChatTranscriptResult['unreadableReason'] }
 
 /** How much a window with no complete line grows per re-read. ×4 reaches the 5 MB cap from the
  *  default 256 KB tail in three extra reads, and from the 64 KB minimum in four. */
@@ -172,7 +175,9 @@ const notFoundPage = (): ChatTranscriptResult => ({
 
 /** Not found BECAUSE it could not be read — the host did not answer, or a remote node has no
  *  reachable master. Distinct from "no transcript exists" for a caller that must say so. */
-const unreadablePage = (): ChatTranscriptResult => ({ ...notFoundPage(), unreadable: true })
+const unreadablePage = (reason?: ChatTranscriptResult['unreadableReason']): ChatTranscriptResult => ({
+  ...notFoundPage(), unreadable: true, ...(reason ? { unreadableReason: reason } : {})
+})
 
 /**
  * A paged chat read (`chat:read-transcript` with its trailing `page` argument). Kept apart from the
@@ -194,7 +199,7 @@ async function readChatPage(
   if (readRemotePage) {
     const remote = await readRemotePage(q, page)
     if (remote !== null) {
-      if (!remote.ok) return remote.absent ? notFoundPage() : unreadablePage()
+      if (!remote.ok) return remote.absent ? notFoundPage() : unreadablePage(remote.reason)
       // A growth re-read that suddenly says "not remote" (null) is a failed read too — never a
       // reason to go read THIS machine's disk halfway through a remote page.
       return parseGrowingWindow(page, remote, async (p) => {
@@ -381,6 +386,7 @@ export async function readChatTranscript(
   // Validated FIRST: it arrived over IPC / the WS bridge, and `before` reaches a remote shell
   // line. `null` = no page asked for = the legacy read below, byte for byte.
   const page = normalizeChatPage(rawPage)
+  if (remoteOnly && deps.remoteAgentSupported?.(agentId, nodeId) === false) return unreadablePage('remote-reader-unavailable')
   // Routed by agent BEFORE anything claude-shaped runs. `resolveTranscript` below falls back to
   // the newest claude transcript for the cwd when its sessionId leg misses, and a grok id always
   // misses — so reaching that fallback with a grok node would answer with a stranger's
@@ -437,13 +443,18 @@ export async function readChatTranscript(
 }
 
 export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
+  const register = <A extends unknown[], R>(channel: string, handler: (...args: A) => Promise<R>): void => {
+    const scope = deps.rpcScope
+    if (scope) platform().handleWithSender(channel, (id, ...args: A) => scope(id, () => handler(...args)))
+    else platform().handle(channel, handler)
+  }
   const remoteText = (q: TranscriptQuery): Promise<string | null> =>
     deps.readRemote ? deps.readRemote(q) : Promise.resolve(null)
   // Decided HERE from the shell's records, for every channel — the renderer's arguments carry no
   // remoteness, and must not: a renderer flag would be one more thing a forged call could lie about.
   const isRemote = (nodeId: string | undefined): boolean => !!nodeId && !!deps.isRemoteNode?.(nodeId)
 
-  platform().handle(
+  register(
     IPC.claudeReadTranscript,
     async (
       sessionId: string | undefined,
@@ -460,7 +471,7 @@ export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
     }
   )
 
-  platform().handle(
+  register(
     IPC.transcriptExists,
     async (
       sessionId: string | undefined,
@@ -491,7 +502,7 @@ export function registerTranscriptIpc(deps: TranscriptIpcDeps = {}): void {
     }
   )
 
-  platform().handle(
+  register(
     IPC.chatReadTranscript,
     (
       sessionId: string | undefined,

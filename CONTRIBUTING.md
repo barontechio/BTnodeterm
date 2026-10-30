@@ -1897,3 +1897,12 @@ browser API; derive account/harness/host from current saved routing and the runt
 Unknown or remote targets return no title, never a local transcript scan. Recheck after async
 reads and immediately before sweep publication, including account/session replacement and manual
 title changes. The periodic sweep must not overlap itself; disposing it prevents late publication.
+
+**Server SSH history is an owner-scoped read.** Derive endpoint/session/account from current saved
+node routing and a verified connection generation. Bind queued commands and their result to the
+request's owner lifetime; a disconnect or completed RPC invalidates detached work. Clone argv at
+queue entry and detach request ALS from transport-owned callbacks after validating dispatch.
+The optional Python 3/POSIX reader writes no helper files, opens directory-relative no-follow
+descriptors and rechecks named identities. Cap discovery, byte windows and concurrent reads.
+Only a verified clean miss is absence; unavailable roots/runtime/permissions remain unknown.
+Never fall back to another account or local history, or treat read permission as terminal control.

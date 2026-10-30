@@ -754,8 +754,8 @@ Consequences worth knowing:
   idle file-tail); the server now untracks agent tails on node close, at desktop parity.
   See [Phase 3c](#phase-3c-follow-up-hardening).
 - **SSH-remote agent tails were deferred in Phase 3b.** The opt-in SSH adapter now provides
-  project connections and filesystem/setup services; remote transcript/context bindings remain
-  pending. Remote records are refused instead of being read from this server's local histories.
+  project connections, filesystem/setup services and owner-only Claude history reads. Continuous
+  context/usage/subagent tails remain pending. Remote records never use this server's local histories.
 
 ## Phase 3c: follow-up hardening
 
@@ -937,8 +937,12 @@ host inventory now live in core and are consumed by Desktop. Native prompts, cre
 lifetime, IPC and local media URLs remain shell adapters. This extraction alone does not enable
 Server SSH projects by itself. The first owner adapter is now available through
 `NODETERM_SERVER_SSH=1` / `--ssh-projects`, disabled by default; see
-[Server SSH projects](server-ssh-projects.md). Transfers and remote media remain explicitly
-unavailable, and transcript/context bindings are still pending.
+[Server SSH projects](server-ssh-projects.md). Connected Claude projects now support owner-only
+chat/history reads with a strict Python 3/POSIX helper on the remote host. The helper selects the
+saved node/account namespace, bounds discovery and byte windows, and rejects unsafe or stale targets
+without a local/account fallback. Missing runtimes and unsafe trees have actionable panel messages.
+Transfers, remote media, remaining harness readers and continuous context/usage bindings remain
+explicitly unavailable. Read-only history support does not grant remote terminal-control proof.
 Saved SSH inventory changes acknowledge only after durable owner-only persistence.
 
 ## Manual browser smoke checklist

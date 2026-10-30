@@ -9,11 +9,13 @@ import { resetNativeMuxForTests } from '../core/remote-ssh/native/native-runtime
 import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { testTmpDir } from '../core/test-tmp'
-import type { SshConnection } from '../shared/ssh'
-import { DEFAULT_SETTINGS } from '../shared/types'
+import { sshHostKey, type SshConnection } from '../shared/ssh'
+import { DEFAULT_SETTINGS, type CanvasNodeState, type ChatTranscriptResult } from '../shared/types'
 import { IPC } from '../shared/ipc'
 import { registerServerSshProjects } from './ssh-projects'
 import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
+import { createServerRemoteTranscripts } from './remote-transcripts'
+import { registerTranscriptIpc } from '../core/transcript-ipc'
 
 /** Real SSH authentication and exec channels; all commands run under a temporary remote HOME. */
 describe.skipIf(process.platform === 'win32')('Server SSH transport composition', () => {
@@ -50,6 +52,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
     const service = registerServerSshProjects({ platform, enabled: true, settings: () => DEFAULT_SETTINGS, projectTarget: () => savedTarget,
       onConnected: async (id) => { connected.push(id) } })
     const call = (method: string, ...args: unknown[]): any => platform.handlers[method](1, ...args)
+    let transcripts: ReturnType<typeof createServerRemoteTranscripts> | undefined
     try {
       const connection = { host: '127.0.0.1', port, user: 'fixture', identityFile, extraArgs: `-F ${config}` }
       savedTarget = { server: connection, remoteCwd: remote }
@@ -76,6 +79,31 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
         signal: new AbortController().signal, ssh: { server: connection, remoteCwd: remote } })).toEqual({ exitCode: 0 })
       expect(chunks.join('')).toContain('remote setup')
       expect(chunks.join('')).toContain('stderr')
+      const sid = '7e2f39a0-0be6-4f64-8657-6905c1508571'
+      const history = path.join(remote, '.nodeterm', 'claude-accounts', 'managed', 'projects', 'repo')
+      fs.mkdirSync(history, { recursive: true })
+      const content = JSON.stringify({ type: 'user', uuid: 'message-1', message: { role: 'user', content: 'remote conversation' } }) + '\n'
+      fs.writeFileSync(path.join(history, `${sid}.jsonl`), content)
+      const decoy = path.join(remote, '.claude', 'projects', 'repo'); fs.mkdirSync(decoy, { recursive: true })
+      fs.writeFileSync(path.join(decoy, `${sid}.jsonl`), 'system account decoy')
+      const settings = structuredClone(DEFAULT_SETTINGS)
+      settings.claudeAccounts = [{ id: 'managed', label: 'Remote account', host: sshHostKey(connection), createdAt: Date.now() }]
+      const node: CanvasNodeState = { id: 'remote-node', kind: 'terminal', agentId: 'claude', accountId: 'managed', agentSessionId: sid,
+        title: 'Remote', cwd: remote, color: '#000', group: null, position: { x: 0, y: 0 }, size: { width: 640, height: 440 } }
+      transcripts = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings, sessionOf: () => sid,
+        pty: { sshRemoteForNode: () => undefined }, ssh: service, workspace: {
+          projectIdsForNode: () => savedTarget ? ['fixture'] : [], getNodeResolved: () => node,
+          sshProjectIdForNode: () => 'fixture', projectTargetInfo: () => savedTarget ? { name: 'Fixture', ssh: savedTarget } : null
+        } })
+      registerTranscriptIpc({ rpcScope: transcripts.rpcScope, isRemoteNode: transcripts.isRemoteNode,
+        remoteAgentSupported: transcripts.supported, readRemote: (q) => transcripts!.reader.read(q),
+        readRemotePage: (q, page) => transcripts!.reader.readPage(q, page), remoteExists: (q) => transcripts!.reader.exists(q) })
+      const chat = await call(IPC.chatReadTranscript, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }) as ChatTranscriptResult
+      expect(chat.found).toBe(true); expect(JSON.stringify(chat.messages)).toContain('remote conversation')
+      expect(JSON.stringify(chat.messages)).not.toContain('system account decoy')
+      expect(await platform.handlers[IPC.chatReadTranscript](3, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }))
+        .toMatchObject({ found: false, unreadable: true, unreadableReason: 'remote-reader-permission-required' })
+      expect(await transcripts.rpcScope(1, () => transcripts!.reader.exists({ sessionId: sid, nodeId: 'remote-node', accountId: 'managed', cwd: remote }))).toBe('present')
       savedTarget = undefined
       expect(service.refForProject('fixture')).toBeUndefined()
       expect(service.spawnRefFor('fixture')).toBeUndefined()
@@ -85,6 +113,8 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       savedTarget = { server: connection, remoteCwd: remote }
       await call(IPC.sshDisconnectProject, 'fixture')
       expect(() => call(IPC.sshFsRead, 'fixture', file)).toThrow('disconnected')
+      expect(await call(IPC.chatReadTranscript, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }))
+        .toMatchObject({ found: false, unreadable: true })
       const promptCount = platform.sent.filter((event) => event.channel === IPC.sshPassphraseRequest).length
       let reconnected = false
       const reconnect = (call(IPC.sshConnectProject, 'fixture', connection, remote) as Promise<unknown>).then(() => { reconnected = true })
@@ -99,7 +129,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(service.manager.connectionKeyFor('fixture')).not.toBe(generation)
       expect(connected).toEqual(['fixture', 'fixture'])
     } finally {
-      service.close(); resetNativeMuxForTests(); resetPlatformForTests()
+      transcripts?.dispose(); service.close(); resetNativeMuxForTests(); resetPlatformForTests()
       for (const child of children) child.kill(); for (const client of clients) client.end()
       await new Promise<void>((resolve) => sshd.close(() => resolve()))
       if (previous === undefined) delete process.env.NODETERM_NATIVE_SSH; else process.env.NODETERM_NATIVE_SSH = previous

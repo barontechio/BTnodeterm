@@ -183,6 +183,19 @@ The independent [session title freshness #1327](https://github.com/eneskirca/nod
 exports the shared revalidation/lifetime fixes directly on upstream/main: 24,166 tests
 (109 skipped), typecheck and both builds, with no dependency changes.
 
+The next SSH increment adds authenticated-owner Claude chat/history reads for connected projects.
+The shared bounded reader selects the current saved node's host, session and account through a thin
+Server adapter; missing/unsupported/stale targets never scan local histories or another account.
+Its optional Python 3/POSIX command writes no remote file, uses no-follow directory-relative
+descriptors and rechecks named identities. Discovery is capped at 4,096 project entries and each
+window at 5 MiB plus lookbehind, with 32 active reads/two per node and a 30-second request lifetime.
+Queued SSH work is cancellable and bound to owner/request/connection identity; dispatched work
+retains its transport slot until settled. Transport lifecycle callbacks do not inherit expired
+request ALS. The panel distinguishes runtime, unsafe-tree, permission and unsupported-reader
+refusals. Real encrypted-key loopback fixtures cover both transports and managed-account isolation.
+Continuous remote meters/tails, other harnesses, transfers/media and remote control proof remain
+separate gates. Full validation of this increment is tracked separately from the title snapshot.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

@@ -11374,3 +11374,12 @@ never let them search local histories. JSON-null optional arguments are normaliz
 adapter. Both RPC and sweep discard changed bindings after a read; the shared sweep also checks
 manual-title/session/account state immediately before publication. Its timer passes do not overlap,
 and Server stops them on both shutdown paths so an in-flight read cannot publish after disposal.
+
+Server SSH Claude histories use `RemoteClaudeTranscripts` behind the owner-bound
+`server/remote-transcripts` routing adapter. Current saved endpoint/account/session and connection
+generation are rechecked at queued dispatch and after IO. A completed RPC or departed owner cannot
+leave an authorized detached continuation. Snapshot queued argv; transport-owned callbacks run
+outside request ALS so later lifecycle work does not inherit expired read identity. The remote
+Python 3/POSIX command opens verified no-follow descriptors, bounds discovery/windows/concurrency,
+and writes no host file. Unknown roots, missing runtimes, unsafe trees and failed reads never mean
+absence or authorize account/local fallback. Read-only histories do not grant remote control proof.

@@ -17,11 +17,28 @@ selected project; a later tab/project switch cannot redirect it. Disconnect, tar
 connection replacement refuse stale work. Shared delayed workspace writes validate the destination
 again, and SSH exec checks the connection generation after waiting for its transport slot.
 
-Browser upload/download and SSH media capabilities currently report unavailable. Remote transcript,
-context/usage/memory bindings, setup/worktree automation and development-server forwarding remain
-separate delivery gates in [the parity plan](server-capability-parity-plan.md). They must use the
-remote target or report unavailable; a matching local pathname is never evidence of remote data.
+Authenticated owners can read Claude conversations from connected SSH projects through the chat
+panel and its find bar. The saved node selects the endpoint, runtime session and managed account;
+request-supplied paths cannot redirect a read. A managed account never falls back to the system
+account. Unsupported agents, disconnection, changed targets and failed reads remain unreadable,
+never a local scan or evidence that the conversation is absent. Relay and guest readers are refused.
+
+This optional reader requires Python 3 with POSIX directory-descriptor and no-follow support on the
+remote host. Nodeterm neither installs it nor writes a helper file. One command opens the selected
+account tree and transcript with verified descriptors, rejects links/ambiguous sessions, rechecks
+named identities and returns a bounded byte window (at most 5 MiB plus one lookbehind byte).
+Discovery examines at most 4,096 project entries; unreadable/missing roots and exceeded budgets
+are unknown, not a clean miss. Python/runtime and unsafe-tree refusals have actionable panel copy.
+Requests expire after 30 seconds, with at most 32 active reads and two per node; owner departure
+cancels queued work, and already dispatched work retains its slot until the transport settles.
+
+Browser upload/download and SSH media capabilities currently report unavailable. Context/usage/memory
+bindings, remaining agent readers, setup/worktree automation and development-server forwarding remain
+separate delivery gates in [the parity plan](server-capability-parity-plan.md). Read-only histories
+do not authorize remote terminal control. Remote services must use the current remote target or
+report unavailable; a matching local pathname is never evidence of remote data.
 
 Validation uses temporary HOME, data directories, tmux namespace and a loopback SSH server. Both
 OpenSSH and the native transport exercise encrypted-key prompts, wrong-tab rejection, quoted file
-writes/reads and reconnect. Production hosts and real account credentials are outside these tests.
+writes/reads, managed-account transcript isolation, guest refusal, disconnection and reconnect.
+Production hosts and real account credentials are outside these tests.

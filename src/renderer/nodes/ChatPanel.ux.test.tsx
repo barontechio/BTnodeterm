@@ -229,6 +229,20 @@ describe('ChatPanel loading', () => {
 })
 
 describe('ChatPanel empty states', () => {
+  it.each([
+    { reason: 'remote-runtime-unavailable', text: 'Python 3', detail: 'Install Python 3' },
+    { reason: 'remote-unsafe-transcript', text: 'could not be read safely', detail: 'linked or ambiguous' },
+    { reason: 'remote-reader-unavailable', text: 'does not provide SSH transcript reads', detail: 'supported agents' },
+    { reason: 'remote-reader-permission-required', text: 'host owner', detail: 'authenticated owner connection' }
+  ] as const)('explains $reason without offering a blind retry', async ({ reason, text, detail }) => {
+    await render()
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true, unreadableReason: reason })
+    })
+    expect(msgs().textContent).toContain(text); expect(msgs().textContent).toContain(detail)
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
+    expect(host.querySelector('[aria-label="Reload conversation"]')).not.toBeNull()
+  })
   // A read that FAILED (the host did not answer, a remote node with no reachable master) is not the
   // same sentence as "there is no transcript": one heals on retry, the other never will.
   it('an unreadable first read says it could not read the transcript', async () => {

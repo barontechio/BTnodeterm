@@ -2772,7 +2772,7 @@ export interface SshPassphraseRequest {
 }
 
 export interface SshProjectApi {
-  capabilities?(): Promise<{ enabled: boolean; filesystem: boolean; transfers: boolean; media: boolean; hostContext: 'server' } | null>
+  capabilities?(): Promise<{ enabled: boolean; filesystem: boolean; transfers: boolean; media: boolean; transcriptAgents?: string[]; hostContext: 'server' } | null>
   connectPrompts?(): Promise<string>
   disconnectPrompts?(epoch: string): Promise<void>
   /** Open (or reuse) the ControlMaster for an SSH project; resolves once connected. */
@@ -3676,6 +3676,8 @@ export interface ChatTranscriptResult {
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed
    *  to "no transcript exists". Absent on every other result. */
   unreadable?: true
+  /** Optional actionable refusal from a strict SSH reader; older hosts keep generic copy. */
+  unreadableReason?: 'remote-runtime-unavailable' | 'remote-unsafe-transcript' | 'remote-reader-unavailable' | 'remote-reader-permission-required'
 }
 
 /**

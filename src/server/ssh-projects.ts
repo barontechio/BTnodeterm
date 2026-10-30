@@ -11,7 +11,7 @@ import { AskpassServer, ensureAskpassScript } from '../core/remote-ssh/ssh-askpa
 import { SshProjectManager } from '../core/remote-ssh/ssh-project'
 import { parseSshArgv } from '../core/remote-ssh/native/ssh-argv'
 import { isMuxControlCommand } from '../core/remote-ssh/ssh-child-gate'
-import { makeSshProjectRunners } from '../core/remote-ssh/ssh-process-runners'
+import { makeSshProjectRunners, type ScopedSshProjectRunners } from '../core/remote-ssh/ssh-process-runners'
 import { findSshBinary, setNativePassphrasePrompt, useNativeSsh } from '../core/remote-ssh/native/native-runtime'
 import { hookServer } from '../core/agents/hook-server'
 import { nodeIdsForCanvas, remoteNodeTokenMinter, setRemoteNodeTokenWriter } from '../core/agents/node-token-service'
@@ -25,6 +25,7 @@ import { remoteIntegrationPlan } from '../shared/agent-integrations'
 export interface ServerSshProjects {
   readonly manager: SshProjectManager
   readonly fs: SshFs
+  withQueuedExecutionCheck: ScopedSshProjectRunners['withQueuedExecutionCheck']
   refForProject(projectId: string): ReturnType<SshProjectManager['refForProject']>
   refForEndpoint(endpoint: Parameters<SshProjectManager['refForEndpoint']>[0]): ReturnType<SshProjectManager['refForEndpoint']>
   spawnRefFor(scopeId: string): ReturnType<SshProjectManager['spawnRefFor']>
@@ -131,7 +132,8 @@ export function registerServerSshProjects(deps: {
   })
   platform.handleWithSender(IPC.sshProjectCapabilities, (id) => {
     if (!eligible(id)) throw new Error('ssh-owner-required')
-    return { enabled: deps.enabled, filesystem: deps.enabled, transfers: false, media: false, hostContext: 'server' }
+    return { enabled: deps.enabled, filesystem: deps.enabled, transfers: false, media: false,
+      transcriptAgents: deps.enabled ? ['claude'] : [], hostContext: 'server' }
   })
   const connection = (raw: SshConnection): SshConnection => {
     if (!raw || typeof raw.host !== 'string' || !raw.host || raw.host.length > 1024 || /[\s\0]/.test(raw.host) ||
@@ -202,7 +204,7 @@ export function registerServerSshProjects(deps: {
   for (const channel of [IPC.sshUploadFile, IPC.sshDownloadFile, IPC.sshMediaAllow]) {
     handle(channel, () => { throw new Error('ssh-transfer-unavailable: this host does not yet provide browser SSH transfers or media') })
   }
-  return { manager, fs: remoteFs, refForProject: verifiedRef,
+  return { manager, fs: remoteFs, withQueuedExecutionCheck: runners.withQueuedExecutionCheck, refForProject: verifiedRef,
     refForEndpoint: (endpoint) => {
       const wanted = manager.refForEndpoint(endpoint)
       if (!wanted) return undefined
