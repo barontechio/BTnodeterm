@@ -146,6 +146,8 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
     // and sshd's `MaxStartups` resets some outright, which the app sees as a dropped terminal.
     // Mux control commands and the terminals themselves are never queued (see ssh-child-gate.ts).
     run: (args, stdin, timeoutMs) => {
+      // The captured identity and eventual exec must see the same argv, even after a queue wait.
+      args = [...args]
       const current = captureExecutionCheck?.(args)
       const scope = scopes.getStore()
       const allowed = () => {
@@ -154,7 +156,9 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
       if (!allowed()) return Promise.resolve({ code: 255, stdout: '' })
       return sshChildGate.run(args, () => {
         if (!allowed()) return Promise.resolve({ code: 255, stdout: '' })
-        return native
+        // Transport-owned events/watchdogs must not inherit a completed reader's identity.
+        // The explicit check above still fences this dispatch; the caller resumes in its scope.
+        return scopes.exit(() => native
           ? // Still gated: sshd's MaxSessions bounds channels on ONE connection just as it bounds
             // mux clients on a ControlMaster.
             runSshArgv(nativeMux(), args, { stdin, timeoutMs: timeoutMs ?? 15000 }).then((r) => ({
@@ -187,7 +191,7 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
             })
             child.stdin?.end(stdin)
           }
-        })
+        }))
       }, scope?.abort.signal).catch((error: unknown) => {
         if (error instanceof SshChildCancelledError) return { code: 255, stdout: '' }
         throw error

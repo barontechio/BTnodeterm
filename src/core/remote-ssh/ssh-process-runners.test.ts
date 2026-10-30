@@ -3,14 +3,18 @@ import { makeSshProjectRunners } from './ssh-process-runners'
 import { SSH_CHILD_CONCURRENCY } from './ssh-child-gate'
 
 const pending = vi.hoisted(() => [] as Array<() => void>)
+const commands = vi.hoisted(() => [] as string[][])
+const dispatch = vi.hoisted(() => ({ observe: undefined as (() => void) | undefined }))
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(), execFileSync: vi.fn(),
   execFile: vi.fn((_file, _args, _options, callback) => {
+    commands.push([..._args])
+    dispatch.observe?.()
     pending.push(() => callback(null, 'executed'))
     return { stdin: { on: () => {}, end: () => {} } }
   })
 }))
-afterEach(async () => { for (const done of pending) done(); await Promise.resolve(); pending.length = 0; vi.unstubAllEnvs() })
+afterEach(async () => { dispatch.observe = undefined; for (const done of pending) done(); await Promise.resolve(); pending.length = 0; commands.length = 0; vi.unstubAllEnvs() })
 
 function factory() {
   return makeSshProjectRunners({ userDataDir: '/fixture',
@@ -100,5 +104,31 @@ describe('SSH execution destination at the queue boundary', () => {
     expect(pending).toHaveLength(SSH_CHILD_CONCURRENCY)
     for (const done of pending) done()
     await Promise.all(running)
+  })
+
+  it('does not attach the reader lifetime to transport-owned background continuations', async () => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '0')
+    const runners = factory(); let release!: () => void; let background!: Promise<{ code: number; stdout: string }>
+    const held = new Promise<void>((resolve) => { release = resolve })
+    dispatch.observe = () => { dispatch.observe = undefined; background = held.then(() => runners.run(args)) }
+    const scoped = runners.withQueuedExecutionCheck(() => true, () => runners.run(args))
+    await Promise.resolve(); await Promise.resolve()
+    pending[0](); await scoped
+    release(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+    expect(pending).toHaveLength(2)
+    pending[1](); expect(await background).toEqual({ code: 0, stdout: 'executed' })
+  })
+
+  it('keeps queued argv immutable when a caller later reuses its argument array', async () => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '0')
+    const runners = factory()
+    const running = Array.from({ length: SSH_CHILD_CONCURRENCY }, () => runners.run(args))
+    const reused = [...args]; const queued = runners.run(reused)
+    reused[reused.length - 1] = 'different command'; reused[reused.length - 2] = 'other@host'
+    await Promise.resolve(); await Promise.resolve(); pending[0]()
+    await vi.waitFor(() => expect(commands).toHaveLength(SSH_CHILD_CONCURRENCY + 1))
+    expect(commands.at(-1)).toEqual(args)
+    for (const done of pending) done()
+    await Promise.all([...running, queued])
   })
 })
