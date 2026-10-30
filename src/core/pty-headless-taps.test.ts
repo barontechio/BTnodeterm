@@ -20,6 +20,7 @@ interface FakePty {
   killed: boolean
 }
 const spawned: FakePty[] = []
+let spawnHook: (() => void) | undefined
 
 // Pin the persistence backend: `sessionHostSupported()` only asks whether
 // out/session-host/host.cjs exists on disk, so whether this suite exercises the mocked
@@ -31,6 +32,7 @@ vi.mock('./session-host-backend', async () =>
 
 vi.mock('node-pty', () => ({
   spawn: (_file: string, _args: string[], _opts: unknown) => {
+    spawnHook?.()
     const p: FakePty = { writes: [], resizes: [], paused: false, killed: false }
     spawned.push(p)
     return {
@@ -70,6 +72,7 @@ describe('PtyManager headless taps (#925)', () => {
 
   beforeEach(() => {
     spawned.length = 0
+    spawnHook = undefined
     fake = fakePlatform()
     initPlatform(fake)
     vi.useFakeTimers()
@@ -85,6 +88,31 @@ describe('PtyManager headless taps (#925)', () => {
     m.registerIpc()
     return m
   }
+
+  it('keeps a created backend alive without authorizing its expired application continuation', async () => {
+    const m = await manager(); let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    let backend!: Promise<boolean>; let application!: Promise<boolean>
+    spawnHook = () => { backend = hold.then(() => m.writeHeadless('n1', 'backend')) }
+    await m.runNodeAction('n1', 'branch', { current: () => true }, async () => {
+      application = hold.then(() => m.writeHeadless('n1', 'expired'))
+      await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    })
+    release(); expect(await backend).toBe(true); expect(await application).toBe(false)
+    expect(spawned[0].writes).toEqual(['backend']); await m.killAll()
+  })
+
+  it('runs backend data/flush callbacks outside an expired action that delivered the event', async () => {
+    const m = await manager(); let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve }); let event!: Promise<void>
+    await m.runNodeAction('n1', 'branch', { current: () => true }, async () => {
+      await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+      m.onOutput('n1', () => { m.writeHeadless('n1', 'driver reply') })
+      event = hold.then(() => { spawned[0].onDataCb?.('output') })
+    })
+    release(); await event; await vi.advanceTimersByTimeAsync(50)
+    expect(spawned[0].writes).toEqual(['driver reply']); await m.killAll()
+  })
 
   it('onOutput receives flushed output for the node, and unsubscribes cleanly', async () => {
     const m = await manager()

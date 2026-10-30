@@ -1920,3 +1920,9 @@ from the saved target, honors project launch trust and validates again in the wr
 Persist before launch, retain a failed/cancelled command for manual recovery, and check the owner
 before each actual write. The protocol and continuation alone do not enable the Server command:
 its consent, submit-transition and new-pane exclusion adapters are separate required gates.
+
+Backend constructors, shared driver timers and physical lifecycle registration leave node-action
+ALS through `NodeExecutionCoordinator.backend` after dispatch validation. Only that backend context
+may create `backendCallback` wrappers; they retain physical-generation checks and competing-action
+fences when later invoked. Application promises stay action-bound and cannot use an expired claim
+to start a backend. Never expose these host internals as a callback RPC or use them for user input.

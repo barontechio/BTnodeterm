@@ -5074,7 +5074,7 @@ export class PtyManager {
       //
       // The non-session-host branch above already resolves this correctly. Sharing that logic is
       // the fix; two places deciding "which shell" is what let them disagree.
-      proc = (watchHost
+      proc = this.nodeExecution.backend(() => (watchHost
         ? watchExistingSessionHostPty(sessionName(options.persistKey as string))
         : attachExistingHost
         ? attachExistingSessionHostPty(sessionName(options.persistKey as string))
@@ -5095,13 +5095,13 @@ export class PtyManager {
             // NOT the raw tmux history-limit: the host's headless xterm holds every line at full
             // width, and the renderer can never show more than its own cap. See shared/scrollback.
             xtermScrollback(settings.tmuxScrollback)
-          )) as unknown as pty.IPty
+          ))) as unknown as pty.IPty
     } else {
       // A tmux client must not pin the project dir as the shared server's cwd (#1131): the pane's
       // directory is the `-c` argument above, never the client's own cwd.
       const spawnCwd = useLocalTmux ? localTmuxClientCwd() : cwd
       try {
-        proc =
+        proc = this.nodeExecution.backend(() =>
           nativeSshArgv && useNativeSsh()
             ? // The remote terminal as a pty CHANNEL on the project's one native connection: no ssh
               // process (it could not multiplex on Windows). See remote-ssh/native/native-pty.ts.
@@ -5121,7 +5121,7 @@ export class PtyManager {
                 // Win32 only: node-pty's bundled ConPTY when present (see windows-conpty-dll.ts);
                 // `{}` on every other platform, so the options are byte-identical there.
                 ...windowsConptySpawnOptions()
-              })
+              }))
       } catch (err) {
         // node-pty surfaces the underlying failure as a bare "posix_spawnp failed." with no errno.
         // Two different field causes wear that same message, so BOTH are measured before anything is
@@ -5157,7 +5157,7 @@ export class PtyManager {
     const session: Session = {
       proc,
       nativeWindowsPane: process.platform === 'win32' && !persisted
-        ? new NativeWindowsPane(proc, { ...options, scrollback: xtermScrollback(settings.tmuxScrollback) })
+        ? this.nodeExecution.backend(() => new NativeWindowsPane(proc, { ...options, scrollback: xtermScrollback(settings.tmuxScrollback) }))
         : undefined,
       subscribers: spawnSub === null ? new Set<SubKey>() : new Set<SubKey>([spawnSub]),
       // A non-voting view (`sizeVote: false`) that got here — a hosted-relay viewer's warm tmux
@@ -5220,8 +5220,10 @@ export class PtyManager {
     // Both shared timers are armed by the first session that needs them: the scrollback snapshots
     // and the idle reap are both about tmux-backed sessions and nothing else.
     if (persisted) {
-      this.ensureSnapshotTimer()
-      this.ensureReapTimer()
+      this.nodeExecution.backend(() => {
+        this.ensureSnapshotTimer()
+        this.ensureReapTimer()
+      })
     }
     this.sessions.set(sessionId, session)
     // Index by node id even when the session is NOT tmux-persisted (`persisted` only governs
@@ -5244,73 +5246,76 @@ export class PtyManager {
     if (session.indexKey && !session.sessionHost && this.pendingRecycle.has(session.indexKey))
       this.fireRecycled(session.indexKey, true)
 
-    const hostPty = useSessionHost ? (proc as unknown as Partial<SessionHostPty>) : null
-    if (typeof hostPty?.onSize === 'function') {
-      hostPty.onSize((size) => {
-        if (this.sessions.get(sessionId) !== session) return
-        this.applyBackendSize(sessionId, session, size)
-      })
-    }
-
-    proc.onData((data) => {
-      // A session-host attach can fail after the shim has already delivered startup bytes. Once
-      // rollback removes this exact generation, late callbacks must not recreate its flush timer
-      // or leak bytes into a replacement that happens to reuse the same node id.
-      if (this.sessions.get(sessionId) !== session) return
-      session.daReplies.noteOutput(data, Date.now())
-      session.nativeWindowsPane?.recordOutput(data)
-      this.queueData(sessionId, session, data)
-    })
-
-    proc.onExit(({ exitCode }) => {
-      // The persistent host broadcasts exit before it answers killSession. The confirmed profile
-      // switch must await that acknowledgement before mutating the local index/subscribers, so the
-      // exact in-flight generation's early exit is consumed by the transaction instead of racing
-      // cleanup ahead of the response. Success cleans it below; rejection leaves it untouched.
-      const confirmedEnd = this.confirmedBackendEnds.get(sessionId)
-      if (confirmedEnd?.session === session) {
-        confirmedEnd.exitCode = exitCode
-        confirmedEnd.resolveExit?.()
-        return
+    // Registration may itself start driver timers; callbacks also explicitly leave request ALS.
+    this.nodeExecution.backend(() => {
+      const hostPty = useSessionHost ? (proc as unknown as Partial<SessionHostPty>) : null
+      if (typeof hostPty?.onSize === 'function') {
+        hostPty.onSize(this.nodeExecution.backendCallback((size: PtySize) => {
+          if (this.sessions.get(sessionId) !== session) return
+          this.applyBackendSize(sessionId, session, size)
+        }))
       }
-      this.handleSessionExit(sessionId, session, exitCode)
-    })
 
-    if (useSessionHost) {
-      ;(proc as unknown as SessionHostPty).onAttachError((error) => {
-        // Reconnect replay can be rejected after this generation was already returned to the
-        // renderer. Retire only the exact remembered generation; a late callback from an older
-        // shim must never take down its replacement.
+      proc.onData(this.nodeExecution.backendCallback((data: string) => {
+        // A session-host attach can fail after the shim has already delivered startup bytes. Once
+        // rollback removes this exact generation, late callbacks must not recreate its flush timer
+        // or leak bytes into a replacement that happens to reuse the same node id.
         if (this.sessions.get(sessionId) !== session) return
-        const safeReason = /^(?:no existing session|session '[A-Za-z0-9._-]+' is ending|unauthorized|no such session)/i.test(
-          error.message
-        )
-          ? error.message
-          : 'the persistent session host rejected the reattach'
-        this.queueData(
-          sessionId,
-          session,
-          `\r\n[nodeterm] Persistent terminal reattach failed: ${safeReason}\r\n`
-        )
-        this.handleSessionExit(sessionId, session, 1)
-      })
-    }
+        session.daReplies.noteOutput(data, Date.now())
+        session.nativeWindowsPane?.recordOutput(data)
+        this.queueData(sessionId, session, data)
+      }))
 
-    // Detached relay callers cannot await SessionHostPty.ready because their long-standing API
-    // returns a session id synchronously. They still must not retain a zombie Session: retire it
-    // and surface an ordinary non-zero exit to the sink if the asynchronous attach fails.
-    if (useSessionHost && sinks) {
-      void (proc as unknown as SessionHostPty).ready.catch(() => {
-        if (this.sessions.get(sessionId) !== session) return
-        this.discardFailedSpawn(sessionId, session)
-        try {
-          sinks.onExit(1)
-        } catch {
-          // A consumer callback cannot resurrect the already-retired provisional Session, and a
-          // throw here must not become an unhandled rejection from this deliberately detached task.
+      proc.onExit(this.nodeExecution.backendCallback(({ exitCode }: { exitCode: number }) => {
+        // The persistent host broadcasts exit before it answers killSession. The confirmed profile
+        // switch must await that acknowledgement before mutating the local index/subscribers, so the
+        // exact in-flight generation's early exit is consumed by the transaction instead of racing
+        // cleanup ahead of the response. Success cleans it below; rejection leaves it untouched.
+        const confirmedEnd = this.confirmedBackendEnds.get(sessionId)
+        if (confirmedEnd?.session === session) {
+          confirmedEnd.exitCode = exitCode
+          confirmedEnd.resolveExit?.()
+          return
         }
-      })
-    }
+        this.handleSessionExit(sessionId, session, exitCode)
+      }))
+
+      if (useSessionHost) {
+        ;(proc as unknown as SessionHostPty).onAttachError(this.nodeExecution.backendCallback((error: Error) => {
+          // Reconnect replay can be rejected after this generation was already returned to the
+          // renderer. Retire only the exact remembered generation; a late callback from an older
+          // shim must never take down its replacement.
+          if (this.sessions.get(sessionId) !== session) return
+          const safeReason = /^(?:no existing session|session '[A-Za-z0-9._-]+' is ending|unauthorized|no such session)/i.test(
+            error.message
+          )
+            ? error.message
+            : 'the persistent session host rejected the reattach'
+          this.queueData(
+            sessionId,
+            session,
+            `\r\n[nodeterm] Persistent terminal reattach failed: ${safeReason}\r\n`
+          )
+          this.handleSessionExit(sessionId, session, 1)
+        }))
+      }
+
+      // Detached relay callers cannot await SessionHostPty.ready because their long-standing API
+      // returns a session id synchronously. They still must not retain a zombie Session: retire it
+      // and surface an ordinary non-zero exit to the sink if the asynchronous attach fails.
+      if (useSessionHost && sinks) {
+        void (proc as unknown as SessionHostPty).ready.catch(this.nodeExecution.backendCallback(() => {
+          if (this.sessions.get(sessionId) !== session) return
+          this.discardFailedSpawn(sessionId, session)
+          try {
+            sinks.onExit(1)
+          } catch {
+            // A consumer callback cannot resurrect the already-retired provisional Session, and a
+            // throw here must not become an unhandled rejection from this deliberately detached task.
+          }
+        }))
+      }
+    })
 
     return sessionId
   }
