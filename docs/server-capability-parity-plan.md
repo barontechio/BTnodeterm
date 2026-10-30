@@ -105,7 +105,7 @@ contexts refuse; Codex login cancellation interrupts its wait and drops late res
 The independent [Claude remote refusal #1323](https://github.com/eneskirca/nodeterm/pull/1323)
 passes 24,164 tests (109 skipped), typecheck and both builds. The latest SSH export passes 24,170.
 The independent [license lifecycle #1324](https://github.com/eneskirca/nodeterm/pull/1324)
-passes 24,169 tests (109 skipped), typecheck and both builds.
+passes 24,170 tests (109 skipped), typecheck and both builds.
 The shared license lifecycle snapshot passes 24,404 tests (109 skipped), typecheck and both builds:
 requests/polls have a disposable host lifetime, mutations serialize, persistence is atomic/0600,
 and new device identities are published synchronously without replacing an existing installation.
@@ -163,6 +163,20 @@ and checks submission finishes before that write. Partial/uncertain paste semant
 The combined confirmed-write/envelope snapshot passes 24,438 tests (109 skipped), typecheck,
 Desktop production build and Server build. Its exact-text approvals, replacement/refusal/unknown
 delivery fixtures and real Server CLI pre-send refusal are included in that full run.
+
+The independent [atomic envelope submission #1326](https://github.com/eneskirca/nodeterm/pull/1326)
+is based directly on upstream/main, with its own lockfile installation. It passes 24,165 tests
+(109 skipped) both before and after building, typecheck and both builds. It also isolates the
+fake host's final snapshot so a built bundle cannot start a real host during fixture cleanup.
+
+Server mounted-node session-name polling is now connected to the existing per-agent core reader.
+The optional trailing node id binds owner RPC and background sweep reads to the current saved
+project/account and runtime session. Remote/unavailable/mismatched targets never search local
+histories; metadata changes during a read discard its result. The browser's JSON-null optional
+arguments are normalized; Native retains its existing IPC reader. The shared sweep rechecks
+session/account/manual-title identity before publishing, prevents overlapping passes and discards
+late publications after stop. Both Server close paths (and the already-running-server exit) stop
+the sweep. Focused tests include a real Server owner WebSocket reading a real temporary title file.
 
 Baseline inspected on 2026-10-29:
 

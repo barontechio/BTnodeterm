@@ -1891,3 +1891,9 @@ Server message envelopes use `PtyManager.sendSettledEnvelope`: its one pane-queu
 capture, paste, settlement waits and Enter. Do not compose two public `sendText` calls around an
 unreserved wait. The implementation lives in `core/settled-envelope.ts`, with a Server compatibility
 export, and calls the private delivery path from inside the queue to avoid recursive deadlock.
+
+**Session title reads are node-bound on Server.** Carry the optional trailing node id through the
+browser API; derive account/harness/host from current saved routing and the runtime session.
+Unknown or remote targets return no title, never a local transcript scan. Recheck after async
+reads and immediately before sweep publication, including account/session replacement and manual
+title changes. The periodic sweep must not overlap itself; disposing it prevents late publication.

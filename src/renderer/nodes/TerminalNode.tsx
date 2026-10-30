@@ -6053,7 +6053,7 @@ export function TerminalNode({
     let timer: ReturnType<typeof setTimeout> | undefined
     const sync = async () => {
       if (!titleAutoRef.current || editingTitleRef.current) return
-      const name = await api.pty.readSessionName(sid, accountForReadsRef.current, agentId)
+      const name = await api.pty.readSessionName(sid, accountForReadsRef.current, agentId, id)
       if (cancelled) return
       if (name) delayMs = 15000
       if (

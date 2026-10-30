@@ -1,6 +1,8 @@
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
+import { ServerSessionNames } from './session-names'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
 import { startTriggerService } from '../core/trigger-service'
 import path from 'path'
@@ -153,7 +155,7 @@ import { runResume } from '../core/relay/team-resume'
 import { launchHeadless } from '../core/headless-launch'
 import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '../shared/node-pty-options'
 import { assembleResumeCommand } from '../shared/agents/launch'
-import { gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
+import { capabilityAgentId, gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
 import {
   createWatchLinkService,
   registerWatchLinkIpc,
@@ -537,11 +539,34 @@ export async function startServer(
 
   // Keep every agent node's session name fresh in the mirror — including nodes no canvas has
   // mounted (the phone lists them all; see core/session-name-sweep.ts).
-  startSessionNameSweep({
+  let geminiTranscriptPathFor: ((sessionId: string) => string | undefined) | undefined
+  const sessionNames = new ServerSessionNames({
+    owner: (id) => platform.isOwnerClient?.(id) === true,
+    target: (nodeId) => {
+      const projects = workspaceStore.projectIdsForNode(nodeId)
+      const node = workspaceStore.getNodeResolved(nodeId)
+      const entry = mirrorEntry(nodeId)
+      const project = projects.length === 1 ? workspaceStore.projectTargetInfo(projects[0]) : null
+      if (!project || !node?.agentId || node.kind !== 'terminal' || node.pendingLaunch || !entry?.sessionId || !entry.agentId ||
+        capabilityAgentId(node.agentId) !== capabilityAgentId(entry.agentId)) return undefined
+      const base = capabilityAgentId(node.agentId)
+      const account = node.accountId ? (base === 'claude' ? settingsStore.get().claudeAccounts :
+        base === 'codex' ? settingsStore.get().codexAccounts : []).find((candidate) => candidate.id === node.accountId) : undefined
+      return { projectId: projects[0], nodeId, sessionId: entry.sessionId, agentId: node.agentId, accountId: node.accountId,
+        cwd: node.cwd, projectCwd: project.cwd,
+        remote: !!project.ssh || isRemoteSessionNode(node) || !!ptyManager.sshRemoteForNode(nodeId),
+        accountAvailable: !node.accountId || !!account && !account.pending && !account.host }
+    },
+    read: (sessionId, accountId, agentId) => readAgentSessionName(sessionId, accountId, agentId, {
+      geminiPathFor: (id) => geminiTranscriptPathFor?.(id)
+    })
+  })
+  sessionNames.register(platform)
+  const stopSessionNameSweep = startSessionNameSweep({
     entries: sessionNameSweepEntries,
     node: (nodeId) => {
       const n = workspaceStore.getNode(nodeId)
-      return n ? { accountId: n.accountId, titleAuto: n.titleAuto } : undefined
+      return n && sessionNames.available(nodeId) ? { accountId: n.accountId, titleAuto: n.titleAuto } : undefined
     },
     // The per-agent router (core/agent-session-name.ts), same as the desktop's sweep and its
     // ptyReadSessionName handler: a grok node's name is in its session metadata, and resolving it
@@ -549,10 +574,7 @@ export async function startServer(
     // Gemini's leg needs the transcript path its context tail tracks; that tail is created by
     // `wireAgentStatus` below, so it is dereferenced lazily — the sweep's first pass is 5s after
     // boot, long after wiring.
-    resolve: (sessionId, accountId, agentId) =>
-      readAgentSessionName(sessionId, accountId, agentId, {
-        geminiPathFor: (id) => geminiContextTail.pathFor(id)
-      }),
+    resolve: (sessionId, accountId, agentId, nodeId) => sessionNames.read(sessionId, accountId, agentId, nodeId),
     publish: setNodeSessionName
     // No `supports`: core's `supportsTitleRead` (TITLE_READ_CAPABLE) is the rule, and duplicating
     // it here is how the two shells drift — see the note in core/session-name-sweep.ts.
@@ -652,6 +674,7 @@ export async function startServer(
   } = wireAgentStatus(platform, {
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })
+  geminiTranscriptPathFor = (id) => geminiContextTail.pathFor(id)
   // Cursor NEEDS YOU, same seam as the desktop (core/agents/cursor-approval.ts).
   hookServer.setPaneReader((nodeId) => ptyManager.captureSession(nodeId))
   // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
@@ -1223,6 +1246,7 @@ export async function startServer(
   }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
+    stopSessionNameSweep()
     return { close: async (): Promise<void> => {} }
   })
   if (otherServerHere) {
@@ -1313,6 +1337,7 @@ export async function startServer(
     return {
       port: 0, // nothing bound
       async close() {
+        stopSessionNameSweep()
         mediaReferences.dispose()
         ownerConfirmations.dispose()
         codexAccounts.dispose()
@@ -1393,6 +1418,7 @@ export async function startServer(
   return {
     port,
     async close() {
+      stopSessionNameSweep()
       mediaReferences.dispose()
       ownerConfirmations.dispose()
       codexAccounts.dispose()

@@ -1469,8 +1469,9 @@ export interface PtyApi {
    *  the `/resume` name (e.g. after resume) without cross-contaminating same-folder sessions.
    *  `accountId` scopes the lookup to a managed Claude account's transcript root (default `~/.claude`).
    *  `agentId` picks the reader — grok's name lives in its session metadata, not a claude transcript;
-   *  omitted (every pre-grok caller) means the claude transcript reader. */
-  readSessionName(sessionId: string, accountId?: string, agentId?: string): Promise<string | null>
+   *  omitted (every pre-grok caller) means the claude transcript reader. `nodeId` binds Server
+   *  reads to current saved host/account/session routing; Native keeps its existing reader. */
+  readSessionName(sessionId: string, accountId?: string, agentId?: string, nodeId?: string): Promise<string | null>
   /** Listens for PTY output. Returns an unsubscribe function. */
   onData(sessionId: string, listener: (data: string) => void): () => void
   /** Optional for older hosts. An exclusive host action refused this client's keyboard input. */

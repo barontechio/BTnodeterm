@@ -3,6 +3,7 @@ import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import http from 'node:http'
+import { randomUUID } from 'node:crypto'
 import WebSocket from 'ws'
 import { describe, expect, it, vi } from 'vitest'
 import { startServer } from './index'
@@ -22,6 +23,11 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
   it('persists canvas commands, refuses cross-project mutations and individually confirms settings', async () => {
     vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     const root = testTmpDir('canvas-e2e-'); const dataDir = path.join(root, 'data'); const cwd = path.join(root, 'project')
+    const home = path.join(root, 'home'); const fixtureSession = randomUUID()
+    vi.stubEnv('HOME', home)
+    const transcripts = path.join(home, '.claude', 'projects', 'fixture')
+    fs.mkdirSync(transcripts, { recursive: true })
+    fs.writeFileSync(path.join(transcripts, `${fixtureSession}.jsonl`), JSON.stringify({ type: 'custom-title', customTitle: 'Owner session title' }) + '\n')
     fs.mkdirSync(dataDir); fs.mkdirSync(cwd)
     initPlatform(fakePlatform({ userDataDir: dataDir }))
     const store = new WorkspaceStore()
@@ -55,7 +61,7 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
           headers: { 'x-nodeterm-hook-token': hookServer.getToken(), 'content-type': 'application/x-www-form-urlencoded', 'x-nodeterm-node-token': token } },
           (response) => { response.resume(); response.on('end', () => resolve(response.statusCode!)) })
         request.on('error', reject)
-        request.end(new URLSearchParams({ nodeId: 'source', payload: JSON.stringify({ hook_event_name: 'SessionStart', session_id: 'fixture-session', cwd }) }).toString())
+        request.end(new URLSearchParams({ nodeId: 'source', payload: JSON.stringify({ hook_event_name: 'SessionStart', session_id: fixtureSession, cwd }) }).toString())
       })
       expect(hookStatus).toBe(204)
       // Saved identity and a signed hook are insufficient for terminal input: there is no live
@@ -82,6 +88,9 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
         const id = ++requestId; pending.set(id, { resolve, reject }); socket!.send(JSON.stringify({ t: 'req', id, method, args } satisfies RpcRequest))
       })
       expect(await request(IPC.licenseCapabilities)).toMatchObject({ enabled: true, hostContext: 'server' })
+      expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBe('Owner session title')
+      expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'private')).toBeNull()
+      expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude')).toBeNull()
       expect(await request(IPC.licenseStatus)).toMatchObject({ active: false })
       expect(await request(IPC.watchLinkCreate, { nodeId: 'source', role: 'viewer', ttlSeconds: 3600, label: 'Fixture', title: 'Builder' })).toEqual({ ok: false, error: 'not-entitled' })
       await request(IPC.ownerConfirmationConnect)

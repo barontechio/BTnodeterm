@@ -805,6 +805,12 @@ An uncertain delivery is reported explicitly and must not be resent: inspect the
 submitted and uncertain input retain the existing pending-work hold until recovery or a completed
 new turn, covering the interval before a new hook arrives. Text is limited to 64 KiB.
 
+Mounted agent nodes now read their session titles through the owner WebSocket API, using the same
+per-agent reader as the host sweep. Requests carry the node id so equal conversation ids on
+different accounts/hosts cannot choose a reader by caller-supplied metadata. A remote, missing,
+pending-launch or replaced target returns no adopted title, preserving the node's existing title.
+SSH title reads remain pending; this path never falls through to the server's local histories.
+
 **Wider reach: `--control-scope project`.** `NODETERM_SERVER_CONTROL_SCOPE=project` (or
 `--control-scope project`; default `creator`, an unknown value fails the boot) lets an agent act on
 every node that is only in its OWN project, whoever opened it and whether or not the server
