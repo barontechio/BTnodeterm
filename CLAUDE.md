@@ -148,6 +148,16 @@ refused optimistic edits convergent without reverting accepted visual edits or l
 carry. Retain the fence through actual effect settlement even after owner departure. The primitive
 does not grant actor rights, lock external filesystem writers, or enable a worktree removal RPC.
 
+Owning Desktop and Server roots install `WorktreeCanvasAdmission` at recovery boot. Its path
+policy compares execution references with current private host state: historical layouts and tab
+closure remain editable, safe repair can move away from a retired path, and stale whole saves or
+new members cannot restore it. Alias resolution is the physical-start resolver, including dangling
+symlinks. Unavailable recovery facts preserve unchanged historical layout but refuse new local
+execution references. Inert editor/diff missing-file notices can keep their old display path; making
+them active again must pass admission. Whole-project checks use one bulk private host snapshot,
+with the same exec overlay/routing as the endpoint getter and separate placement uniqueness checks.
+An empty journal adds no canonical-path IO. These guards do not implement a removal transaction.
+
 ## What this is
 
 **Node-based terminal manager** (BUSL-1.1, converts to MIT after 4 years — see `LICENSE`): multiple real terminals live on a single

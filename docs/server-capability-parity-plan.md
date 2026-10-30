@@ -434,15 +434,24 @@ Both owning shells now load recovery state before launches. Pending/recovered pa
 new physical starts before stale-cwd fallback, including missing descendants and dangling symlink
 aliases. Live co-attachments and unrelated directories retain their behavior; an empty journal adds
 no path-resolution IO. A real Server owner WebSocket fixture refuses a cold start inside a prepared
-removal. The directory/canvas mutation admission and confirmed removal/recovery UI remain pending.
+removal. Confirmed removal and the recovery UI remain pending.
 
 The canvas execution reservation primitive now pairs an actual host batch claim with conditional
 workspace admission, acquired inside the store FIFO. Folder, app-data and inline content writers,
 phone registration/removal and storage changes reject incompatible execution metadata before
 publication or disk writes. Optimistic client correction retains accepted visual updates through
 an ordered host observer and keeps private exec carry. Reservations outlive owner departure until
-the dispatched effect settles. This primitive is not yet installed as a removal transaction; path
-reference admission, recovery actions and confirmed owner/agent removal remain pending.
+the dispatched effect settles. This primitive is not yet installed as a removal transaction.
+
+Both owning shells now install path-reference admission alongside the physical-start guard. New
+nodes, bindings, local files, run folders, project roots and held-launch changes cannot introduce a
+retired path through a client op, old full save, Core edit or phone/authority writer. Historical
+layout/tab edits and repair to a safe directory remain possible after restart; inert missing-file
+notices retain their display paths. Corrections preserve incoming visual intent. A pending-journal
+fixture exercises folder, app-data and inline projects, dangling aliases and corrupt-state behavior;
+the existing real Server boot still exercises authenticated commands with pending recovery state.
+Whole-project checks use bulk private host snapshots to avoid a node scan per node. Empty recovery
+state adds no canonical-path IO. Confirmed removal/recovery actions remain the next domain gate.
 
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.

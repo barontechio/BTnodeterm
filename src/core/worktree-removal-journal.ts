@@ -106,6 +106,11 @@ export class WorktreeRemovalJournal {
     })
   }
   list(): WorktreeRemovalRecord[] { this.ready(); return structuredClone(this.rows) }
+  /** A cheap host policy hint, including unavailable facts. It grants no read/write authority. */
+  needsAdmission(): boolean {
+    try { return !this.loaded || this.faulted || this.rows.length > 0 || !this.options.ownsFiles() }
+    catch { return true }
+  }
   reservedPaths(): string[] { this.ready(); return this.rows.map((row) => row.worktreePath) }
   blocks(canonicalDirectory: string): boolean {
     this.ready()

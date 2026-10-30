@@ -73,6 +73,9 @@ describe('canvas metadata during a claimed host operation', () => {
           await expect(store.updateWorkspace((fresh) => {
             fresh.projects[0].cwd = path.join(root, 'other'); return fresh
           })).rejects.toThrow('reserved')
+          for (const change of [{ closed: true }, { remote: true }, { handedOffTo: { hostId: 'other', at: 1 } }]) {
+            await expect(writer.edit((fresh) => { Object.assign(fresh.projects[0], change) })).rejects.toThrow('reserved')
+          }
           await expect(store.prepareFolderStorage(project.id)).rejects.toThrow('reserved')
           await expect(store.releaseFolderFiles(project.id, false)).rejects.toThrow('reserved')
           await writer.edit((fresh) => {

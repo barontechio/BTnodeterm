@@ -6,10 +6,11 @@ import type { CanvasMutation, CanvasNodeState, Project, Workspace } from '../sha
 import type { NodeExecutionBatchPermit } from './node-execution'
 import type { ClientMutationRejection } from './canvas-sync'
 
-type Location = Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData'>
+type Location = Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData' | 'closed' | 'remote' | 'handedOffTo'>
 export function canvasExecutionBinding(project: Location, node: CanvasNodeState): string {
   return createHash('sha256').update(stableStringify({ project: { id: project.id, cwd: project.cwd,
-    ssh: project.ssh, storeInAppData: project.storeInAppData === true }, id: node.id, kind: node.kind,
+    ssh: project.ssh, storeInAppData: project.storeInAppData === true, closed: project.closed === true,
+    remote: project.remote === true, handedOffTo: project.handedOffTo }, id: node.id, kind: node.kind,
     parentId: node.parentId, agentId: node.agentId, agentModel: node.agentModel, accountId: node.accountId,
     cwd: node.cwd, ssh: node.ssh, sshRemoteTmux: node.sshRemoteTmux, sshFs: node.sshFs, worktree: node.worktree,
     runConfig: node.runConfig, filePath: node.filePath, fileMissing: node.fileMissing,
@@ -47,14 +48,17 @@ export class CanvasExecutionReservations {
     if (this.held.size + ids.length > 32) throw new Error('canvas-execution-capacity')
     const selected = ids.map((id) => {
       const hits = workspace.projects.flatMap((project) => project.nodes.filter((node) => node.id === id).map((node) => ({ project, node })))
-      if (hits.length !== 1 || hits[0].project.unavailable) throw new Error('canvas-execution-target-unavailable')
+      if (hits.length !== 1 || hits[0].project.unavailable || hits[0].project.remote || hits[0].project.handedOffTo)
+        throw new Error('canvas-execution-target-unavailable')
       const { project, node } = hits[0]
       if (workspace.projects.filter((candidate) => candidate.id === project.id).length !== 1)
         throw new Error('canvas-execution-target-unavailable')
       if (this.held.has(key(project.id, id))) throw new Error('canvas-execution-busy')
       if (node.kind === 'group' && [...descendantIds(project.nodes, id)].some((child) => !claimed.has(child)))
         throw new Error('canvas-execution-incomplete-group')
-      return { project: { id: project.id, cwd: project.cwd, ssh: project.ssh, storeInAppData: project.storeInAppData }, node: structuredClone(node) }
+      return structuredClone({ project: { id: project.id, cwd: project.cwd, ssh: project.ssh,
+        storeInAppData: project.storeInAppData, closed: project.closed, remote: project.remote,
+        handedOffTo: project.handedOffTo }, node })
     })
     // No asynchronous boundary between validation and claiming the complete set.
     permit.assertCurrent(); const release = {}
@@ -63,7 +67,7 @@ export class CanvasExecutionReservations {
     return { release: () => { for (const [id, target] of this.held) if (target.release === release) this.held.delete(id) } }
   }
 
-  assertProject(project: Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData' | 'nodes' | 'unavailable'>): void {
+  assertProject(project: Location & Pick<Project, 'nodes' | 'unavailable'>): void {
     if (!this.held.size) return
     for (const target of this.held.values()) {
       if (target.project.id !== project.id) {

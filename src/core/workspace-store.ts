@@ -376,6 +376,7 @@ export class WorkspaceStore {
     if (!this.executionAdmission?.active()) return
     const file = typeof candidate === 'string' ? JSON.parse(candidate) as ProjectFileV1 : candidate
     const project = fileToProject(file, { id: entry.id, cwd: entry.cwd, ssh: entry.ssh,
+      closed: entry.closed, handedOffTo: entry.handedOffTo,
       localExec: localExecOverlay(entry, file) })
     this.executionAdmission.assertProject(isFolderDataRef(entry) ? { ...project, storeInAppData: true } : project)
   }
@@ -2393,12 +2394,13 @@ export class WorkspaceStore {
 
   /** Host-only location binding, using the same storage kind as load(). No disk IO or private
    *  launch data. Ambiguous entries cannot authorize a host execution reservation. */
-  projectExecutionLocation(projectId: string): Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData'> | undefined {
+  projectExecutionLocation(projectId: string): Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData' | 'closed' | 'remote' | 'handedOffTo'> | undefined {
     const entries = this.index?.entries.filter((entry) => (entry.project?.id ?? entry.id) === projectId) ?? []
     if (entries.length !== 1) return undefined
     const entry = entries[0]
     return structuredClone({ id: projectId, cwd: entry.cwd ?? entry.project?.cwd,
-      ssh: entry.ssh ?? entry.project?.ssh, storeInAppData: isFolderDataRef(entry) || undefined })
+      ssh: entry.ssh ?? entry.project?.ssh, storeInAppData: isFolderDataRef(entry) || undefined,
+      closed: entry.closed ?? entry.project?.closed, handedOffTo: entry.handedOffTo ?? entry.project?.handedOffTo })
   }
 
   /** Resolve the shared project together with its machine-local trust identity. The approval id
@@ -2492,9 +2494,29 @@ export class WorkspaceStore {
     const entry = this.index?.entries.find((e) => (e.project?.id ?? e.id) === ids[0])
     const hit = this.findNode(nodeId)
     if (!entry || !hit) return undefined
-    const owned = entry.project ? hit.node : applyLocalNodeExec([hit.node], localExecOverlay(entry, { nodes: [hit.node] }))[0]
-    const resolved = hit.ssh ? routeSshProjectNode(owned, hit.ssh) : hit.root ? resolveNodes([owned], hit.root)[0] : owned
-    return structuredClone(resolved)
+    return this.hostNodeSnapshots(entry, [hit.node], hit.root, hit.ssh)[0]
+  }
+
+  /** Bulk equivalent for a whole-project conditional check. One cached parse/overlay rather than
+   * a full project scan for each node. The caller still checks global node placement uniqueness. */
+  getProjectNodesForHostAction(projectId: string): CanvasNodeState[] | undefined {
+    const entries = this.index?.entries.filter((entry) => (entry.project?.id ?? entry.id) === projectId) ?? []
+    if (entries.length !== 1) return undefined
+    const entry = entries[0]
+    let nodes = entry.project?.nodes ?? entry.cache?.nodes
+    if (!nodes && folderFileCwd(entry) && entry.cwd) {
+      try { nodes = this.parsedLastWritten(projectFilePath(entry.cwd))?.nodes }
+      catch { return undefined }
+    }
+    if (!Array.isArray(nodes)) return undefined
+    return this.hostNodeSnapshots(entry, nodes,
+      !entry.project && !entry.cache && folderFileCwd(entry) ? entry.cwd : undefined,
+      !entry.project && entry.cache ? entry.ssh : undefined)
+  }
+
+  private hostNodeSnapshots(entry: IndexEntryV3, nodes: CanvasNodeState[], root?: string, ssh?: Project['ssh']): CanvasNodeState[] {
+    const owned = entry.project ? nodes : applyLocalNodeExec(nodes, localExecOverlay(entry, { nodes }))
+    return structuredClone(ssh ? routeSshProjectNodes(owned, ssh) : root ? resolveNodes(owned, root) : owned)
   }
 
   private findNode(
@@ -3146,6 +3168,7 @@ export class WorkspaceStore {
       } catch {
         return { file: e.cache, written: false }
       }
+      this.admitProjectFile(e, parsed)
       e.cache = parsed
       this.revs.set(e.id, parsed.rev)
       // Owed BEFORE the push, so a mirror that fails (the host is asleep, the dial flaps) is
@@ -3326,11 +3349,13 @@ export class WorkspaceStore {
     const rescued = this.rescuableNodes(e.id, e.cache.nodes, remote.nodes)
     if (!rescued.length) return null
     // The merged set must outrank both sides, or the next reconcile could rev-decide it away.
-    e.cache = {
+    const candidate = {
       ...e.cache,
       nodes: [...e.cache.nodes, ...rescued],
       rev: Math.max(e.cache.rev, remote.rev) + 1
     }
+    this.admitProjectFile(e, candidate)
+    e.cache = candidate
     this.revs.set(e.id, e.cache.rev)
     return fileToProject(e.cache, {
       id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
@@ -3472,6 +3497,7 @@ export class WorkspaceStore {
           owed = true // the server file lacks the merged-in nodes → owe a mirror write
         }
       }
+      this.admitProjectFile(e, adopted)
       e.cache = adopted
       e.name = adopted.name
       e.color = adopted.color
@@ -3494,7 +3520,9 @@ export class WorkspaceStore {
     if (mergeable && e.cache && remote) {
       const rescued = this.rescuableNodes(e.id, e.cache.nodes, remote.nodes)
       if (rescued.length) {
-        e.cache = { ...e.cache, nodes: [...e.cache.nodes, ...rescued], rev: Math.max(cacheRev, remote.rev) + 1 }
+        const candidate = { ...e.cache, nodes: [...e.cache.nodes, ...rescued], rev: Math.max(cacheRev, remote.rev) + 1 }
+        this.admitProjectFile(e, candidate)
+        e.cache = candidate
         this.revs.set(e.id, e.cache.rev)
         this.unmirrored.add(e.id) // the merged set must land on the server
         merged = fileToProject(e.cache, {

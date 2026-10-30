@@ -876,7 +876,7 @@ export async function startServer(
   registerIntegrationIpc(integrations)
   const hookStartupWarning = await hookServer.startForApp()
   if (hookStartupWarning) console.error('[nodeterm-server]', hookStartupWarning)
-  const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null)
+  const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null, workspaceStore)
   // Safe default and rollback path. The opt-in runtime replaces this handler only after its
   // workspace-backed services are ready; a failed initialization therefore degrades to the same
   // named permanent refusal rather than a half-wired execution surface.

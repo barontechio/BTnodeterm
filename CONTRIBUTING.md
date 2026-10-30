@@ -66,6 +66,11 @@ retain it until dispatched work settles, and release explicitly. Store admission
 publication and disk writes; client admission corrects refused optimistic edits. Ordered mutation
 observation keeps allowed visual changes in corrections. This primitive does not enable removal.
 
+Both owning shells install `WorktreeCanvasAdmission` with recovery state before owner launches.
+It refuses new execution references to retired paths, including dangling aliases and stale saves,
+while allowing historical layout edits, safe repairs and inert missing-file notices. Use bulk
+private host snapshots for whole-project checks; shared files still carry no private exec fields.
+
 Global transcript search is owner-only and local to the host's configured Claude account roots.
 Index refresh identity is the transcript path, since session ids can repeat across accounts.
 Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.

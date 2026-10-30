@@ -2386,7 +2386,7 @@ app.whenReady().then(async () => {
   // listeners (setListener/setRawListener/setControlHandler) attach later, which the server
   // tolerates — early hook POSTs are simply dropped, never mis-routed.
   const hookStartupWarning = await hookServer.startForApp()
-  await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting)
+  await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
   // The durable orchestration facts belong to the instance that owns the hook endpoint, exactly
   // like the request ledger (which `hookServer.start()` only loads when it wins the endpoint). A
   // second instance on the same userData that lost it must neither restore them — it would expire,

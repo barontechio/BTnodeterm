@@ -8,7 +8,7 @@ describe('owning-core worktree recovery boot', () => {
   it('loads missing recovery state without writing a file or changing ordinary directory admission', async () => {
     const root = fs.realpathSync(testTmpDir('worktree-recovery-boot-')); const setWorktreeRecoveryAdmission = vi.fn()
     const journal = await initWorktreeRecovery(root, { setWorktreeRecoveryAdmission }, () => true)
-    expect(journal!.list()).toEqual([])
+    expect(journal!.journal.list()).toEqual([])
     expect(fs.existsSync(path.join(root, 'worktree-removals.json'))).toBe(false)
     const admit = setWorktreeRecoveryAdmission.mock.calls[0][0] as (cwd: string) => void
     expect(() => admit('/not/required/to/exist')).not.toThrow()
