@@ -105,7 +105,7 @@ describe('SshProjectManager: settling owed remote kills on connect', () => {
     // `connectOnce`'s reuse branch returns long before the `connected` event, so wiring this to
     // that event would leave every reconnect-onto-a-live-master owing forever. Source-level
     // because driving `connect()` needs a real ssh.
-    const src = fs.readFile(path.join(__dirname, 'ssh-project.ts'), 'utf8')
+    const src = fs.readFile(path.join(__dirname, '../../core/remote-ssh/ssh-project.ts'), 'utf8')
     const text = (await src).replace(/\r\n/g, '\n')
     const connectBody = text.slice(text.indexOf('const ticket = Symbol('), text.indexOf('private async connectOnce'))
     expect(connectBody).toContain('this.settleOwedKills(projectId)')

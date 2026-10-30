@@ -777,6 +777,13 @@ account-management IPC — that surface is desktop-driven over SSH.
   says so by name rather than failing silently — an unhandled rejection there previously stopped
   the spinner and showed nothing.
 
+SSH project orchestration, remote hooks/freshness/tunnel repair, filesystem and atomic-write
+services live in core. The native adapter supplies transport/authentication/status runners and
+keeps Electron IPC, passphrase dialogs and media URLs in main. Compatibility exports preserve old
+imports. Preserve existing host-key, integration-consent, pending-kill and account-home checks.
+SSH inventory edits use one FIFO and acknowledge only after owner-only atomic persistence;
+failed writes retain the previous cache. This extraction does not enable Server SSH projects.
+
 ## Manual browser smoke checklist
 
 Run against a real browser (this is the human-verified path; the automated harness

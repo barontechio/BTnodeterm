@@ -155,6 +155,13 @@ copies are deleted only after a SUCCESSFUL process query shows nothing runs from
 directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
 used, an incompatible one is left running and reported, never killed.
 
+SSH project orchestration, remote hooks/freshness/tunnel repair, filesystem and atomic-write
+services live in core. The native adapter supplies transport/authentication/status runners and
+keeps Electron IPC, passphrase dialogs and media URLs in main. Compatibility exports preserve old
+imports. Preserve existing host-key, integration-consent, pending-kill and account-home checks.
+SSH inventory edits use one FIFO and acknowledge only after owner-only atomic persistence;
+failed writes retain the previous cache. This extraction does not enable Server SSH projects.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

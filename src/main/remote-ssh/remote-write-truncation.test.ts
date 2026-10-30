@@ -425,7 +425,7 @@ describe.skipIf(process.platform === 'win32')('canvas control and context link s
   })
 
   it('the connect path runs them as one chain, never side by side', () => {
-    const src = readFileSync(path.join(__dirname, 'ssh-project.ts'), 'utf8').replace(/\r\n/g, '\n')
+    const src = readFileSync(path.join(__dirname, '../../core/remote-ssh/ssh-project.ts'), 'utf8').replace(/\r\n/g, '\n')
     const code = src.split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n')
     expect(code).toContain('this.remoteHooks.refreshAgentTools(')
     expect(code).not.toMatch(/this\.remoteHooks\.install(CanvasControl|ContextLink|AgentTools)\(/)
