@@ -1186,6 +1186,8 @@ export class PtyManager {
   private readonly blockedInputNotices = new Map<string, number>()
   /** Real control deliveries can outlive their caller's deadline; keep those nodes fenced. */
   private readonly controlDeliveries = new Map<string, number>()
+  private backendStarts = 0
+  private backendStartsPaused = false
 
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
@@ -1211,6 +1213,19 @@ export class PtyManager {
         return Promise.reject(new NodeExecutionError('busy'))
     }
     return this.nodeExecution.runMany(nodeIds, kind, options, work)
+  }
+
+  /** A destructive worktree transaction needs quiescent backend creation as well as its member
+   * claims: an in-flight spawn may not have resolved its actual cwd yet. Existing unrelated panes
+   * remain usable. This barrier grants no directory ownership, Git authority or canvas mutation.
+   * Keep the actual external operation awaited; cancellation cannot release it early.
+   */
+  async runWorktreeAction<T>(nodes: readonly string[], options: NodeExecutionOptions,
+    work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
+    if (this.backendStarts || this.backendStartsPaused) throw new NodeExecutionError('busy')
+    this.backendStartsPaused = true
+    try { return await this.runNodeActions(nodes, 'worktree', options, work) }
+    finally { this.backendStartsPaused = false }
   }
 
   private noticeBlockedInput(clientId: ClientId, nodeId: string): void {
@@ -2971,6 +2986,13 @@ export class PtyManager {
 
   /** Spawn a brand-new session for this client (the non-co-attach path). */
   private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
+    if (this.backendStartsPaused) throw new NodeExecutionError('busy')
+    this.backendStarts++
+    try { return await this.spawnNewInternal(clientId, options) }
+    finally { this.backendStarts-- }
+  }
+
+  private async spawnNewInternal(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const refused = this.spawnRefusal(options)
     if (refused) return { sessionId: '', fresh: false, unavailable: refused }
     // A tmux-backed session is "fresh" (cold start) when no live session exists to reattach to
@@ -4361,6 +4383,7 @@ export class PtyManager {
     zellijBackend?: boolean
   ): string {
     this.nodeExecution.assertAllowed(options.persistKey ?? '')
+    if (this.backendStartsPaused) throw new NodeExecutionError('busy')
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
     // node-pty's darwin spawn path LEAKS the pty it opened when `posix_spawn` fails:

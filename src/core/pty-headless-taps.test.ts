@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { IPC } from '../shared/ipc'
+import { OwnerLifetimes } from './owner-lifetimes'
+import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
 
 /**
  * The core-side io of the headless launcher (#925): an output tap per node, and a write/release
@@ -88,6 +90,65 @@ describe('PtyManager headless taps (#925)', () => {
     m.registerIpc()
     return m
   }
+
+  it('holds worktree members and new backend starts while unrelated live input remains available', async () => {
+    const m = await manager()
+    await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    let release!: () => void
+    const pending = m.runWorktreeAction(['group', 'member'], { current: () => true },
+      () => new Promise<void>((resolve) => { release = resolve }))
+    await expect(m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })).rejects.toThrow('busy')
+    await expect(m.createHeadless({ cols: 80, rows: 24 })).rejects.toThrow('busy')
+    expect(m.writeHeadless('member', 'held')).toBe(false)
+    expect(m.writeHeadless('outside', 'still available')).toBe(true)
+    expect(spawned).toHaveLength(2)
+    release(); await pending
+    await m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })
+    expect(spawned).toHaveLength(3)
+    m.killAll()
+  })
+
+  it('refuses worktree dispatch while a backend start is unresolved, then releases after failure', async () => {
+    const m = await manager()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const backend = m as unknown as { spawnNewInternal(clientId: number, options: PtyCreateOptions): Promise<PtyCreateResult> }
+    const spawn = vi.spyOn(backend, 'spawnNewInternal').mockImplementation(async () => {
+      await held; throw new Error('fixture spawn failed')
+    })
+    const creating = m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 }); void creating.catch(() => {})
+    const work = vi.fn()
+    await expect(m.runWorktreeAction(['group'], { current: () => true }, work)).rejects.toThrow('busy')
+    expect(work).not.toHaveBeenCalled()
+    release(); await expect(creating).rejects.toThrow('fixture spawn failed'); spawn.mockRestore()
+    await expect(m.runWorktreeAction(['group'], { current: () => true }, () => 'free')).resolves.toBe('free')
+    m.killAll()
+  })
+
+  it('retains the creation barrier after owner departure until external work settles', async () => {
+    const m = await manager(); const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
+    let release!: () => void
+    const pending = m.runWorktreeAction(['group'], { current: () => true, owner },
+      () => new Promise<void>((resolve) => { release = resolve }))
+    owners.forget(1)
+    await expect(m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })).rejects.toThrow('busy')
+    await expect(m.runWorktreeAction(['other'], { current: () => true }, () => {})).rejects.toThrow('busy')
+    release(); await expect(pending).rejects.toThrow('expired')
+    await m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })
+    owners.dispose(); m.killAll()
+  })
+
+  it('releases the start barrier when a member is already busy or the transaction fails', async () => {
+    const m = await manager(); let release!: () => void
+    const occupied = m.runNodeAction('member', 'branch', { current: () => true }, () => new Promise<void>((resolve) => { release = resolve }))
+    await expect(m.runWorktreeAction(['member'], { current: () => true }, () => {})).rejects.toThrow('busy')
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    release(); await occupied
+    await expect(m.runWorktreeAction(['member'], { current: () => true }, () => { throw new Error('Git refused') })).rejects.toThrow('Git refused')
+    await m.createHeadless({ persistKey: 'another', cols: 80, rows: 24 })
+    m.killAll()
+  })
 
   it('keeps a created backend alive without authorizing its expired application continuation', async () => {
     const m = await manager(); let release!: () => void

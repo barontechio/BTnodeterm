@@ -1955,3 +1955,9 @@ confirmed caller/project policy. Never forward owner actions to a relay viewer's
 the current local directory identity and expected linked branch, and invokes Git without `--force`.
 A failed removal reply can still report verified directory absence; retain the branch and recover
 bindings explicitly. It supplies no owner consent, node exclusion or directory reservation itself.
+
+`PtyManager.runWorktreeAction` combines member claims with a temporary barrier against new backend
+starts. Refuse dispatch while any backend creation is unresolved; a start may not have resolved its
+actual cwd yet. Existing unrelated panes remain usable, and owner departure retains the barrier
+until the awaited external work settles. This primitive does not reserve canvas bindings or grant
+permission to remove a directory.
