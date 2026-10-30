@@ -7,7 +7,8 @@ open in `HeadlessNodeFactory.showFile`. Validation now opens once with nonblocki
 checks that descriptor and its current named identity, and reads media signatures through the same
 handle. The handle closes on every result. Real filesystem tests replace the name after open and
 verify refusal, no saved node and a closed descriptor; final symbolic links are also refused.
-The alert is left open for the next CodeQL analysis to verify the source fix.
+The subsequent CodeQL check 123843811349 passed without the high-severity finding; the source
+fix was verified by analysis rather than dismissing that report.
 
 Six `js/file-access-to-http` reports describe intended protocol data flows. Each reads this
 installation’s fixed-name identity/license store and sends explicitly selected protocol fields to a
@@ -37,3 +38,15 @@ the rerun passed. GitHub documents that this endpoint enables both alerts and th
 https://docs.github.com/en/rest/repos/repos#enable-vulnerability-alerts
 
 Upstream workflow execution still requires its maintainer’s authorization of fork PR runs.
+
+Dependency patches were then isolated in a separate checkout and installed with lifecycle scripts
+skipped. The existing source patches and Node (not Electron) node-pty rebuild were applied before
+running the full suite. Only patch releases changed: DOMPurify 3.4.17, Sharp 0.35.5/libvips 1.3.4,
+Vite 7.3.7, fast-uri 3.1.9 and undici 6.29.1/7.30.1/8.12.3 in their existing major lines. Both the
+application floor and Monaco DOMPurify override were updated. The resulting lock audits with zero
+reported vulnerabilities and passes 24,418 tests (109 skipped), typecheck and both builds on Linux.
+
+The relevant runtime disclosures include [DOMPurify](https://github.com/advisories/GHSA-cg2g-xh64-v4q7)
+and [Sharp/libvips](https://github.com/advisories/GHSA-wq5f-xc86-pv6w); the Vite patch covers its
+[launch-editor advisory](https://github.com/advisories/GHSA-587h-7wmj-h5pm). No major dependency
+migration or native ABI/toolchain upgrade is part of this patch.

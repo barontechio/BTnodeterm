@@ -124,6 +124,13 @@ only to owners, and exposes only references matching the current saved destinati
 fixtures cover setup stdout/stderr and refusal after project deletion or key replacement. Full
 transcript/context bindings remain the next integration step.
 
+The integrated security and dependency-patch snapshot passes 24,418 tests (109 skipped),
+typecheck and both builds, with zero npm audit advisories. The fork integration is tracked in
+[draft PR #2](https://github.com/barontechio/BTnodeterm/pull/2). Linux, Windows, CodeQL and
+dependency review passed before the patch-only dependency refresh; its next CI run verifies
+the refreshed lock. The review and per-alert decisions are recorded in
+[the security review](server-parity-security-review.md).
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
