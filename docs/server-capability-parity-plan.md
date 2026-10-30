@@ -194,7 +194,11 @@ retains its transport slot until settled. Transport lifecycle callbacks do not i
 request ALS. The panel distinguishes runtime, unsafe-tree, permission and unsupported-reader
 refusals. Real encrypted-key loopback fixtures cover both transports and managed-account isolation.
 Continuous remote meters/tails, other harnesses, transfers/media and remote control proof remain
-separate gates. Full validation of this increment is tracked separately from the title snapshot.
+separate gates. The frozen SSH/routing snapshot `f120dbdb` passes 24,484 tests (109 skipped),
+typecheck, Desktop production build and Server build. Its real encrypted-key loopback fixtures
+exercise both transports, managed-account isolation and owner/guest routing. A local warm-cache
+256 KiB command benchmark measured median 17.89–44.42 ms across 1–4,096 project entries, excluding
+SSH latency; details and the existing known-path baseline are in `server-ssh-projects.md`.
 
 Baseline inspected on 2026-10-29:
 
