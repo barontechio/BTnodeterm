@@ -158,6 +158,19 @@ them active again must pass admission. Whole-project checks use one bulk private
 with the same exec overlay/routing as the endpoint getter and separate placement uniqueness checks.
 An empty journal adds no canonical-path IO. These guards do not implement a removal transaction.
 
+`WorktreeRecoveryDispatch` enforces pending-member quarantine at `NodeExecutionCoordinator`'s
+dispatch boundary, including raw owner/headless input, cold create, recycle and agent actions.
+Claims alone do not waive policy: only a host recovery adapter's registered ACTUAL batch permit
+may dispatch to its own members. Lookalike permits, other action kinds, backend-detached callbacks,
+expired continuations and post-scope use remain refused. The callback stays awaited until the
+effect settles; domain authorization and exact fresh owner approval belong to its caller.
+Journal quarantine sets publish only with acknowledged facts, retain known pending members after
+uncertain persistence, and clear at recovered/kept transitions. Unknown corrupt facts do not invent
+quarantines on existing panes; physical starts and new execution references still refuse. A kept
+prepared record can be released only after the domain proved the original directory/Git identity
+and obtained fresh owner approval. The storage primitive does not supply those proofs. The owner
+keyboard notice explicitly identifies pending recovery. No removal/recovery action is enabled yet.
+
 ## What this is
 
 **Node-based terminal manager** (BUSL-1.1, converts to MIT after 4 years — see `LICENSE`): multiple real terminals live on a single

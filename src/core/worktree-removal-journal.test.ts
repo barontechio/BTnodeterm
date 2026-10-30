@@ -19,12 +19,15 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
   it('survives process reconstruction at every phase and retains the recovered path tombstone', async () => {
     const f = fixture(); expect(await f.journal.load()).toEqual([])
     const prepared = await f.journal.prepare(f.intent)
+    expect(f.journal.isNodePending('group')).toBe(true)
     expect((fs.statSync(f.file).mode & 0o777)).toBe(0o600)
     const resumed = new WorktreeRemovalJournal(f.file, f.config)
     expect(await resumed.load()).toEqual([prepared])
     await expect(resumed.markRecovered(prepared.id)).rejects.toThrow('invalid-transition')
     await resumed.markRemoved(prepared.id)
+    expect(resumed.isNodePending('group')).toBe(true)
     await resumed.markRecovered(prepared.id)
+    expect(resumed.isNodePending('group')).toBe(false)
     const final = new WorktreeRemovalJournal(f.file, f.config)
     expect(await final.load()).toMatchObject([{ phase: 'recovered' }])
     expect(final.blocks(f.intent.worktreePath)).toBe(true)
@@ -107,5 +110,44 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
     await expect(f.journal.prepare(f.intent)).rejects.toThrow('journal-changed')
     expect(fs.readFileSync(f.file, 'utf8')).toBe('{review this changed recovery file')
     expect(() => f.journal.list()).toThrow('unavailable')
+  })
+
+  it('retains known pending members after uncertain IO and reconstructs the durable recovered phase', async () => {
+    let fail = false
+    const f = fixture({ persist: async (file, data) => {
+      await writeFileDurableAtomic(file, data, { mode: 0o600 })
+      if (fail) throw new Error('acknowledgement lost')
+    } })
+    await f.journal.load(); const row = await f.journal.prepare(f.intent); await f.journal.markRemoved(row.id)
+    fail = true
+    await expect(f.journal.markRecovered(row.id)).rejects.toThrow('acknowledgement lost')
+    expect(f.journal.isNodePending('group')).toBe(true)
+    const reconstructed = new WorktreeRemovalJournal(f.file, { ownsFiles: () => true })
+    await reconstructed.load()
+    expect(reconstructed.isNodePending('group')).toBe(false)
+    expect(reconstructed.blocks(f.intent.worktreePath)).toBe(true)
+  })
+
+  it('releases only a prepared kept-checkout record and retains other pending members', async () => {
+    const f = fixture(); await f.journal.load(); const row = await f.journal.prepare(f.intent)
+    const other = await f.journal.prepare({ ...f.intent, groupId: 'other', worktreePath: path.join(f.root, 'other-checkout'),
+      members: [{ nodeId: 'other', binding: 'b'.repeat(64) }] })
+    await f.journal.releaseKept(row.id)
+    expect(f.journal.isNodePending('group')).toBe(false); expect(f.journal.blocks(f.intent.worktreePath)).toBe(false)
+    expect(f.journal.isNodePending('other')).toBe(true)
+    await f.journal.markRemoved(other.id)
+    await expect(f.journal.releaseKept(other.id)).rejects.toThrow('recovery-required')
+    expect(f.journal.isNodePending('other')).toBe(true)
+  })
+
+  it('never invents pending members from unreadable facts, while preserving known members after later corruption', async () => {
+    const f = fixture(); await f.journal.load(); const row = await f.journal.prepare(f.intent)
+    fs.writeFileSync(f.file, '{broken')
+    await expect(f.journal.load()).rejects.toThrow()
+    expect(f.journal.isNodePending(row.groupId)).toBe(true)
+    const unknown = new WorktreeRemovalJournal(f.file, { ownsFiles: () => true })
+    await expect(unknown.load()).rejects.toThrow()
+    expect(unknown.isNodePending(row.groupId)).toBe(false)
+    expect(() => unknown.reservedPaths()).toThrow('unavailable')
   })
 })

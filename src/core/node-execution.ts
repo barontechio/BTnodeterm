@@ -36,10 +36,16 @@ export class NodeExecutionCoordinator {
   private active = new Map<string, Entry>()
   private context = new AsyncLocalStorage<Entry>()
   private stopped = false
+  private dispatchAdmission: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null = null
 
   constructor(private readonly now: () => number = () => Date.now(), private readonly limit = 32) {}
 
   isBusy(nodeId: string): boolean { return this.active.has(nodeId) }
+
+  /** Host policy at the actual dispatch boundary. Acquiring a claim grants no exception to it. */
+  setDispatchAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null): void {
+    this.dispatchAdmission = check
+  }
 
   /** Start a backend-owned resource after dispatch validation, without inheriting the action.
    * Long-lived process timers/listeners outlive the request that created their pane.
@@ -57,12 +63,18 @@ export class NodeExecutionCoordinator {
 
   /** Every mutation checks this at its point of dispatch, including continuations after expiry. */
   assertAllowed(nodeId: string): void {
+    const entry = this.assertExclusion(nodeId)
+    this.dispatchAdmission?.(nodeId, entry?.permit)
+  }
+
+  private assertExclusion(nodeId: string): Entry | undefined {
     if (this.stopped) throw new NodeExecutionError('stopped')
     const context = this.context.getStore()
     // An expired continuation cannot escape its old lease by writing a different/new node.
     context?.permit.assertCurrent()
     const active = this.active.get(nodeId)
     if (active && active !== context) throw new NodeExecutionError('busy')
+    return active && active === context ? active : undefined
   }
 
   async run<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,
@@ -80,7 +92,7 @@ export class NodeExecutionCoordinator {
       typeof id !== 'string' || !id || id.length > 256 || id.includes('\0'))) throw new NodeExecutionError('invalid')
     const checkClaims = () => {
       for (const nodeId of nodeIds) {
-        this.assertAllowed(nodeId)
+        this.assertExclusion(nodeId)
         if (this.active.has(nodeId)) throw new NodeExecutionError('busy')
       }
       if (this.active.size + nodeIds.length > this.limit) throw new NodeExecutionError('capacity')

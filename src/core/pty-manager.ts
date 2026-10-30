@@ -1193,6 +1193,11 @@ export class PtyManager {
   /** Host-local recovery facts, injected by the owning shell; never a renderer-supplied check. */
   setWorktreeRecoveryAdmission(check: ((directory: string) => void) | null): void { this.worktreeRecoveryAdmission = check }
 
+  /** Host-only dispatch policy for pending recovery members. A node claim alone cannot waive it. */
+  setNodeExecutionAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null): void {
+    this.nodeExecution.setDispatchAdmission(check)
+  }
+
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
 
@@ -1232,7 +1237,7 @@ export class PtyManager {
     finally { this.backendStartsPaused = false }
   }
 
-  private noticeBlockedInput(clientId: ClientId, nodeId: string): void {
+  private noticeBlockedInput(clientId: ClientId, nodeId: string, error?: unknown): void {
     const key = `${clientId}:${nodeId}`
     const now = Date.now()
     const last = this.blockedInputNotices.get(key)
@@ -1240,7 +1245,8 @@ export class PtyManager {
     this.blockedInputNotices.delete(key)
     if (this.blockedInputNotices.size >= 128) this.blockedInputNotices.delete(this.blockedInputNotices.keys().next().value!)
     this.blockedInputNotices.set(key, now)
-    this.send(clientId, IPC.ptyInputBlocked, { nodeId })
+    const recovery = error instanceof Error && error.message.startsWith('worktree-recovery-required:')
+    this.send(clientId, IPC.ptyInputBlocked, { nodeId, ...(recovery ? { reason: 'worktree-recovery' } : {}) })
   }
   /** persistKey -> the agent id its pane was created for (this app run). `sendText` asks it so an
    *  agent in SEPARATE_SUBMIT_AGENTS gets its Enter as a second write (see `sendText`). */
@@ -5742,7 +5748,7 @@ export class PtyManager {
     const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey ?? ''
     try { this.nodeExecution.assertAllowed(nodeId) } catch (error) {
       if (clientId === null) throw error
-      this.noticeBlockedInput(clientId, nodeId)
+      this.noticeBlockedInput(clientId, nodeId, error)
       return
     }
     if (clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
@@ -5771,7 +5777,7 @@ export class PtyManager {
       if (rec.sessionId !== sessionId) continue
       try { this.nodeExecution.assertAllowed(persistKey) } catch (error) {
         if (clientId === null) throw error
-        this.noticeBlockedInput(clientId, persistKey)
+        this.noticeBlockedInput(clientId, persistKey, error)
         return
       }
       void this.backgroundWrite(persistKey, data)

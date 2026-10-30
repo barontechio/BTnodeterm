@@ -1506,8 +1506,10 @@ export function Canvas() {
     const t = setTimeout(() => setNotice(null), noticeDwellMs(notice.text))
     return () => clearTimeout(t)
   }, [notice])
-  useEffect(() => session.api.pty.onInputBlocked?.(() => {
-    setNotice({ kind: 'info', text: 'This terminal is completing another action. Keyboard input was not sent; try again when it finishes.' })
+  useEffect(() => session.api.pty.onInputBlocked?.((event) => {
+    setNotice(event.reason === 'worktree-recovery'
+      ? { kind: 'error', text: 'This terminal has pending worktree recovery. Keyboard input was refused; inspect recovery before continuing.', sticky: true }
+      : { kind: 'info', text: 'This terminal is completing another action. Keyboard input was not sent; try again when it finishes.' })
   }), [session.api])
   useEffect(() => session.api.canvas.onMutationRejected?.((_projectId, message) => {
     setNotice({ kind: 'error', text: message, sticky: true })

@@ -45,7 +45,7 @@ async function fixture(kind: 'folder' | 'app-data' | 'inline' = 'folder', corrup
   }] }))
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
   let runtime: Awaited<ReturnType<typeof initWorktreeRecovery>>
-  try { runtime = await initWorktreeRecovery(root, { setWorktreeRecoveryAdmission: () => {} }, () => true, store) }
+  try { runtime = await initWorktreeRecovery(root, { setWorktreeRecoveryAdmission: () => {}, setNodeExecutionAdmission: () => {} }, () => true, store) }
   finally { warning.mockRestore() }
   const publish = vi.fn(publishCanvasMutation)
   const writer = new CanvasContentWriter({ workspaceStore: store, publishMutation: publish })
@@ -129,7 +129,7 @@ describe('saved worktree references during recovery', () => {
     const store = new WorkspaceStore()
     await store.save({ version: 2, activeProjectId: 'p', projects: [{ id: 'p', name: 'P', color: '#fff',
       viewport: { x: 0, y: 0, zoom: 1 }, nodes: [node('ordinary')] }] } satisfies Workspace)
-    const runtime = await initWorktreeRecovery(root, { setWorktreeRecoveryAdmission: () => {} }, () => true, store)
+    const runtime = await initWorktreeRecovery(root, { setWorktreeRecoveryAdmission: () => {}, setNodeExecutionAdmission: () => {} }, () => true, store)
     expect(runtime!.canvasAdmission!.active()).toBe(false)
     const resolve = vi.spyOn(fsSync.realpathSync, 'native')
     try {

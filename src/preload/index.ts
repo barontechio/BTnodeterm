@@ -134,7 +134,7 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(channel, handler)
     },
     onInputBlocked: (listener) => {
-      const handler = (_e: unknown, event: { nodeId: string }) => listener(event)
+      const handler = (_e: unknown, event: { nodeId: string; reason?: 'worktree-recovery' }) => listener(event)
       ipcRenderer.on(IPC.ptyInputBlocked, handler)
       return () => ipcRenderer.removeListener(IPC.ptyInputBlocked, handler)
     },

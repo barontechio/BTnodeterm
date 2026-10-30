@@ -453,6 +453,15 @@ the existing real Server boot still exercises authenticated commands with pendin
 Whole-project checks use bulk private host snapshots to avoid a node scan per node. Empty recovery
 state adds no canonical-path IO. Confirmed removal/recovery actions remain the next domain gate.
 
+Known prepared/removed member ids now retain a dispatch quarantine across recovery boot and uncertain
+publication acknowledgements. Normal claims, including a `worktree` action label, cannot waive it;
+only the actual batch permit explicitly registered by a host recovery adapter can dispatch to its
+members while the effect is awaited. Owner input receives an addressed recovery-specific notice;
+unrelated panes remain usable, and unknown corrupt facts invent no quarantine on existing panes.
+The storage adapter can release a prepared kept-checkout record, but its caller must first prove
+the original directory/Git identity and obtain fresh owner approval. The confirmed deletion and
+recovery domain/UI adapters remain pending; none of these guards enables a deletion command.
+
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.
 - Unbind keeps the directory. Removal requires explicit confirmation, checks worktree ownership and uncommitted work, and refuses to affect the primary checkout or another worktree.

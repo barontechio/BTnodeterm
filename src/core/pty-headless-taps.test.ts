@@ -3,6 +3,7 @@ import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { IPC } from '../shared/ipc'
 import { OwnerLifetimes } from './owner-lifetimes'
+import { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
 import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
 
 /**
@@ -120,6 +121,29 @@ describe('PtyManager headless taps (#925)', () => {
     await m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })
     expect(spawned).toHaveLength(3)
     m.killAll()
+  })
+
+  it('quarantines known recovery members for owner/headless input and fresh execution, with a real scoped host exception', async () => {
+    const m = await manager()
+    const member = await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    const dispatch = new WorktreeRecoveryDispatch({ isNodePending: (id) => id === 'member' || id === 'cold' })
+    m.setNodeExecutionAdmission((id, permit) => dispatch.assertAllowed(id, permit))
+    m.write(1, member.sessionId, 'owner-input')
+    expect(m.writeHeadless('member', 'headless-input')).toBe(false)
+    expect(m.writeHeadless('outside', 'unrelated-input')).toBe(true)
+    await expect(m.createHeadless({ persistKey: 'cold', cols: 80, rows: 24 })).rejects.toThrow('recovery-required')
+    expect(spawned).toHaveLength(2)
+    expect(fake.sent.filter((event) => event.channel === IPC.ptyInputBlocked)).toEqual([
+      { to: 1, channel: IPC.ptyInputBlocked, args: [{ nodeId: 'member', reason: 'worktree-recovery' }] }
+    ])
+    await m.runWorktreeAction(['member'], { current: () => true }, async (permit) => {
+      expect(m.writeHeadless('member', 'ordinary-claim')).toBe(false)
+      await dispatch.withRecovery(permit, () => { expect(m.writeHeadless('member', 'host-recovery')).toBe(true) })
+      expect(m.writeHeadless('member', 'after-recovery-scope')).toBe(false)
+    })
+    expect(spawned[0].writes).toEqual(['host-recovery'])
+    m.setNodeExecutionAdmission(null); m.killAll()
   })
 
   it('refuses worktree dispatch while a backend start is unresolved, then releases after failure', async () => {

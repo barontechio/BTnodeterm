@@ -60,6 +60,7 @@ export class WorktreeRemovalJournal {
   private loaded = false
   private faulted = false
   private persisted: string | null = null
+  private quarantined = new Set<string>()
   private chain: Promise<unknown> = Promise.resolve()
   constructor(readonly file: string, private readonly options: Options) {
     if (!path.isAbsolute(file)) throw new Error('worktree-journal-absolute-file-required')
@@ -100,12 +101,19 @@ export class WorktreeRemovalJournal {
             next.slice(0, index).some((previous) => overlaps(row.worktreePath, previous.worktreePath))))
             throw new Error('worktree-journal-conflicting-records')
         }
-        this.owner(); this.rows = next; this.persisted = raw; this.loaded = true; this.faulted = false
+        this.owner(); this.publishRows(next); this.persisted = raw; this.loaded = true; this.faulted = false
         return this.list()
       } catch (error) { this.faulted = true; throw error }
     })
   }
   list(): WorktreeRemovalRecord[] { this.ready(); return structuredClone(this.rows) }
+  /** Committed local facts only. Preserve known quarantines after uncertain IO/ownership loss;
+   * an unreadable journal with no known rows does not invent restrictions on existing panes. */
+  isNodePending(nodeId: string): boolean { return this.quarantined.has(nodeId) }
+  private publishRows(next: WorktreeRemovalRecord[]): void {
+    this.rows = next
+    this.quarantined = new Set(next.filter((row) => row.phase !== 'recovered').flatMap((row) => row.members.map((member) => member.nodeId)))
+  }
   /** A cheap host policy hint, including unavailable facts. It grants no read/write authority. */
   needsAdmission(): boolean {
     try { return !this.loaded || this.faulted || this.rows.length > 0 || !this.options.ownsFiles() }
@@ -126,7 +134,7 @@ export class WorktreeRemovalJournal {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
       this.ready()
       await (this.options.persist ?? ((file, text) => writeFileDurableAtomic(file, text, { mode: 0o600 })))(this.file, data)
-      this.owner(); this.rows = next; this.persisted = data
+      this.owner(); this.publishRows(next); this.persisted = data
     } catch (error) { this.faulted = true; throw error }
   }
   prepare(intent: WorktreeRemovalIntent): Promise<WorktreeRemovalRecord> {
@@ -158,6 +166,16 @@ export class WorktreeRemovalJournal {
       this.ready()
       const row = this.rows.find((candidate) => candidate.id === id)
       if (!row || row.phase !== 'recovered') throw new Error('worktree-journal-recovery-required')
+      await this.commit(this.rows.filter((candidate) => candidate.id !== id))
+    })
+  }
+  /** Domain already proved the original directory identity and Git binding still exist, with
+   * fresh owner approval to keep them. Prepared alone is NOT that proof: a crash may follow Git. */
+  releaseKept(id: string): Promise<void> {
+    return this.serial(async () => {
+      this.ready()
+      const row = this.rows.find((candidate) => candidate.id === id)
+      if (!row || row.phase !== 'prepared') throw new Error('worktree-journal-recovery-required')
       await this.commit(this.rows.filter((candidate) => candidate.id !== id))
     })
   }

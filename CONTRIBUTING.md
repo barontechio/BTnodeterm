@@ -71,6 +71,11 @@ It refuses new execution references to retired paths, including dangling aliases
 while allowing historical layout edits, safe repairs and inert missing-file notices. Use bulk
 private host snapshots for whole-project checks; shared files still carry no private exec fields.
 
+Known prepared/removed recovery members also have a persistent dispatch quarantine. A normal node
+claim, including a `worktree` label, cannot waive it. The host recovery adapter must explicitly
+register the actual batch permit through `WorktreeRecoveryDispatch.withRecovery` and await the
+effect. It grants no actor/owner approval. Keep uncertain recovery facts; no deletion RPC is enabled.
+
 Global transcript search is owner-only and local to the host's configured Claude account roots.
 Index refresh identity is the transcript path, since session ids can repeat across accounts.
 Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.
