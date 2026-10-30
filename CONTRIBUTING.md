@@ -1935,3 +1935,9 @@ that reapplies this machine's exec overlay with the same trust rules as `load`. 
 `getNodeResolved` deliberately omit held commands/shell fields and cannot prove their absence.
 Keep this accessor internal; it does not change shared serialization or create a wire API. Remote
 classification still examines every saved placement, even when ambiguity prevents an action snapshot.
+
+The first Claude branch submit path is a fixed host-only command for live local POSIX tmux panes.
+Its notification runs after the Enter exec is issued and before awaiting its reply. A failed
+notification still waits for the real submit promise to settle. It grants no runtime identity by
+itself: the branch protocol must verify fresh output and a matching verified session, and the
+owner-confirmed domain service must hold the physical-node claim. No callback crosses IPC.

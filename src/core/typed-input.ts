@@ -34,6 +34,17 @@ import { ENVELOPE_SETTLE_POLLS, ENVELOPE_SETTLE_POLL_MS, type SettleOptions } fr
 /** Tab width used when a typed prompt contains tabs (see above: a typed Tab is a shortcut). */
 export const TYPED_TAB = '    '
 
+/** Notify a host transaction when Enter was dispatched, retaining its fence through settlement
+ * even if its own notification fails. No notice is issued for a synchronous pre-dispatch failure.
+ */
+export async function submitWithDispatchNotice(submit: () => Promise<unknown>, notice?: () => void): Promise<void> {
+  const pending = submit()
+  let failed = false; let error: unknown
+  try { notice?.() } catch (caught) { failed = true; error = caught }
+  await pending
+  if (failed) throw error
+}
+
 /**
  * The lines to type. CR/CRLF become LF; tabs become spaces; every other control character (C0
  * except LF, DEL, C1 — ESC and the 8-bit CSI included) is dropped, because a typed control byte

@@ -31,6 +31,41 @@ describe('PtyManager.sendToEmptyPrompt (#1144)', () => {
     resetPlatformForTests()
   })
 
+  it('refuses branch delivery without a live supported backend', async () => {
+    const { mgr, snapshot, now } = await manager(S.empty); const notice = vi.fn()
+    expect(await mgr.branchClaudeInEmptyPrompt(NODE, notice)).toEqual({ sent: false, reason: 'unsupported' })
+    expect(snapshot).not.toHaveBeenCalled(); expect(now).not.toHaveBeenCalled(); expect(notice).not.toHaveBeenCalled()
+  })
+
+  it('does not advertise branch for remote, Windows, session-host or Zellij backends', async () => {
+    const { mgr } = await manager(S.empty)
+    const backend = mgr as unknown as { tmuxPath: string | null;
+      liveSessionForPersistKey(id: string): Record<string, unknown> | undefined;
+      remoteNodeOwner?: () => { projectId: string; hostKey: string } }
+    backend.tmuxPath = '/fixture/tmux'
+    const live = vi.spyOn(backend, 'liveSessionForPersistKey').mockReturnValue({ tmuxBacked: true })
+    expect(mgr.canBranchClaude(NODE)).toBe(process.platform !== 'win32')
+    for (const flags of [{ sshRemote: {} }, { nativeWindowsPane: {} }, { sessionHost: true }, { zellij: true }, { tmuxBacked: false }]) {
+      live.mockReturnValue({ tmuxBacked: true, ...flags }); expect(mgr.canBranchClaude(NODE)).toBe(false)
+    }
+    live.mockReturnValue({ tmuxBacked: true })
+    backend.remoteNodeOwner = () => ({ projectId: 'remote', hostKey: 'fixture@host' })
+    expect(mgr.canBranchClaude(NODE)).toBe(false)
+  })
+
+  it.each(['empty', 'draft'])('branches through the same measured composer check: %s', async (screen) => {
+    const { mgr, now } = await manager(S[screen]); vi.spyOn(mgr, 'canBranchClaude').mockReturnValue(true)
+    const notice = vi.fn()
+    now.mockImplementation(async (_id, text, options) => {
+      expect(text).toBe('/branch')
+      const host = options as { typedFor: string; onSubmitDispatched(): void }
+      expect(host.typedFor).toBe('claude'); host.onSubmitDispatched(); return true
+    })
+    const result = await mgr.branchClaudeInEmptyPrompt(NODE, notice)
+    expect(result).toEqual(screen === 'empty' ? { sent: true } : { sent: false, reason: 'draft' })
+    expect(notice).toHaveBeenCalledTimes(screen === 'empty' ? 1 : 0)
+  })
+
   it('types the note into an empty claude composer', async () => {
     const { mgr, now } = await manager(S.empty)
     expect(await mgr.sendToEmptyPrompt(NODE, 'note', 'claude')).toEqual({ sent: true })

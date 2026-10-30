@@ -130,7 +130,7 @@ import {
   pasteBufferName,
   runPasteDelivery
 } from './tmux-naming'
-import { localTypedArgs, localTypedEnv, typeThenSubmitWhenSettled } from './typed-input'
+import { localTypedArgs, localTypedEnv, submitWithDispatchNotice, typeThenSubmitWhenSettled } from './typed-input'
 import { encodeSendKeysHex } from './tmux-control'
 import {
   ZELLIJ_NESTING_ENV,
@@ -6646,7 +6646,7 @@ export class PtyManager {
   private async sendTextNow(
     persistKey: string,
     text: string,
-    opts?: { enter?: boolean; typedFor?: AgentId }
+    opts?: { enter?: boolean; typedFor?: AgentId; onSubmitDispatched?: () => void }
   ): Promise<TextDeliveryResult> {
     const enter = opts?.enter ?? true
     const live = this.liveSessionForPersistKey(persistKey)
@@ -6654,7 +6654,7 @@ export class PtyManager {
     // paste — see core/typed-input.ts. Only a SUBMITTED prompt on a tmux backend; everything else
     // keeps the paste path below.
     if (opts?.typedFor !== undefined && enter) {
-      const typed = await this.sendTyped(persistKey, text, opts.typedFor)
+      const typed = await this.sendTyped(persistKey, text, opts.typedFor, opts.onSubmitDispatched)
       if (typed !== null) return typed
     }
     // An agent whose TUI ignores an Enter bundled into the same tmux invocation as a bracketed paste
@@ -6762,7 +6762,8 @@ export class PtyManager {
    * checked again right before the Enter, and a dialog that opened meanwhile gets no Enter — the
    * text stays in the composer and the caller hears `pasted-not-submitted`.
    */
-  private async sendTyped(persistKey: string, text: string, agentId: AgentId): Promise<TextDeliveryResult | null> {
+  private async sendTyped(persistKey: string, text: string, agentId: AgentId,
+    onSubmitDispatched?: () => void): Promise<TextDeliveryResult | null> {
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
     if (live?.nativeWindowsPane || this.isZellij(persistKey, live)) return null
@@ -6805,7 +6806,7 @@ export class PtyManager {
           const screen = await this.captureSession(persistKey)
           return screen === '' || screenGate(screen) === null
         },
-        submit: () => ok(submit)
+        submit: () => ok(() => submitWithDispatchNotice(submit, onSubmitDispatched))
       })
     } catch {
       return 'pasted-not-submitted'
@@ -6914,6 +6915,27 @@ export class PtyManager {
    * (`typesChatInput`) and re-checks for a dialog before its Enter, like a chat prompt.
    */
   async sendToEmptyPrompt(persistKey: string, text: string, agentId: string): Promise<EmptyPromptResult> {
+    return this.sendToEmptyPromptWith(persistKey, text, agentId)
+  }
+
+  /** First branch adapter: a live local POSIX tmux pane with measured typed submission only. */
+  canBranchClaude(persistKey: string): boolean {
+    try {
+      const live = this.liveSessionForPersistKey(persistKey)
+      return process.platform !== 'win32' && !!this.tmuxPath && !!live?.tmuxBacked &&
+        !live.sshRemote && !live.nativeWindowsPane && !live.sessionHost && !this.isZellij(persistKey, live) &&
+        this.paneRemoteRef(persistKey, live).kind === 'local'
+    } catch { return false }
+  }
+
+  /** Host-only fixed command/dispatch notice; never registered as a callback RPC. */
+  async branchClaudeInEmptyPrompt(persistKey: string, onSubmitDispatched: () => void): Promise<EmptyPromptResult> {
+    if (!this.canBranchClaude(persistKey)) return { sent: false, reason: 'unsupported' }
+    return this.sendToEmptyPromptWith(persistKey, '/branch', 'claude', onSubmitDispatched)
+  }
+
+  private async sendToEmptyPromptWith(persistKey: string, text: string, agentId: string,
+    onSubmitDispatched?: () => void): Promise<EmptyPromptResult> {
     if (!readsScreenDialogs(agentId)) return { sent: false, reason: 'unsupported' }
     return this.serializePaneWrite(persistKey, async (): Promise<EmptyPromptResult> => {
       const composer = readClaudeComposer(await this.captureStyledScreen(persistKey))
@@ -6921,7 +6943,7 @@ export class PtyManager {
       const delivered = await this.sendTextNow(
         persistKey,
         text,
-        typesChatInput(agentId) ? { typedFor: agentId } : undefined
+        typesChatInput(agentId) ? { typedFor: agentId, ...(onSubmitDispatched ? { onSubmitDispatched } : {}) } : undefined
       )
       if (delivered === true) return { sent: true }
       return { sent: false, reason: delivered === 'pasted-not-submitted' ? 'not-submitted' : 'failed' }
