@@ -160,6 +160,10 @@ a competing application write or host action from entering the old gap between t
 `sendText` calls. Its behavioral regression holds the post-paste read, queues a competing write,
 and checks submission finishes before that write. Partial/uncertain paste semantics are retained.
 
+The combined confirmed-write/envelope snapshot passes 24,438 tests (109 skipped), typecheck,
+Desktop production build and Server build. Its exact-text approvals, replacement/refusal/unknown
+delivery fixtures and real Server CLI pre-send refusal are included in that full run.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
