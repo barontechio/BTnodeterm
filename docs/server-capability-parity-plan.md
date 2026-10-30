@@ -118,7 +118,11 @@ capability fixtures cover the path. This Server snapshot passes 24,413 tests (10
 
 Remote context/subagent tails, bounded SSH file reads and the streaming SSH setup runner are now
 extracted into core, with native window/private-agent adapters. The existing 79 focused tests and
-typecheck pass; Server transcript/context bindings remain the next integration step.
+typecheck pass; the full extraction snapshot passes 24,413 tests (109 skipped) and both builds.
+Server now wires the streaming SSH setup runner under existing per-location consent, sends consent
+only to owners, and exposes only references matching the current saved destination. Real SSH
+fixtures cover setup stdout/stderr and refusal after project deletion or key replacement. Full
+transcript/context bindings remain the next integration step.
 
 Baseline inspected on 2026-10-29:
 

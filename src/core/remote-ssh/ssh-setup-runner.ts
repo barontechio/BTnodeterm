@@ -25,6 +25,7 @@ export interface SshSetupEndpoint {
   host: string
   user: string
   port?: number
+  identityFile?: string
   remoteCwd: string
 }
 
@@ -37,8 +38,8 @@ function endpointLabel(e: { host: string; user: string; port?: number }): string
 }
 
 /** Same endpoint? Ports compare by EFFECTIVE value, so `undefined` and `22` are one host. */
-function sameEndpoint(a: { host: string; user: string; port?: number }, b: { host: string; user: string; port?: number }): boolean {
-  return a.host === b.host && a.user === b.user && (a.port ?? 22) === (b.port ?? 22)
+function sameEndpoint(a: Pick<SshConnection, 'host' | 'user' | 'port' | 'identityFile'>, b: Pick<SshConnection, 'host' | 'user' | 'port' | 'identityFile'>): boolean {
+  return a.host === b.host && a.user === b.user && (a.port ?? 22) === (b.port ?? 22) && (a.identityFile ?? '') === (b.identityFile ?? '')
 }
 
 /** `ssh` itself uses 255 for "could not run the command at all" (auth failure, dead link, unknown
@@ -149,6 +150,7 @@ export function makeSshSetupRunner(
         host: target.server.host,
         user: target.server.user,
         port: target.server.port,
+        ...(target.server.identityFile === undefined ? {} : { identityFile: target.server.identityFile }),
         remoteCwd: target.remoteCwd
       }
       let ref: SshSetupRef | null | undefined

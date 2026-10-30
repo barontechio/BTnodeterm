@@ -22,6 +22,7 @@ import { registerServerCodexAccounts } from './codex-accounts'
 import { registerServerSshProjects, type ServerSshProjects } from './ssh-projects'
 import { ServerGitRequestScope } from './git-request-scope'
 import { SshFs } from '../core/ssh-fs'
+import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
 import { makeRemoteWorkspaceIO } from '../core/remote-workspace-io'
 import { sshHostKey } from '../shared/ssh'
 import { mirrorEntry } from '../core/agent-status-mirror'
@@ -275,7 +276,7 @@ export async function startServer(
   const ptyManager = new PtyManager()
   let sshProjects: ServerSshProjects | undefined
   const workspaceSshFs = new SshFs((args, stdin) => sshProjects ? sshProjects.manager.sshRun(args, stdin) : Promise.resolve({ code: 1, stdout: '' }))
-  const remoteWorkspaceIO = makeRemoteWorkspaceIO((id) => sshProjects?.manager.refForProject(id) ?? null,
+  const remoteWorkspaceIO = makeRemoteWorkspaceIO((id) => sshProjects?.refForProject(id) ?? null,
     workspaceSshFs, (id) => workspaceStore.markUnmirrored(id))
   const workspaceStore = new WorkspaceStore(config.sshProjects ? remoteWorkspaceIO : undefined)
 
@@ -441,18 +442,15 @@ export async function startServer(
     whiteboardLocation: (projectId: string) => workspaceStore.whiteboardLocationForProject(projectId)
   })
   platform.handleWithSender(IPC.gitSetActiveRemote, (id, projectId: string | null) => gitRouting.setActive(id, projectId))
-  // Project setup/archive runner — same construction as src/main/index.ts, and the SAME
-  // `registerProjectSetupHandlers` trust boundary (project-setup-handlers.ts): it derives rootPath/
-  // ssh/projectName from THIS process's own workspace index by projectId, never the renderer, and
-  // re-validates `worktreePath` against the project's actual git worktrees. No ssh leg here at all
-  // (the Server Edition has no SSH projects, same reason board-log's router below never resolves
-  // one) — `projectTargetInfo` never populates `ssh` on this shell, so an ssh-shaped target simply
-  // never arises.
+  // Project setup/archive uses this host's saved target and existing per-location consent.
+  // The remote leg is explicit and connection-backed; no transport means no local fallback.
   const projectTrustStore = new ProjectTrustStore()
   const projectSetupService = new ProjectSetupService({
     trust: projectTrustStore,
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
-    runLocal: makeLocalSetupRunner()
+    runLocal: makeLocalSetupRunner(),
+    runSsh: config.sshProjects ? makeSshSetupRunner((endpoint) => sshProjects?.refForEndpoint(endpoint) ?? null) : undefined,
+    sendConsent: (channel, payload) => sendToOwners(platform, channel, payload)
   })
   const projectSetupDeps: ProjectSetupHandlerDeps = {
     projectTargetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
@@ -460,8 +458,7 @@ export async function startServer(
   }
   registerProjectSetupHandlers(platform, projectSetupService, projectSetupDeps)
   // `worktree:materialize-shared` — same sibling registrar and trust boundary as main/index.ts,
-  // over this process's own stores. The Server Edition has no SSH projects, so an ssh-shaped target
-  // never arises; the path validation and by-projectId list read are identical.
+  // over this process's own stores. Shared-path materialization retains its explicit local-only gate.
   registerWorktreeSharedPathsHandlers(platform, {
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
     targetInfo: projectSetupDeps.projectTargetInfo,
@@ -486,12 +483,12 @@ export async function startServer(
     if (!projectId) return null
     const server = workspaceStore.projectTargetInfo(projectId)?.ssh?.server
     if (!server) return null
-    const ref = sshProjects?.manager.refForProject(projectId)
+    const ref = sshProjects?.refForProject(projectId)
     return { projectId, hostKey: sshHostKey(ref?.conn ?? server), remote: ref ? { conn: ref.conn, controlPath: ref.controlPath } : undefined }
   })
   ptyManager.setRelayNodeResolver({
     placements: (nodeId) => workspaceStore.relayNodePlacements(nodeId),
-    refFor: (scopeId) => config.sshProjects ? sshProjects?.manager.spawnRefFor(scopeId) : undefined,
+    refFor: (scopeId) => config.sshProjects ? sshProjects?.spawnRefFor(scopeId) : undefined,
     projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh
   })
   ptyManager.setProjectSpawnOverrides(
@@ -1274,7 +1271,7 @@ export async function startServer(
     onChanged: () => { watchLinks?.onEntitlementChanged() } })
   // Live Links use the existing service and owner-only RPC. A second process on this data
   // directory owns neither entitlement mutations nor link hosting.
-  const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, () => undefined))
+  const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, (projectId) => sshProjects?.refForProject(projectId)))
   watchLinks = createWatchLinkService({
     api: createWatchLinkApi({ apiBase: API_BASE }),
     relayUrl: RELAY_URL,

@@ -9,9 +9,11 @@ import { resetNativeMuxForTests } from '../core/remote-ssh/native/native-runtime
 import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { testTmpDir } from '../core/test-tmp'
+import type { SshConnection } from '../shared/ssh'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { IPC } from '../shared/ipc'
 import { registerServerSshProjects } from './ssh-projects'
+import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
 
 /** Real SSH authentication and exec channels; all commands run under a temporary remote HOME. */
 describe.skipIf(process.platform === 'win32')('Server SSH transport composition', () => {
@@ -44,11 +46,13 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
     const platform = fakePlatform({ isOwnerClient: (id) => id === 1 || id === 2 }); platform.clients.push(1, 2)
     initPlatform(platform)
     const connected: string[] = []
-    const service = registerServerSshProjects({ platform, enabled: true, settings: () => DEFAULT_SETTINGS,
+    let savedTarget: { server: SshConnection; remoteCwd: string } | undefined
+    const service = registerServerSshProjects({ platform, enabled: true, settings: () => DEFAULT_SETTINGS, projectTarget: () => savedTarget,
       onConnected: async (id) => { connected.push(id) } })
     const call = (method: string, ...args: unknown[]): any => platform.handlers[method](1, ...args)
     try {
       const connection = { host: '127.0.0.1', port, user: 'fixture', identityFile, extraArgs: `-F ${config}` }
+      savedTarget = { server: connection, remoteCwd: remote }
       await call(IPC.sshSave, { ...connection, id: 'fixture', label: 'Fixture' })
       await call(IPC.sshPromptConnect); platform.handlers[IPC.sshPromptConnect](2)
       const connecting = call(IPC.sshConnectProject, 'fixture', connection, remote) as Promise<unknown>
@@ -65,6 +69,20 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(await call(IPC.sshFsWrite, 'fixture', file, 'remote content')).toBe(true)
       expect(await call(IPC.sshFsRead, 'fixture', file)).toBe('remote content')
       expect(fs.readFileSync(file, 'utf8')).toBe('remote content')
+      const chunks: string[] = []
+      const setup = makeSshSetupRunner((endpoint) => service.refForEndpoint(endpoint))
+      expect(await setup({ script: 'printf "%s" "$FIXTURE_VALUE"; printf " stderr" >&2', cwd: remote,
+        env: { FIXTURE_VALUE: 'remote setup' }, onChunk: (chunk) => { chunks.push(chunk) },
+        signal: new AbortController().signal, ssh: { server: connection, remoteCwd: remote } })).toEqual({ exitCode: 0 })
+      expect(chunks.join('')).toContain('remote setup')
+      expect(chunks.join('')).toContain('stderr')
+      savedTarget = undefined
+      expect(service.refForProject('fixture')).toBeUndefined()
+      expect(service.spawnRefFor('fixture')).toBeUndefined()
+      expect(() => call(IPC.sshFsRead, 'fixture', file)).toThrow('target-changed')
+      savedTarget = { server: { ...connection, identityFile: '/different-key' }, remoteCwd: remote }
+      expect(service.refForProject('fixture')).toBeUndefined()
+      savedTarget = { server: connection, remoteCwd: remote }
       await call(IPC.sshDisconnectProject, 'fixture')
       expect(() => call(IPC.sshFsRead, 'fixture', file)).toThrow('disconnected')
       const promptCount = platform.sent.filter((event) => event.channel === IPC.sshPassphraseRequest).length

@@ -25,6 +25,9 @@ import { remoteIntegrationPlan } from '../shared/agent-integrations'
 export interface ServerSshProjects {
   readonly manager: SshProjectManager
   readonly fs: SshFs
+  refForProject(projectId: string): ReturnType<SshProjectManager['refForProject']>
+  refForEndpoint(endpoint: Parameters<SshProjectManager['refForEndpoint']>[0]): ReturnType<SshProjectManager['refForEndpoint']>
+  spawnRefFor(scopeId: string): ReturnType<SshProjectManager['spawnRefFor']>
   forgetClient(id: number): void
   close(): void
 }
@@ -47,6 +50,7 @@ export function registerServerSshProjects(deps: {
   const masterOwners = new Map<string, PassphraseRecipient | null>()
   let started: Promise<void> | null = null; let stopped = false; let script: string | undefined
   let connecting = 0
+  const savedProjects = new Set<string>()
   const eligible = (id: number) => !stopped && platform.clientIds().includes(id) && platform.isOwnerClient?.(id) === true
   const recipient = (id: number): PassphraseRecipient | null => {
     const epoch = ready.get(id)
@@ -140,9 +144,16 @@ export function registerServerSshProjects(deps: {
   }
   const checkTarget = (project: string, target: SshConnection, cwd?: string) => {
     const saved = deps.projectTarget?.(project)
-    if (saved === null || (saved && (sshEndpointKey(saved.server) !== sshEndpointKey(target) || saved.remoteCwd !== cwd))) {
+    if (saved !== undefined) savedProjects.add(project)
+    if ((saved === undefined && savedProjects.has(project)) || saved === null || (saved && (sshEndpointKey(saved.server) !== sshEndpointKey(target) || saved.remoteCwd !== cwd))) {
       throw new Error('ssh-project-target-changed: reconnect using the saved project destination')
     }
+  }
+  const verifiedRef = (project: string) => {
+    if (stopped || !deps.enabled) return undefined
+    const value = manager.refForProject(project)
+    if (!value) return undefined
+    try { checkTarget(project, value.conn, value.remoteCwd); return value } catch { return undefined }
   }
   handle(IPC.sshList, () => inventory.list(), false)
   handle(IPC.sshSave, (_id, server: SshServer) => {
@@ -191,9 +202,20 @@ export function registerServerSshProjects(deps: {
   for (const channel of [IPC.sshUploadFile, IPC.sshDownloadFile, IPC.sshMediaAllow]) {
     handle(channel, () => { throw new Error('ssh-transfer-unavailable: this host does not yet provide browser SSH transfers or media') })
   }
-  return { manager, fs: remoteFs, forgetClient: (id) => { owners.forget(id); ready.delete(id) }, close: () => {
+  return { manager, fs: remoteFs, refForProject: verifiedRef,
+    refForEndpoint: (endpoint) => {
+      const wanted = manager.refForEndpoint(endpoint)
+      if (!wanted) return undefined
+      for (const { projectId } of manager.connectedHosts()) {
+        const current = verifiedRef(projectId)
+        if (current?.controlPath === wanted.controlPath) return current
+      }
+      return undefined
+    },
+    spawnRefFor: (scopeId) => verifiedRef(scopeId) ? manager.spawnRefFor(scopeId) : undefined,
+    forgetClient: (id) => { owners.forget(id); ready.delete(id) }, close: () => {
     if (stopped) return
-    stopped = true; unsubscribe?.(); prompts.dispose(); owners.dispose(); ready.clear(); masterOwners.clear()
+    stopped = true; unsubscribe?.(); prompts.dispose(); owners.dispose(); ready.clear(); masterOwners.clear(); savedProjects.clear()
     if (started && useNativeSsh()) setNativePassphrasePrompt(null)
     manager.disconnectAll(); askpass.stop(); agent.stop()
   } }

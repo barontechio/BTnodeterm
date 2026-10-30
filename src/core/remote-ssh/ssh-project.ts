@@ -1634,6 +1634,7 @@ export class SshProjectManager {
     host: string
     user: string
     port?: number
+    identityFile?: string
     remoteCwd: string
   }): { conn: SshConnection; controlPath: string } | undefined {
     const wantPort = endpoint.port ?? 22
@@ -1641,6 +1642,7 @@ export class SshProjectManager {
       if (c.remoteCwd !== endpoint.remoteCwd) continue
       if (c.conn.host !== endpoint.host || c.conn.user !== endpoint.user) continue
       if ((c.conn.port ?? 22) !== wantPort) continue
+      if ((c.conn.identityFile ?? '') !== (endpoint.identityFile ?? '')) continue
       return { conn: c.conn, controlPath: c.controlPath }
     }
     return undefined
