@@ -55,6 +55,10 @@ now extracted into core and connected to native/Server owner lifetimes and the r
 Its filesystem/RPC fixtures cover preparation, cross-tab rejection, disconnect, expiry and removal
 exclusion. It retains the existing device-verification limitations of authenticated CLI switches;
 node-wide write/branch/restart coordination remains a separate outstanding acceptance gate.
+A real Server boot fixture now runs the generated POSIX CLI through hook authentication, persists
+geometry and web nodes, refuses cross-project placement, posts a signed hook event and completes
+an individually approved settings change over an authenticated owner WebSocket. Its HOME, endpoints,
+files and tmux environment use the existing test sandboxes; it starts no agent CLI session.
 
 
 Baseline inspected on 2026-10-29:
