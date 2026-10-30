@@ -107,6 +107,7 @@ export function instanceSockId(dataDirKey = defaultDataDirKey()): string {
 
 export class AppSshAgent {
   private child: AgentChild | null = null
+  private ownsSocket = false
   /** In-flight `start()`, so concurrent connects share one spawn AND one wait. Returning early on
    *  `if (this.child)` while the socket is still binding would hand the second connect an agent
    *  that cannot answer yet, and its key would go nowhere. */
@@ -139,6 +140,7 @@ export class AppSshAgent {
     // into their login agent permanently. Published BEFORE anything that can fail, for the same
     // fail-closed reason as `env()`: a sync throw below must degrade to prompting, never to the
     // ambient agent.
+    this.ownsSocket = true
     process.env[APP_AGENT_ENV] = this.sockPath
     try {
       mkdirSync(path.dirname(this.sockPath), { recursive: true, mode: 0o700 })
@@ -207,7 +209,9 @@ export class AppSshAgent {
     this.child?.kill()
     this.child = null
     this.starting = null
-    delete process.env[APP_AGENT_ENV]
+    if (!this.ownsSocket) return
+    this.ownsSocket = false
+    if (process.env[APP_AGENT_ENV] === this.sockPath) delete process.env[APP_AGENT_ENV]
     try {
       rmSync(this.sockPath, { force: true })
     } catch {
