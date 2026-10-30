@@ -200,6 +200,10 @@ Multi-client Git must capture its remote resolver per request with `withGitRemot
 hides the native global fallback; an unavailable remote must refuse before any local command.
 The host adapter must also revalidate its captured connection identity before each remote effect.
 
+Remote workspace reads distinguish a checked missing path from permission/I/O/transport failure.
+`SshFs.readTextChecked` uses the checked reader's private absence status; an arbitrary nonzero
+`cat` exit must never become permission to create or overwrite the remote project/settings file.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

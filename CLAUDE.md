@@ -100,6 +100,11 @@ a sender-aware scope that captures a connection before the first await. Explicit
 must hide global remote state; disconnected or replaced remote targets must fail before local Git.
 Server's per-connection policy and connection-identity checks belong in its adapter.
 
+`sshReadCheckedArgs` returns its absence status only after proving a missing path below a
+searchable parent. Existing unreadable/nonregular entries and failed cats return an error instead.
+`SshFs.readTextChecked` never treats ordinary nonzero exit or SSH failure as absence; workspace
+reconciliation must preserve that distinction before any attempted remote write.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
