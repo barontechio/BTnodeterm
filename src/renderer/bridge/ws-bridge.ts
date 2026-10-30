@@ -1,6 +1,6 @@
 import type { ChatCatalog } from '@shared/chat-catalog'
 import type { HostLaunchReply } from '@shared/headless-launch'
-import { E_NO_HANDLER, E_UNSUPPORTED } from '@shared/rpc'
+import { E_NO_HANDLER, E_UNSUPPORTED, E_UNAUTHORIZED } from '@shared/rpc'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
@@ -544,6 +544,14 @@ export function buildRealApi(
   // REAL: registerWorktreeSharedPathsHandlers (core), same construction point as main/server. Wire
   // carries exactly `(projectId, worktreePath)`; the server reads the sharedPaths list itself.
   const worktree: NodeTerminalApi['worktree'] = {
+    recovery: {
+      list: async () => {
+        try { return await client.request(IPC.worktreeRecoveryList) as import('@shared/worktree-recovery').WorktreeRecoveryList }
+        catch (error) { if ([E_NO_HANDLER, E_UNAUTHORIZED].includes((error as { code?: string }).code ?? '')) return null; throw error }
+      },
+      inspect: (id) => client.request(IPC.worktreeRecoveryInspect, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryInspection>,
+      keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>
+    },
     materializeShared: (projectId, worktreePath) =>
       client.request(IPC.worktreeMaterializeShared, projectId, worktreePath) as ReturnType<
         NodeTerminalApi['worktree']['materializeShared']

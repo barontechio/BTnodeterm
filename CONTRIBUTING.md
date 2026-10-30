@@ -76,6 +76,13 @@ claim, including a `worktree` label, cannot waive it. The host recovery adapter 
 register the actual batch permit through `WorktreeRecoveryDispatch.withRecovery` and await the
 effect. It grants no actor/owner approval. Keep uncertain recovery facts; no deletion RPC is enabled.
 
+`WorktreeRecoveryService` provides owner-only inspection and kept-checkout recovery in both shells.
+An explicit owner click can keep only the original canonical directory/inode and linked branch.
+Recheck Git and owner lifetime inside the journal FIFO under `runWorktreeAction`; keeping performs
+no Git mutation, session input/teardown or canvas edit. `WorktreeRecoveryHost` uses the app's physical
+owner API; relay APIs omit administration. Uncertain replies never replay the action. Missing or
+changed checkout recovery and confirmed deletion still need their domain adapters.
+
 Global transcript search is owner-only and local to the host's configured Claude account roots.
 Index refresh identity is the transcript path, since session ids can repeat across accounts.
 Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.

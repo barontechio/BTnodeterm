@@ -169,7 +169,21 @@ uncertain persistence, and clear at recovered/kept transitions. Unknown corrupt 
 quarantines on existing panes; physical starts and new execution references still refuse. A kept
 prepared record can be released only after the domain proved the original directory/Git identity
 and obtained fresh owner approval. The storage primitive does not supply those proofs. The owner
-keyboard notice explicitly identifies pending recovery. No removal/recovery action is enabled yet.
+keyboard notice explicitly identifies pending recovery. No deletion RPC is enabled by this guard.
+
+The first recovery action now exists in `WorktreeRecoveryService`: an authenticated owner's explicit
+keep request releases a prepared record only for its original canonical inode and linked branch.
+The node/backend barrier spans fresh Git proof and durable journal publication; proof runs inside
+the journal FIFO, and owner/record/directory validity is checked at publication/acknowledgement.
+Keeping never invokes Git mutation, PTY input/teardown, archive scripts or canvas changes. It retains
+dirty files and a surviving branch. Changed/missing/unavailable proofs retain the record. Lost disk
+acknowledgement retains known quarantine and requires host reconstruction before mutation.
+Owner list/inspect/keep RPCs take only a host record id, bind actual document lifetimes, and are
+host-only. Both roots cancel owners on departure/close and await journal IO during shutdown. The
+app-global `WorktreeRecoveryHost` exposes reviewed keep actions, reserves the common dialog slot,
+ignores stale responses, hides recovered tombstones and never repeats a lost action. Relay APIs
+omit this plane; old/non-owning hosts negotiate absence. Missing checkout recovery and confirmed
+deletion remain separate outstanding adapters.
 
 ## What this is
 

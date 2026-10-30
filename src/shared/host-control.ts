@@ -156,6 +156,9 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.controlCapabilities,
   IPC.controlRunLaunch,
   IPC.controlBranchClaude,
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   IPC.devPortsForward,
   IPC.devPortsUnforward
 ])

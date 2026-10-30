@@ -151,7 +151,9 @@ import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
 import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
 import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
-import { initWorktreeRecovery } from '../core/worktree-recovery'
+import { initWorktreeRecovery, type WorktreeRecoveryRuntime } from '../core/worktree-recovery'
+import { WorktreeRecoveryService } from '../core/worktree-recovery-service'
+import { registerWorktreeRecoveryIpc } from '../core/worktree-recovery-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { isRemoteSessionNode } from '../shared/worktree'
@@ -498,6 +500,8 @@ const corePlatform = electronPlatform()
 initPlatform(corePlatform)
 const ownerConfirmations = new OwnerConfirmationBroker(corePlatform)
 let branchOwners: ReturnType<typeof registerConversationBranchIpc> | undefined
+let worktreeRecoveryOwners: ReturnType<typeof registerWorktreeRecoveryIpc> | undefined
+let worktreeRecoveryRuntime: WorktreeRecoveryRuntime | null = null
 registerOwnerConfirmationIpc(corePlatform, ownerConfirmations)
 
 const settingsStore = new SettingsStore()
@@ -1368,6 +1372,7 @@ function createWindow(): BrowserWindow {
     workspaceStore.forgetClient(presenceId)
     ownerConfirmations.forgetClient(presenceId)
     branchOwners?.forget(presenceId)
+    worktreeRecoveryOwners?.forget(presenceId)
     forgetCodexAccountOwner(presenceId)
     forgetSshPassphraseOwner(presenceId)
     dropGitHubClient?.(presenceId)
@@ -2386,7 +2391,10 @@ app.whenReady().then(async () => {
   // listeners (setListener/setRawListener/setControlHandler) attach later, which the server
   // tolerates — early hook POSTs are simply dropped, never mis-routed.
   const hookStartupWarning = await hookServer.startForApp()
-  await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
+  const worktreeRecovery = await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
+  worktreeRecoveryRuntime = worktreeRecovery
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  worktreeRecoveryOwners = registerWorktreeRecoveryIpc(corePlatform, () => worktreeRecoveryService)
   // The durable orchestration facts belong to the instance that owns the hook endpoint, exactly
   // like the request ledger (which `hookServer.start()` only loads when it wins the endpoint). A
   // second instance on the same userData that lost it must neither restore them — it would expire,
@@ -5583,6 +5591,7 @@ app.on('before-quit', (e) => {
   coreTeams = null
   ownerConfirmations.dispose()
   branchOwners?.dispose()
+  worktreeRecoveryOwners?.dispose()
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log
   // honest. Clearing the ref too keeps a hook edge that lands during the quit flush (the pty
   // teardown window below) from re-holding an assertion nothing will ever release.
@@ -5646,7 +5655,8 @@ app.on('before-quit', (e) => {
     remoteWorkspaceIO.flush(),
     ptyManager.killAll(),
     watchLinksStopped,
-    licenseClient?.dispose()
+    licenseClient?.dispose(),
+    worktreeRecoveryRuntime?.idle()
   ])
   void Promise.race([flush, new Promise((r) => setTimeout(r, 1500))])
     // Then let whisper go. A dictation still transcribing when Electron tears down the main

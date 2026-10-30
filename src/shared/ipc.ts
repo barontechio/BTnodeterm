@@ -358,6 +358,9 @@ export const IPC = {
   controlCapabilities: 'control:capabilities',
   controlRunLaunch: 'control:run-launch',
   controlBranchClaude: 'control:branch-claude',
+  worktreeRecoveryList: 'worktree:recovery:list',
+  worktreeRecoveryInspect: 'worktree:recovery:inspect',
+  worktreeRecoveryKeep: 'worktree:recovery:keep',
   appUpdatePolicy: 'app:update-policy',
   // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
   appUpdatePrepInspect: 'app:update-prep-inspect',

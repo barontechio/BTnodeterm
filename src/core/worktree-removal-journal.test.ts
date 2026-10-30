@@ -132,11 +132,11 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
     const f = fixture(); await f.journal.load(); const row = await f.journal.prepare(f.intent)
     const other = await f.journal.prepare({ ...f.intent, groupId: 'other', worktreePath: path.join(f.root, 'other-checkout'),
       members: [{ nodeId: 'other', binding: 'b'.repeat(64) }] })
-    await f.journal.releaseKept(row.id)
+    await f.journal.releaseKept(row.id, { verify: async () => {}, assertCurrent: () => {} })
     expect(f.journal.isNodePending('group')).toBe(false); expect(f.journal.blocks(f.intent.worktreePath)).toBe(false)
     expect(f.journal.isNodePending('other')).toBe(true)
     await f.journal.markRemoved(other.id)
-    await expect(f.journal.releaseKept(other.id)).rejects.toThrow('recovery-required')
+    await expect(f.journal.releaseKept(other.id, { verify: async () => {}, assertCurrent: () => {} })).rejects.toThrow('recovery-required')
     expect(f.journal.isNodePending('other')).toBe(true)
   })
 

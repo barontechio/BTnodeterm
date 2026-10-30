@@ -64,6 +64,8 @@ import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
 import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { initWorktreeRecovery } from '../core/worktree-recovery'
+import { WorktreeRecoveryService } from '../core/worktree-recovery-service'
+import { registerWorktreeRecoveryIpc } from '../core/worktree-recovery-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
@@ -877,6 +879,8 @@ export async function startServer(
   const hookStartupWarning = await hookServer.startForApp()
   if (hookStartupWarning) console.error('[nodeterm-server]', hookStartupWarning)
   const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null, workspaceStore)
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  const worktreeRecoveryOwners = registerWorktreeRecoveryIpc(platform, () => worktreeRecoveryService)
   // Safe default and rollback path. The opt-in runtime replaces this handler only after its
   // workspace-backed services are ready; a failed initialization therefore degrades to the same
   // named permanent refusal rather than a half-wired execution surface.
@@ -1135,6 +1139,7 @@ export async function startServer(
     workspaceStore.forgetClient(uiId)
     ownerConfirmations.forgetClient(uiId)
     branchOwners.forget(uiId)
+    worktreeRecoveryOwners.forget(uiId)
     codexAccounts.forgetClient(uiId)
     licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
@@ -1366,6 +1371,7 @@ export async function startServer(
         mediaReferences.dispose()
         ownerConfirmations.dispose()
         branchOwners.dispose()
+        worktreeRecoveryOwners.dispose()
         codexAccounts.dispose()
         webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
@@ -1450,6 +1456,7 @@ export async function startServer(
       mediaReferences.dispose()
       ownerConfirmations.dispose()
       branchOwners.dispose()
+      worktreeRecoveryOwners.dispose()
       codexAccounts.dispose()
       webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so

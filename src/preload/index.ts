@@ -250,6 +250,11 @@ const api: NodeTerminalApi = {
     }
   },
   worktree: {
+    recovery: {
+      list: () => ipcRenderer.invoke(IPC.worktreeRecoveryList),
+      inspect: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryInspect, id),
+      keep: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryKeep, id)
+    },
     // Wire carries exactly `(projectId, worktreePath)` — never the sharedPaths list: main reads it
     // itself by projectId and validates the path against the project's own git worktrees
     // (worktree-shared-paths-handlers.ts).

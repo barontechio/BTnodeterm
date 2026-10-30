@@ -791,8 +791,15 @@ directory**.
 The owning core loads `worktree-removals.json` before enabling launches. Normally it is absent and
 no file is created. If an interrupted removal is recorded, new physical starts inside that path
 are refused before falling back to home, including dangling aliases. Corrupt/unreadable recovery
-state refuses new starts until inspected; existing live panes remain usable. This is recovery
-infrastructure: confirmed agent worktree deletion and its recovery UI are still unavailable.
+state refuses new starts until inspected; existing live panes without known pending membership
+remain usable. Known prepared/removed members also refuse input and execution until recovery.
+Owner browsers show **Worktree recovery** when attention is needed. Inspect the branch and directory,
+then **Keep existing checkout** can release a prepared record only while Git and the original
+canonical directory identity still match. This keeps files, branch and sessions; it never replays
+removal. Missing/changed checkout recovery and confirmed agent deletion are not enabled yet. A lost
+durable publication acknowledgement preserves quarantine; restart the host to reconstruct those
+facts before changing them. The UI refreshes status only and never repeats a possibly completed
+action. Relay viewers have no recovery administration.
 
 Server canvas control is disabled by default. Set `NODETERM_SERVER_CANVAS_CONTROL=1` (or pass
 `--canvas-control`) to install the Server-local shim and enable its `/control/*` implementation.

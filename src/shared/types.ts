@@ -1614,6 +1614,8 @@ export interface ProjectSetupApi {
 }
 
 export interface WorktreeApi {
+  /** Owner administration for this core's local recovery state. Absent on old/relay clients. */
+  recovery?: import('./worktree-recovery').WorktreeRecoveryApi
   /**
    * Symlink a project's configured `sharedPaths` (git-ignored dirs like `node_modules`) from its
    * repo root into a freshly-created git worktree, so a setup `npm install` there sees the links.

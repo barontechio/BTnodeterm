@@ -126,15 +126,16 @@ export class WorktreeRemovalJournal {
       throw new Error('worktree-journal-canonical-path-required')
     return this.rows.some((row) => isAncestorPath(row.worktreePath, canonicalDirectory))
   }
-  private async commit(next: WorktreeRemovalRecord[]): Promise<void> {
+  private async commit(next: WorktreeRemovalRecord[], assertCurrent?: () => void): Promise<void> {
     this.ready()
     const data = JSON.stringify({ kind: 'worktree-removals', version: 1, records: next })
     if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('worktree-journal-capacity')
     try {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
       this.ready()
+      assertCurrent?.()
       await (this.options.persist ?? ((file, text) => writeFileDurableAtomic(file, text, { mode: 0o600 })))(this.file, data)
-      this.owner(); this.publishRows(next); this.persisted = data
+      this.owner(); assertCurrent?.(); this.publishRows(next); this.persisted = data
     } catch (error) { this.faulted = true; throw error }
   }
   prepare(intent: WorktreeRemovalIntent): Promise<WorktreeRemovalRecord> {
@@ -171,12 +172,14 @@ export class WorktreeRemovalJournal {
   }
   /** Domain already proved the original directory identity and Git binding still exist, with
    * fresh owner approval to keep them. Prepared alone is NOT that proof: a crash may follow Git. */
-  releaseKept(id: string): Promise<void> {
+  releaseKept(id: string, proof: { verify(): Promise<void>; assertCurrent(): void }): Promise<void> {
     return this.serial(async () => {
       this.ready()
       const row = this.rows.find((candidate) => candidate.id === id)
       if (!row || row.phase !== 'prepared') throw new Error('worktree-journal-recovery-required')
-      await this.commit(this.rows.filter((candidate) => candidate.id !== id))
+      await proof.verify()
+      this.ready(); proof.assertCurrent()
+      await this.commit(this.rows.filter((candidate) => candidate.id !== id), proof.assertCurrent)
     })
   }
   idle(): Promise<void> { return this.chain.then(() => {}) }

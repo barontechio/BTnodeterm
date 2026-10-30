@@ -198,6 +198,17 @@ describe('Server board comment delivery', () => {
 })
 
 describe('buildControlApi', () => {
+  it('routes owner recovery once, negotiates an old host and never replays a lost keep response', async () => {
+    const request = vi.fn(async (_method: string, ..._args: unknown[]) => ({ ok: true, records: [] }))
+    const api = buildRealApi({ request, subscribe: () => () => {} } as never).worktree.recovery!
+    await api.list(); await api.inspect('record'); await api.keep('record')
+    expect(request.mock.calls.map((call) => call[0])).toEqual([IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep])
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.list()).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.keep('record')).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    expect(request).toHaveBeenCalledTimes(5)
+  })
   it('branches once through the owner host RPC and never falls back after a missing or lost reply', async () => {
     const request = vi.fn(async () => ({ ok: true, newNodeId: 'copy' }))
     expect(await buildControlApi({ request } as never).control!.branchClaude!('node', { x: 10, y: 20 })).toMatchObject({ ok: true, newNodeId: 'copy' })
