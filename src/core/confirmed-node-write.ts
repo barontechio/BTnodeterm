@@ -36,7 +36,7 @@ export class ConfirmedNodeWrite {
       const ownerBinding = stableStringify(owner)
       const unchanged = (requireIdle: boolean) => {
         try { return this.deps.pty.nodeExecutionIdentity(targetId) === physical &&
-          this.target.snapshot(this.target.cachedWorkspace(), sourceId, targetId, requireIdle).binding === before.binding }
+          this.target.snapshot(this.target.cachedWorkspace(sourceId, targetId), sourceId, targetId, requireIdle).binding === before.binding }
         catch { return false }
       }
       if (!unchanged(true)) return refuse('target changed during inspection')
@@ -60,7 +60,7 @@ export class ConfirmedNodeWrite {
         const foreground: PaneOwner | null = await this.deps.pty.paneOwner(targetId)
         execution.assertCurrent()
         if (stableStringify(foreground) !== ownerBinding) throw new Error('foreground process changed')
-        this.target.snapshot(this.target.cachedWorkspace(), sourceId, targetId, true)
+        this.target.snapshot(this.target.cachedWorkspace(sourceId, targetId), sourceId, targetId, true)
         const typedAt = Date.now()
         dispatched = true
         try {

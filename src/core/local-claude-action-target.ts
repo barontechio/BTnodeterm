@@ -23,10 +23,11 @@ export interface ClaudeActionSessionTransition { nodeId: string; runtimeSessionI
 /** Shared saved-target/account policy for owner-approved actions on a live local Claude pane. */
 export class LocalClaudeActionTarget {
   constructor(private readonly deps: LocalClaudeActionTargetDeps) {}
-  cachedWorkspace(): Workspace {
+  cachedWorkspace(sourceId: string, targetId: string): Workspace {
+    const endpoints = new Set([sourceId, targetId])
     const projects = this.deps.workspace.persistedCanvases().flatMap((canvas) => {
       const info = this.deps.workspace.projectTargetInfo(canvas.id)
-      const nodes = canvas.nodes.flatMap((node) => {
+      const nodes = canvas.nodes.filter((node) => endpoints.has(node.id)).flatMap((node) => {
         const owned = this.deps.workspace.getNodeForHostAction(node.id)
         return owned ? [owned] : []
       })

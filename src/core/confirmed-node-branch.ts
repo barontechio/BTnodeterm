@@ -50,7 +50,7 @@ export class ConfirmedNodeBranch {
         try {
           if (this.deps.pty.nodeExecutionIdentity(targetId) !== physical || !this.deps.pty.canBranchClaude(targetId)) return false
           if (provenSession && this.deps.runtime(targetId).sessionId !== provenSession) return false
-          const snapshot = this.target.snapshot(this.target.cachedWorkspace(), sourceId, targetId, idle,
+          const snapshot = this.target.snapshot(this.target.cachedWorkspace(sourceId, targetId), sourceId, targetId, idle,
             submitted ? { nodeId: targetId, runtimeSessionId: initial, savedSessionId: before.target.agentSessionId } : undefined)
           return snapshot.binding === before.binding
         } catch { return false }
