@@ -55,7 +55,8 @@ The title-read snapshot's CodeQL check 123870469990 reports new fingerprints for
 license/pairing protocol flows (alerts 8–11); these were individually reviewed with the redirect
 protections above retained. Alert 42 is a loopback test sending its newly minted temporary node
 capability to its own in-process hook server, with no external authority or real secret. Each has
-an individual false-positive rationale. Alert 28 is a test-only pre-commit existence assertion
-followed by a post-commit inode observation; the fixture now inspects the empty parent directory
-before commit, separating those observations without weakening the production account service.
-The next CodeQL analysis must verify that test finding is gone; no query or check is disabled.
+an individual false-positive rationale. Alert 28 observes the fixture's empty parent directory
+before commit and compares inode identities after commit, deliberately testing the rename
+transaction in its own temporary tree. No stat result authorizes a later production file read or
+write. Check 123897989014 still identifies that intentional test observation; it was reviewed
+individually as a false positive, preserving the atomic-move assertion. No query or check is disabled.

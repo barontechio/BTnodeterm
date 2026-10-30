@@ -212,6 +212,13 @@ exports the no-local-read guards directly on upstream/main without transport/dep
 24,167 tests (109 skipped), typecheck and both builds. It refuses local rehydration/replay and
 raw-hook tail setup for saved/live remote records, and releases earlier local tails on refresh.
 
+The independent [host terminal coordinator #1329](https://github.com/eneskirca/nodeterm/pull/1329)
+exports the single/group execution boundary, owner lifetimes, addressed input notices and relay
+policy directly on upstream/main: 24,179 tests (109 skipped), typecheck and both builds. It adds
+no command or dependency and retains domain authorization/consent as the adapter's responsibility.
+Upstream workflows for #1327–#1329 require maintainer authorization; local validation is not upstream
+acceptance.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
