@@ -17,7 +17,8 @@ import {
   sweepForeignTempFiles,
   sweepStaleTempFiles,
   tempNameFor,
-  writeFileAtomic
+  writeFileAtomic,
+  writeFileDurableAtomic
 } from './fs-atomic'
 
 let dir: string
@@ -184,6 +185,28 @@ describe('renameAtomicSync', () => {
 })
 
 describe('writeFileAtomic', () => {
+  it.skipIf(process.platform === 'win32')('acknowledges a durable record on a filesystem supporting directory sync', async () => {
+    const target = join(dir, 'write-ahead.json')
+    await writeFileDurableAtomic(target, 'prepared', { mode: 0o600 })
+    expect(await readFile(target, 'utf8')).toBe('prepared')
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o600)
+  })
+
+  it('refuses a durable write before publication when directory acknowledgement is unsupported', async () => {
+    const target = join(dir, 'write-ahead.json'); writeFileSync(target, 'old')
+    const close = vi.fn(async () => {})
+    vi.spyOn(fs, 'open').mockResolvedValue({ sync: async () => { throw errWithCode('ENOTSUP') }, close } as never)
+    await expect(writeFileDurableAtomic(target, 'prepared')).rejects.toThrow('ENOTSUP')
+    expect(readFileSync(target, 'utf8')).toBe('old'); expect(close).toHaveBeenCalledOnce()
+  })
+
+  it('reports an uncertain durable publication when the post-rename acknowledgement fails', async () => {
+    const target = join(dir, 'write-ahead.json'); writeFileSync(target, 'old')
+    let flushes = 0
+    vi.spyOn(fs, 'open').mockResolvedValue({ sync: async () => { if (++flushes === 2) throw errWithCode('EIO') }, close: async () => {} } as never)
+    await expect(writeFileDurableAtomic(target, 'prepared')).rejects.toThrow('EIO')
+    expect(readFileSync(target, 'utf8')).toBe('prepared')
+  })
   it('publishes the new bytes', async () => {
     const target = join(dir, 'store.json')
     await writeFileAtomic(target, '{"a":1}')

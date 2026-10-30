@@ -1966,3 +1966,11 @@ Context-link routing classifies saved remote placements as well as live sessions
 reader or capture adapter must refuse, never search local histories or capture an unmounted local
 pane. Use `isRemoteWorkspaceNode` at the shell seam and recheck link/account/session/routing identity
 after asynchronous reads. Owner-only history support does not authorize an agent context read.
+
+Worktree deletion recovery uses `WorktreeRemovalJournal`, not the fail-open/debounced orchestration
+facts. A prepared intent must be acknowledged by `writeFileDurableAtomic` before any external
+effect; an unsupported directory flush refuses. After a publication/ack failure, reload before
+doing anything else: new bytes may already exist. Corruption, unknown versions, lost ownership or
+an observed external edit refuse writes. Persist only bounded node identity hashes, never commands
+or credentials. Recovery phases and retained path tombstones grant no Git, node or canvas authority;
+the domain adapter must supply those and prove each transition. These primitives expose no RPC.

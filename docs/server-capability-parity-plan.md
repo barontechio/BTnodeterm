@@ -407,6 +407,13 @@ checkout pruning and no forced branch deletion. Real Git fixtures preserve dirty
 locked checkouts and unmerged branches. This does not enable CLI removal: the directory/node
 reservation and durable canvas recovery adapter must be connected first.
 
+The recovery storage foundation records `prepared` → `removed` → `recovered` intents with bounded
+node identity hashes and retained path tombstones. It requires the actual data-directory owner,
+flushes file and directory metadata before acknowledgement, rejects malformed/changed journals and
+requires reload after uncertain persistence. The filesystem must support directory flushes; no
+deletion command is enabled by this storage foundation. Directory/canvas admission and the removal
+transaction remain the next adapter gate.
+
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.
 - Unbind keeps the directory. Removal requires explicit confirmation, checks worktree ownership and uncommitted work, and refuses to affect the primary checkout or another worktree.
