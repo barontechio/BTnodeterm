@@ -141,6 +141,13 @@ PTY/coordinator suite passes 724 tests (6 skipped); the complete foundation pass
 is now explicitly isolated even when a real bundle exists on disk. No new write/branch command
 is enabled by this foundation alone; their target/account/pane and consent adapters remain gates.
 
+Group host operations now use `PtyManager.runNodeActions` / `NodeExecutionCoordinator.runMany`.
+They atomically claim an immutable bounded member set, refuse a busy member or capacity overflow
+without partial claims, and retain all fences after cancellation until actual backend settlement.
+The same async continuation can act on every claimed member; expired detached work remains invalid.
+This does not yet authorize worktree removal or reserve its filesystem path. The frozen combined
+snapshot `63aa25ab` passes 24,488 tests (109 skipped), typecheck and both builds.
+
 The first PR 13 `write` adapter is now implemented in core and connected to Server: a verified
 local Claude terminal, current idle state, kernel-proven foreground process, empty styled composer,
 unchanged saved execution/account/session identity and individual owner approval are all required.
@@ -199,6 +206,11 @@ typecheck, Desktop production build and Server build. Its real encrypted-key loo
 exercise both transports, managed-account isolation and owner/guest routing. A local warm-cache
 256 KiB command benchmark measured median 17.89–44.42 ms across 1–4,096 project entries, excluding
 SSH latency; details and the existing known-path baseline are in `server-ssh-projects.md`.
+
+The independent [remote meter routing #1328](https://github.com/eneskirca/nodeterm/pull/1328)
+exports the no-local-read guards directly on upstream/main without transport/dependency changes:
+24,167 tests (109 skipped), typecheck and both builds. It refuses local rehydration/replay and
+raw-hook tail setup for saved/live remote records, and releases earlier local tails on refresh.
 
 Baseline inspected on 2026-10-29:
 
