@@ -172,6 +172,12 @@ copies are deleted only after a SUCCESSFUL process query shows nothing runs from
 directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
 used, an incompatible one is left running and reported, never killed.
 
+Managed Codex lifecycle lives in `core/codex-account-service.ts`. Its shell adapter supplies a
+stable authenticated owner lifetime and private RPC registration. Switch tokens belong to that
+lifetime, never just a numeric client id. Release reservations on reload/disconnect and shutdown;
+keep prepare/commit/finish/rollback and account-removal exclusion. Login terminals require durable
+settings first. Credentials remain in the account's host-local home, never in RPC results.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not
@@ -1762,8 +1768,8 @@ require a known safe account id and a safe resolved remote home before spawning.
 builder supplies their private `CODEX_HOME`; never fall back to the system login when that scope
 is unavailable. System SSH Codex retains the host environment, including during early attach
 before home discovery; never inject a guessed `HOME` or `CODEX_HOME`. Custom Codex harnesses use
-the same guard. Desktop supports remote account lifecycle; the Server browser still explicitly
-rejects managed Codex account management.
+the same guard. Desktop supports remote account lifecycle. The Server browser supports local managed Codex
+accounts through the shared core service; unavailable SSH contexts remain explicitly refused.
 
 - Media URLs live for the app run. Remote cache pruning must keep files already handed to
   players; the cache cap is soft until restart. Use the existing `video` node for audio too.

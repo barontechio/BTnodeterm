@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
+  buildCodexAccountsApi,
   buildControlApi,
   buildMediaApi,
   buildWebPreviewApi,
@@ -61,6 +62,24 @@ describe('owner settings synchronization', () => {
     expect(c.calls.some((call) => call.method === IPC.settingsSave)).toBe(false)
     api.onChanged!(() => {})
     expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.settingsChanged, args: [] })
+  })
+})
+
+describe('managed Codex account protocol', () => {
+  it('sends all lifecycle phases through the same owner connection, without credential fields', async () => {
+    const c = fakeClient(); const api = buildCodexAccountsApi(c as never).codexAccounts
+    await api.add(); await api.waitLogin('account'); await api.identity('account')
+    await api.switchThread('thread', '/project', 'source', 'target')
+    await api.commitSwitch('ticket'); await api.finishSwitch('ticket'); await api.rollbackSwitch('ticket')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.codexAccountsAdd, args: [undefined] },
+      { kind: 'request', method: IPC.codexAccountsWaitLogin, args: ['account', undefined] },
+      { kind: 'request', method: IPC.codexAccountsIdentity, args: ['account', undefined] },
+      { kind: 'request', method: IPC.codexAccountsSwitchThread, args: ['thread', '/project', 'source', 'target'] },
+      { kind: 'request', method: IPC.codexAccountsCommitSwitch, args: ['ticket'] },
+      { kind: 'request', method: IPC.codexAccountsFinishSwitch, args: ['ticket'] },
+      { kind: 'request', method: IPC.codexAccountsRollbackSwitch, args: ['ticket'] }
+    ])
   })
 })
 

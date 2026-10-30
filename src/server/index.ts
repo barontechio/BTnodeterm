@@ -17,6 +17,7 @@ import { initPlatform } from '../core/platform'
 import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { SettingsStore } from '../core/settings-store'
 import { SettingsControl } from '../core/settings-control'
+import { registerServerCodexAccounts } from './codex-accounts'
 import { mirrorEntry } from '../core/agent-status-mirror'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
@@ -269,6 +270,7 @@ export async function startServer(
   const workspaceStore = new WorkspaceStore()
 
   settingsStore.init()
+  const codexAccounts = registerServerCodexAccounts(platform)
   // The linked-account resolver's one source of truth on this shell. Registered as
   // soon as settings exist and BEFORE anything that resolves a config dir — the mirror settings
   // provider, `installHooksIntoLocalAccounts`, the transcript jail — because an unregistered
@@ -1040,6 +1042,7 @@ export async function startServer(
   const dropUiClient = (uiId: number): void => {
     workspaceStore.forgetClient(uiId)
     ownerConfirmations.forgetClient(uiId)
+    codexAccounts.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
@@ -1263,6 +1266,7 @@ export async function startServer(
       async close() {
         mediaReferences.dispose()
         ownerConfirmations.dispose()
+        codexAccounts.dispose()
         webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
@@ -1339,6 +1343,7 @@ export async function startServer(
     async close() {
       mediaReferences.dispose()
       ownerConfirmations.dispose()
+      codexAccounts.dispose()
       webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.

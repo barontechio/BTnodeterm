@@ -1378,6 +1378,24 @@ export function buildTranscriptApi(
   }
 }
 
+/** Server-owned account lifecycle; never install on a joined relay API. */
+export function buildCodexAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'codexAccounts'> {
+  return { codexAccounts: {
+    add: (ctx) => client.request(IPC.codexAccountsAdd, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['add']>,
+    waitLogin: (id, ctx) => client.request(IPC.codexAccountsWaitLogin, id, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['waitLogin']>,
+    cancelWaitLogin: (id) => client.request(IPC.codexAccountsCancelWait, id) as Promise<void>,
+    identity: (id, ctx) => client.request(IPC.codexAccountsIdentity, id, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['identity']>,
+    systemIdentity: (ctx) => client.request(IPC.codexAccountsSystemIdentity, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['systemIdentity']>,
+    remove: (id, ctx) => client.request(IPC.codexAccountsRemove, id, ctx) as Promise<void>,
+    switchThread: (id, cwd, source, target) => client.request(IPC.codexAccountsSwitchThread, id, cwd, source, target) as ReturnType<NodeTerminalApi['codexAccounts']['switchThread']>,
+    commitSwitch: (token) => client.request(IPC.codexAccountsCommitSwitch, token) as Promise<void>,
+    finishSwitch: (token) => client.request(IPC.codexAccountsFinishSwitch, token) as Promise<void>,
+    rollbackSwitch: (token) => client.request(IPC.codexAccountsRollbackSwitch, token) as Promise<void>,
+    switchThreadRemote: (id, target, hosts, ctx) => client.request(IPC.codexAccountsSwitchThreadRemote, id, target, hosts, ctx) as Promise<void>,
+    transferThreadToSsh: (id, cwd, project, target, source) => client.request(IPC.codexAccountsTransferThreadToSsh, id, cwd, project, target, source) as ReturnType<NodeTerminalApi['codexAccounts']['transferThreadToSsh']>
+  } }
+}
+
 /**
  * Managed CLAUDE accounts over the WS bridge (issue #313). REAL, not a stub: the lifecycle moved
  * into `src/core/claude-accounts-service.ts`, so the server registers the same four channels the
@@ -1388,10 +1406,6 @@ export function buildTranscriptApi(
  * `waitLogin` is a straight passthrough of a poll that runs up to 5 minutes. That is safe because
  * RpcClient has no request timeout: a pending request rejects only when the socket drops, which is
  * exactly the outcome the caller wants (the login row stays pending and offers Retry).
- *
- * The `codexAccounts` namespace stays STUBBED (E_UNSUPPORTED). Its switch verbs authorize the
- * owning window by Electron WebContents id, which has no meaning over a WS connection — porting it
- * needs a connection-identity design, not a builder.
  */
 export function buildClaudeAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'claudeAccounts'> {
   return {
@@ -1569,6 +1583,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildTriggersApi(client),
     ...buildGitHubApi(client),
     ...buildClaudeAccountsApi(client),
+    ...buildCodexAccountsApi(client),
     codex: buildCodexApi(client),
     // `claude` is assembled from two builders: `cliCaps` from the relay-shared one, and the
     // transcript reader from the Server-Edition-only one (which also supplies `chat`).

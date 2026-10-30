@@ -50,6 +50,12 @@ preventing modern browser edits from replacing unrelated host changes before PR 
 The first PR 13 adapter now enables individually confirmed local `settings --set` in both shells,
 with a conditional FIFO write and the same pure capability-consent setter as the UI. The remaining
 write/removal adapters and execution coordination are still pending.
+The settings snapshot passes all 24,362 tests (109 skipped). PR 14's managed Codex lifecycle is
+now extracted into core and connected to native/Server owner lifetimes and the real browser bridge.
+Its filesystem/RPC fixtures cover preparation, cross-tab rejection, disconnect, expiry and removal
+exclusion. It retains the existing device-verification limitations of authenticated CLI switches;
+node-wide write/branch/restart coordination remains a separate outstanding acceptance gate.
+
 
 Baseline inspected on 2026-10-29:
 

@@ -62,6 +62,15 @@ uses the existing dialog, disables Enter approval and button autofocus, and coor
 synchronous pending-confirm flags. UI countdowns are receipt-relative; the host deadline remains
 authoritative. The broker grants no waiver and does not alter the existing Server close policy.
 
+Managed Codex lifecycle is shared by Desktop and Server in `core/codex-account-service.ts`.
+`OwnerLifetimes` provides stable connection/document identities with departure subscriptions.
+Native IPC and Server owner RPC supply those identities; relay peers never receive the account
+plane. Reservations pin both accounts before asynchronous planning and check owner + deadline
+again before commit/finish. Disconnect/reload cancels waits and releases reservations. Keep the
+existing rollout hardlink, containment and daemon capability primitives; no implicit system-account
+fallback. The UI persists account settings before every login terminal, including Retry. SSH stays
+behind an injected structural adapter, with explicit refusal when unavailable.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

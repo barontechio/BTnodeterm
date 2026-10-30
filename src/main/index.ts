@@ -383,7 +383,7 @@ import { WhisperModelStore } from '../core/speech/whisper-models'
 import { SpeechService } from '../core/speech/speech-service'
 import { registerSpeechIpc } from '../core/speech/register-ipc'
 import { initClaudeAccounts } from './claude-accounts'
-import { initCodexAccounts } from './codex-accounts'
+import { initCodexAccounts, forgetCodexAccountOwner } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
 import type { CodexCliCaps } from '../shared/types'
 import { grokCliCaps, registerGrokCliIpc } from '../core/grok-cli'
@@ -1360,6 +1360,7 @@ function createWindow(): BrowserWindow {
   releaseOnRendererDeparture(win, win.webContents, () => {
     workspaceStore.forgetClient(presenceId)
     ownerConfirmations.forgetClient(presenceId)
+    forgetCodexAccountOwner(presenceId)
     dropGitHubClient?.(presenceId)
   })
   win.on('closed', () => {

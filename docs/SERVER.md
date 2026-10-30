@@ -894,34 +894,26 @@ refused to a project-scoped guest (the request names a host account).
 
 ### Managed Codex accounts (S6)
 
-The Server Edition **arms the Codex record-signing secret** but does **not** host the
-account-management IPC — that surface is desktop-driven over SSH.
+The Server Edition registers the same managed account service as Desktop
+(`core/codex-account-service.ts`). The browser can create a private host account, open its supported
+host login flow, wait for a real credential, read display identity, remove an account and perform
+the existing prepare/commit/finish/rollback conversation exposure. Credentials and account homes
+remain on the server. The login terminal starts only after settings persistence, including retries.
 
-- **Arms the record secret (Decision 1).** At boot `armServerNodeIdentity`
-  (`src/server/node-identity-arm.ts`) loads the raw node-auth secret and calls
-  `setCodexThreadIdentityAuthSecret(...)` with it, so a managed Codex account's thread→node→account
-  ownership records can **sign and verify on a headless host**. Headless Linux has no OS keychain, so
-  the secret is 32 **raw bytes** at `node-auth-key.bin`, mode `0600` — the same both-shells channel the
-  desktop seals via `safeStorage`. When the managed runtime and launcher are available, headless
-  canvas-control launches route through `nodeterm-codex` and claim that signed node identity; an
-  unavailable capability still degrades to the bare `codex` command.
-- **Does NOT host the account-management verbs.** `initCodexAccounts` registers its IPC over Electron's
-  `ipcMain` with WebContents-owner authorization, which the headless bridge does not provide, so
-  `startServer` never calls it. This is **not** a silent gap: managed Codex logins **on an SSH host**
-  are driven by the **desktop** over SSH (the remote account-add / device-login / import legs + the
-  relay) — the host runs the relay + import, not its own copy of the account IPC.
-- **Fail-closed, both ways.** With no secret armed (unwritable key file), the record layer throws
-  rather than writing anything unsigned, and Codex nodes keep working bare. A machine with **no** managed
-  accounts is byte-for-byte the pre-S6 layout (a bare-root record per thread).
-- **A browser-only deployment therefore cannot manage Codex accounts** — the case issue #313 is
-  about. Managed **Claude** accounts moved into core (above); Codex did not follow, and the reason
-  is not effort: its switch verbs (`switchThread` / `commitSwitch` / `finishSwitch` /
-  `rollbackSwitch`) authorize the owning window by Electron **WebContents id**, which has no
-  meaning over a WS connection where every browser tab is an equally anonymous socket. Hosting
-  them headless needs a connection-identity redesign first, not a handler port. Until then the
-  `codexAccounts` namespace stays an `E_UNSUPPORTED` stub in the bridge and the Settings section
-  says so by name rather than failing silently — an unhandled rejection there previously stopped
-  the spinner and showed nothing.
+Switch reservations belong to one authenticated connection lifetime. Another owner tab cannot
+commit them; disconnect, logout, timeout and shutdown release them. Removal refuses accounts pinned
+by a live switch. Owner-only RPCs refuse relay peers. The browser uses real requests; an older host
+without these channels refuses them rather than inventing a local or system identity.
+
+`armServerNodeIdentity` continues to arm the signed thread/node/account records with the existing
+0600 host secret. Daemon, runtime and platform capability checks remain unchanged; this extraction
+does not prove that a particular installed Codex CLI supports its app-server. Windows retains the
+existing explicit app-server refusal and auth-file identity path. Real authenticated CLI/account
+switches on supported platforms still need device verification beyond filesystem/RPC fixtures.
+
+Server account administration currently supports local host accounts. An SSH context without an
+extracted SSH service refuses writes and returns an unknown identity for reads; it never falls back
+to this server's account. Desktop's SSH lifecycle retains its existing adapter.
 
 ## Manual browser smoke checklist
 

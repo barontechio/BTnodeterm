@@ -89,6 +89,18 @@ describe('managed Codex login settings barrier (#683)', () => {
     await act(async () => rejectSave(new Error('fixture write failure')))
     expect(launched).toEqual([])
     expect(waitLogin).not.toHaveBeenCalled()
-    expect(host.textContent).toContain('Could not set up the Codex account.')
+    expect(host.textContent).toContain('fixture write failure')
+  })
+
+  it('waits for a durable retry after an initial save failure before opening a login terminal', async () => {
+    await add()
+    await act(async () => rejectSave(new Error('initial save lost')))
+    const retry = [...host.querySelectorAll('button')].find((b) => b.textContent === 'Retry login')!
+    expect(retry).toBeTruthy()
+    await act(async () => retry.click())
+    expect(launched).toEqual([]); expect(waitLogin).not.toHaveBeenCalled()
+    await act(async () => acknowledge())
+    expect(launched).toEqual(['fixture-codex'])
+    expect(waitLogin).toHaveBeenCalledWith('fixture-codex')
   })
 })
