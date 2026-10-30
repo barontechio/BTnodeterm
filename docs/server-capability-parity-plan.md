@@ -73,6 +73,11 @@ owner-bound passphrase-response broker. Desktop consumes them and cancels prompt
 departure; the Server connection adapter remains part of PR 16. Existing instance socket namespaces
 are preserved. Focused tests cover wrong recipient, replay, expiry, reload and bounded cleanup.
 
+The shared SSH authentication snapshot passes all 24,379 tests (109 skipped) and both builds.
+Native/OpenSSH process runners and remote workspace reconciliation/throttling are now also shared
+core services consumed by Desktop. Server routing and streaming transfers still require their
+separate PR 16 adapter and multi-client scope validation.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

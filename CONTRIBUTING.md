@@ -190,6 +190,11 @@ Reload/disconnect invalidates its tickets. Askpass and app-owned ssh-agent servi
 core; native adapters retain their pre-core data-directory namespace so instances cannot unlink
 one another's sockets. Start these services lazily and release them with their owning shell.
 
+SSH process runners are composed in `core/remote-ssh/ssh-process-runners.ts`, preserving the
+process-wide child gate and native/OpenSSH backend choice. Inject the owning shell's agent and
+askpass services. Remote workspace reconciliation/throttling is shared in `core/remote-workspace-io.ts`;
+flush its trailing writes before ending masters, and preserve checked absence versus read failure.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

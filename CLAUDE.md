@@ -88,6 +88,12 @@ Desktop hooks renderer departure into this service. `ssh-agent` and `ssh-askpass
 services with native compatibility adapters; keep data-dir socket namespaces identical before and
 after CorePlatform initialization.
 
+`makeSshProjectRunners` shares native/OpenSSH process composition and the child gate across shells.
+Shells supply their own agent/askpass lifetimes, status and hook coordinates. Reuse
+`core/remote-workspace-io.ts` for checked remote reads, reconciliation and throttled canvas writes;
+flush before disconnect and re-owe a dropped trailing write. A transfer or remote read failure is
+never evidence that a host file is absent.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
