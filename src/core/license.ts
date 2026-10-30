@@ -3,7 +3,8 @@
 // Ed25519 public key. Offline grace: a still-unexpired stored token keeps premium alive when
 // a refresh can't reach the server. The offline check also binds the token to this machine's
 // device id and anchors expiry to the largest observed timestamp (clock-rollback guard).
-import { promises as fs, readFileSync } from 'fs'
+import { readFileSync } from 'fs'
+import { writeFileAtomic } from './fs-atomic'
 import path from 'path'
 import crypto from 'node:crypto'
 import { platform } from './platform'
@@ -50,15 +51,12 @@ interface Stored {
 function file(): string {
   return path.join(platform().userDataDir, 'license.json')
 }
-function load(): Stored {
+function load(storedFile = file()): Stored {
   try {
-    return JSON.parse(readFileSync(file(), 'utf-8')) as Stored
+    return JSON.parse(readFileSync(storedFile, 'utf-8')) as Stored
   } catch {
     return {}
   }
-}
-async function save(s: Stored): Promise<void> {
-  await fs.writeFile(file(), JSON.stringify(s), 'utf-8').catch(() => {})
 }
 
 interface Payload {
@@ -189,7 +187,7 @@ interface MintReply {
   termEndsAt?: unknown
 }
 
-async function call(path: string, body: unknown): Promise<MintReply> {
+async function call(path: string, body: unknown, lifetime?: AbortSignal): Promise<MintReply> {
   if (!allowed()) return { error: 'disabled' }
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
@@ -198,7 +196,7 @@ async function call(path: string, body: unknown): Promise<MintReply> {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: ctrl.signal
+      signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal
     })
     if (res.status === 204) return {}
     const json = (await res.json().catch(() => ({}))) as MintReply
@@ -220,12 +218,12 @@ interface StatusReply extends MintReply {
 }
 
 // GET helper for the device-bound status poll.
-async function getJson(path: string): Promise<StatusReply> {
+async function getJson(path: string, lifetime?: AbortSignal): Promise<StatusReply> {
   if (!allowed()) return { error: 'disabled' }
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: ctrl.signal })
+    const res = await fetch(`${API_BASE}${path}`, { signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal })
     const json = (await res.json().catch(() => ({}))) as StatusReply
     if (!res.ok) return { error: json.error ?? 'network' }
     return { ...json, answered: true }
@@ -273,10 +271,41 @@ export function __licenseRefreshesForTests(): Promise<void> {
   return refreshes
 }
 
-export function initLicense(onChange?: () => void): void {
-  const deviceId = getDeviceId()
+export interface LicenseHost {
+  register?(channel: string, handler: (...args: any[]) => unknown): void
+  emit?(status: LicenseStatus): void
+  openExternal?(url: string): Promise<void>
+  /** False when the requesting owner's connection/document expired. Background work has no owner. */
+  current?(): boolean
+  background?: boolean
+}
+
+/** One host lifetime owns all requests, polling, queued edits and timers. */
+export function initLicense(onChange?: () => void, host: LicenseHost = {}): { dispose(): Promise<void> } {
+  const shell = platform(); const storedFile = file(); const deviceId = getDeviceId()
+  const lifetime = new AbortController(); let stopped = false; let polling = false
+  let serial: Promise<unknown> = Promise.resolve()
+  const timers = new Set<ReturnType<typeof setTimeout>>()
+  const assertCurrent = () => { if (stopped || host.current?.() === false) throw new Error('license-owner-expired') }
+  const enqueue = <T>(work: () => Promise<T>): Promise<T> => {
+    const next = serial.then(() => { assertCurrent(); return work() })
+    serial = next.catch(() => {}); return next
+  }
+  const register = host.register ?? shell.handle.bind(shell)
+  const handle = (channel: string, handler: (...args: any[]) => unknown) => register(channel,
+    (...args) => { assertCurrent(); return enqueue(async () => handler(...args)) })
+  const read = () => load(storedFile)
+  const save = async (stored: Stored) => { assertCurrent(); await writeFileAtomic(storedFile, JSON.stringify(stored), { mode: 0o600 }) }
+  const networkCall = (route: string, body: unknown) => { assertCurrent(); return call(route, body, lifetime.signal) }
+  const networkGet = (route: string) => { assertCurrent(); return getJson(route, lifetime.signal) }
+  const later = (poll: () => Promise<void>) => {
+    if (stopped || host.current?.() === false) { polling = false; return }
+    const timer = setTimeout(() => { timers.delete(timer); void poll().catch(() => { polling = false }) }, 4000)
+    timer.unref?.(); timers.add(timer)
+  }
   const broadcast = (s: LicenseStatus) => {
-    platform().broadcast(IPC.licenseChanged, s)
+    if (stopped || host.current?.() === false) return
+    if (host.emit) host.emit(s); else shell.broadcast(IPC.licenseChanged, s)
     // Let the main process react to a Pro state change (activate / refresh / device-poll). The
     // launch-time refresh is ASYNC, so anything gated on isPremium() at boot (the standing phone
     // host) must re-reconcile once the entitlement settles — without this it would stay down
@@ -284,14 +313,14 @@ export function initLicense(onChange?: () => void): void {
     onChange?.()
   }
 
-  platform().handle(IPC.licenseStatus, () => statusOf(load()))
+  register(IPC.licenseStatus, () => { assertCurrent(); return statusOf(read()) })
 
   // Both routes are authorized by the stored entitlement token. Sending a deviceId instead would
   // hand a key — which works on ANY machine — to whoever learned an id that rides query strings,
   // telemetry and relay pairing. The token is the only credential on the wire here, and it goes
   // in the BODY, never the URL.
   const licenseCall = async (route: string): Promise<LicenseDetail> => {
-    const token = load().token
+    const token = read().token
     if (!token) return { ...EMPTY_DETAIL, error: 'unauthorized' }
     if (!allowed()) return { ...EMPTY_DETAIL, error: 'disabled' }
     // The timer covers the BODY too — see REQUEST_TIMEOUT_MS. This is the route the Release
@@ -303,7 +332,7 @@ export function initLicense(onChange?: () => void): void {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ entitlement: token }),
-        signal: ctrl.signal
+        signal: AbortSignal.any([ctrl.signal, lifetime.signal])
       })
       const json = (await res.json().catch(() => ({}))) as {
         key?: unknown
@@ -350,46 +379,45 @@ export function initLicense(onChange?: () => void): void {
     }
   }
 
-  platform().handle(IPC.licenseDetail, () => licenseCall('/v1/license/detail'))
-  platform().handle(IPC.licenseRelease, () => licenseCall('/v1/license/release'))
+  handle(IPC.licenseDetail, () => licenseCall('/v1/license/detail'))
+  handle(IPC.licenseRelease, () => licenseCall('/v1/license/release'))
 
   // Device-bound upgrade: open Stripe checkout (carrying our deviceId), then poll the status
   // endpoint until the webhook has bound + minted the entitlement. Status arrives via broadcast.
-  let polling = false
-  platform().handle(IPC.licenseUpgrade, async (target?: 'pro' | 'seats') => {
+  handle(IPC.licenseUpgrade, async (target?: 'pro' | 'seats') => {
     // 'seats' opens the add-seats (quantity) link; anything else opens base Pro. Both carry the
     // deviceId so the same device-bound webhook binds either purchase to this machine.
     const base = target === 'seats' ? SEATS_CHECKOUT_URL : CHECKOUT_URL
     const url = `${base}${base.includes('?') ? '&' : '?'}client_reference_id=${encodeURIComponent(deviceId)}`
-    await platform().openExternal(url)
+    await (host.openExternal ?? shell.openExternal.bind(shell))(url)
     if (!polling) {
       polling = true
       const deadline = Date.now() + 6 * 60 * 1000 // poll up to 6 min after opening checkout
-      const poll = async (): Promise<void> => {
-        if (Date.now() > deadline) {
+      const poll = async (): Promise<void> => enqueue(async () => {
+        if (stopped || host.current?.() === false || Date.now() > deadline) {
           polling = false
           return
         }
-        const r = await getJson(`/v1/license/status?deviceId=${encodeURIComponent(deviceId)}`)
+        const r = await networkGet(`/v1/license/status?deviceId=${encodeURIComponent(deviceId)}`)
         if (r.active && r.token) {
-          const next = withToken(load(), r)
+          const next = withToken(read(), r)
           await save(next)
           broadcast(statusOf(next))
           polling = false
           return
         }
-        setTimeout(() => void poll(), 4000)
-      }
-      setTimeout(() => void poll(), 4000)
+        later(poll)
+      })
+      later(poll)
     }
-    return statusOf(load())
+    return statusOf(read())
   })
 
-  platform().handle(IPC.licenseActivate, async (key: string) => {
-    const r = await call('/v1/license/activate', { key: String(key).trim(), deviceId })
+  handle(IPC.licenseActivate, async (key: string) => {
+    const r = await networkCall('/v1/license/activate', { key: String(key).trim(), deviceId })
     let status: LicenseStatus
     if (r.token) {
-      const next = { ...withToken(load(), r), key: String(key).trim() }
+      const next = { ...withToken(read(), r), key: String(key).trim() }
       await save(next)
       status = statusOf(next, r.error ?? null)
     } else {
@@ -399,9 +427,9 @@ export function initLicense(onChange?: () => void): void {
     return status
   })
 
-  platform().handle(IPC.licenseDeactivate, async () => {
-    const stored = load()
-    if (stored.key) await call('/v1/license/deactivate', { key: stored.key, deviceId })
+  handle(IPC.licenseDeactivate, async () => {
+    const stored = read()
+    if (stored.key) await networkCall('/v1/license/deactivate', { key: stored.key, deviceId })
     await save({ lastSeen: stored.lastSeen }) // keep the clock anchor across deactivations
     const status = statusFrom(undefined)
     broadcast(status)
@@ -411,17 +439,17 @@ export function initLicense(onChange?: () => void): void {
   // Advance the clock-rollback anchor (see verify()): record the largest timestamp we've
   // observed, so setting the system clock back can't revive an expired token.
   const bumpLastSeen = async (): Promise<void> => {
-    const stored = load()
+    const stored = read()
     const now = Math.floor(Date.now() / 1000)
     if (now > (stored.lastSeen ?? 0)) await save({ ...stored, lastSeen: now })
   }
 
   // Re-establish entitlement, keeping the last valid token on failure (offline grace).
   const refresh = async (): Promise<void> => {
-    const stored = load()
+    const stored = read()
     if (stored.key) {
       // Key-paste flow: refresh against the stored key.
-      const r = await call('/v1/license/refresh', { key: stored.key, deviceId })
+      const r = await networkCall('/v1/license/refresh', { key: stored.key, deviceId })
       if (r.token) {
         const next = withToken(stored, r)
         await save(next)
@@ -432,7 +460,7 @@ export function initLicense(onChange?: () => void): void {
     } else {
       // Device-bound flow (no key): re-poll status by deviceId. Covers a purchase that completed
       // after the in-app Upgrade poll window, and every later relaunch.
-      const r = await getJson(`/v1/license/status?deviceId=${encodeURIComponent(deviceId)}`)
+      const r = await networkGet(`/v1/license/status?deviceId=${encodeURIComponent(deviceId)}`)
       if (r.active && r.token) {
         const next = withToken(stored, r)
         await save(next)
@@ -458,7 +486,7 @@ export function initLicense(onChange?: () => void): void {
   // parked on `refreshes` so tests can await it, and with its errors logged rather than left to
   // the unhandled-rejection handler.
   //
-  // Queued, not merely tracked: bumpLastSeen is a read-modify-write of license.json (load() then
+  // Queued, not merely tracked: bumpLastSeen is a read-modify-write of license.json (read() then
   // save()), so two overlapping runs can interleave and let the OLDER `lastSeen` land last —
   // which walks the clock-rollback anchor BACKWARDS, the one thing it exists to prevent. In the
   // real app the runs are 6h apart and never overlap (an 8s fetch abort bounds each one), so this
@@ -466,13 +494,18 @@ export function initLicense(onChange?: () => void): void {
   // compressed — a test advancing days of fake time — and it made the rollback test flaky.
   const runRefresh = (): void => {
     refreshes = refreshes
-      .then(() => bumpLastSeen().then(refresh))
+      .then(() => stopped ? undefined : enqueue(() => bumpLastSeen().then(refresh)))
       .catch((err) =>
         console.warn('[license] refresh failed', err instanceof Error ? err.message : String(err))
       )
   }
 
   // On launch + every 6h while the app stays open (see REFRESH_INTERVAL_MS).
-  runRefresh()
-  setInterval(runRefresh, REFRESH_INTERVAL_MS).unref()
+  let interval: ReturnType<typeof setInterval> | undefined
+  if (host.background !== false) { runRefresh(); interval = setInterval(runRefresh, REFRESH_INTERVAL_MS); interval.unref() }
+  return { dispose: async () => {
+    stopped = true; lifetime.abort(); if (interval) clearInterval(interval)
+    for (const timer of timers) clearTimeout(timer); timers.clear()
+    await serial
+  } }
 }
