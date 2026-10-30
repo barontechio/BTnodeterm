@@ -1762,7 +1762,8 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
-# Server remote meter routing
+
+**Server remote meter routing**
 
 Known remote nodes must never resolve or replay a local transcript for context rehydration.
 Classify from saved workspace and live PTY routing, independently of transport availability or
