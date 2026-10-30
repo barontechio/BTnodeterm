@@ -1912,3 +1912,11 @@ member is claimed synchronously or none is; existing pane/control/create/teardow
 member refuses the batch. Capacity counts nodes, cancellation retains all fences until the effect
 settles, and caller mutation cannot change the captured member set. This exclusion does not reserve
 a filesystem path or authorize removal: worktree removal still needs its own path/project guard.
+
+Claude branching must prove a fresh branch marker and the same verified new runtime id under the
+source pane's host claim. A stale `/resume` line or an unconfirmed submit never authorizes opening
+a copy; uncertain effects are not retried. The original-resume continuation derives account/cwd/model
+from the saved target, honors project launch trust and validates again in the writer's disk queue.
+Persist before launch, retain a failed/cancelled command for manual recovery, and check the owner
+before each actual write. The protocol and continuation alone do not enable the Server command:
+its consent, submit-transition and new-pane exclusion adapters are separate required gates.

@@ -70,7 +70,8 @@ import {
   type AgentId,
   type BuiltinAgentId
 } from '../shared/agents/config'
-import { assembleLaunchCommand } from '../shared/agents/launch'
+import { assembleLaunchCommand, assembleResumeCommand } from '../shared/agents/launch'
+import { isClaudeBranchSessionId } from './claude-branch'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
 import { rootPositionWith } from '../shared/root-position'
@@ -722,16 +723,20 @@ export class HeadlessNodeFactory {
    *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
    * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
    */
-  private async launch(project: Project, node: CanvasNodeState, command: string): Promise<HeadlessLaunchResult> {
+  private async launch(project: Project, node: CanvasNodeState, command: string, current?: () => boolean): Promise<HeadlessLaunchResult> {
     if (!(await promptReadable(node.pendingLaunch?.promptFile))) return { outcome: 'failed', reason: 'prompt-file-missing' }
     if (!(await this.accountReady(node))) return { outcome: 'failed', reason: 'account-unavailable' }
+    if (current && !current()) return { outcome: 'failed', reason: 'cancelled' }
     const pty = this.deps.ptyManager
     try { return await launchHeadless(
       {
         persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
-        createHeadless: () => this.attach(project, node),
+        createHeadless: () => {
+          if (current && !current()) return Promise.reject(new Error('launch-owner-expired'))
+          return this.attach(project, node)
+        },
         paneCommand: (key) => pty.paneCommand(key),
-        writeHeadless: (key, data) => !this.stopped && pty.writeHeadless(key, data),
+        writeHeadless: (key, data) => !this.stopped && (!current || current()) && pty.writeHeadless(key, data),
         onOutput: (key, cb) => pty.onOutput(key, cb),
         releaseHeadless: (key) => pty.releaseHeadless(key),
         timing: this.deps.launchTiming
@@ -923,6 +928,79 @@ export class HeadlessNodeFactory {
     verified: boolean
   ): Promise<ServerControlReply> {
     return this.open(sourceNodeId, 'open-agent', args, verified)
+  }
+
+  /** Host-only continuation of a proven branch effect. No renderer callback or resume flag RPC. */
+  resumeClaudeOriginal(sourceId: string, targetId: string, originalId: string,
+    current: () => boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      try {
+        if (!isClaudeBranchSessionId(originalId) || sourceId === targetId) throw new Error('invalid branch continuation')
+        const select = (workspace: Workspace) => {
+          if (this.stopped || !current()) throw new Error('branch approval or target expired')
+          const source = sourceProject(workspace, sourceId)
+          const hits = workspace.projects.flatMap((project) => project.nodes.filter((node) => node.id === targetId).map((node) => ({ project, node })))
+          const target = hits.length === 1 ? hits[0] : undefined
+          if (!source || !target || source.project.id !== target.project.id || target.project.unavailable ||
+            target.project.ssh || isRemoteSessionNode(source.node) || isRemoteSessionNode(target.node) ||
+            !sourceCanControl(source.node, this.deps.agentIdOf) || !this.ownsMutation(sourceId, targetId, workspace, target.project) ||
+            target.node.kind !== 'terminal' || target.node.agentId !== 'claude' || target.node.pendingLaunch)
+            throw new Error('branch source/target is no longer available in caller scope')
+          const account = target.node.accountId ? this.deps.settings().claudeAccounts.find((a) => a.id === target.node.accountId) : undefined
+          if (target.node.accountId && (!account || account.pending || account.host)) throw new Error('branch account is unavailable')
+          const duplicate = workspace.projects.some((project) => project.nodes.some((node) =>
+            node.id !== targetId && node.agentId === 'claude' && node.accountId === target.node.accountId &&
+            !project.ssh && !isRemoteSessionNode(node) && (this.deps.sessionOf?.(node.id) ?? node.agentSessionId) === originalId))
+          if (duplicate) throw new Error('the original conversation already has another node')
+          const settings = this.deps.settings()
+          const binding = stableStringify({ source: launchIdentity(source.project, source.node),
+            target: launchIdentity(target.project, target.node), targetModel: target.node.agentModel,
+            account, mode: resolvePermissionMode(target.project, settings), launch: settings.agentLaunchCommands?.claude })
+          return { source, target, binding, settings }
+        }
+        const before = select(await this.readWorkspace())
+        if (!(await this.accountReady(before.target.node))) throw new Error('branch account directory is unavailable')
+        const caps = await this.deps.cliCaps()
+        const launchInfo = await this.deps.projectLaunchInfo?.(before.target.project.id)
+        const override = projectLaunchOverride('claude', launchInfo, before.settings)
+        if (override.requestTrust) {
+          this.deps.requestAgentsTrust?.(before.target.project.id)
+          throw new Error('the project launch command requires owner trust')
+        }
+        const command = assembleResumeCommand({ agentId: 'claude', sessionId: originalId,
+          model: before.target.node.agentModel, launchCmdOverride: override.command,
+          permissionMode: gatePermissionMode(resolvePermissionMode(before.target.project, before.settings), caps.autoPermissionMode) },
+        this.deps.env ?? process.env).command
+        const id = nextId('term')
+        const committed = await this.contentWriter.edit((workspace) => {
+          const fresh = select(workspace)
+          if (fresh.binding !== before.binding) throw new Error('branch execution/account settings changed')
+          const project = fresh.target.project; const target = fresh.target.node
+          const size = terminalSize(fresh.settings)
+          const node: CanvasNodeState = { id, kind: 'terminal', position: placeRight(project, target, size), size,
+            title: `${target.title || 'Claude'} (original)`, titleAuto: false, color: target.color,
+            group: null, tags: [], agentId: 'claude', agentSessionId: originalId,
+            ...(target.accountId ? { accountId: target.accountId } : {}),
+            ...(target.agentModel ? { agentModel: target.agentModel } : {}), cwd: target.cwd || project.cwd,
+            pendingLaunch: { after: [], command, executor: 'server', attempted: true, manualOnly: true } }
+          project.nodes.push(node)
+          const ropes = project.ropes ??= []; addEdge(ropes, sourceId, id, 'ctrl')
+          const bridges = project.bridges ??= []; addEdge(bridges, sourceId, id, 'link')
+          return { project, node }
+        })
+        if (!committed.saved) throw new Error('original resume could not be saved')
+        const { project, node } = committed.value
+        this.ownership.record(id, { sourceNodeId: sourceId, projectId: project.id })
+        await this.publishPersisted([project.id])
+        const launched = await this.startCreated(project, [node], new Map([[id, command]]), true, current)
+        return { ok: launched.failed.length === 0,
+          ...(launched.failed.length ? { error: 'original-resume-launch-failed: the saved node retains its launch; do not repeat branch' }
+            : { message: 'Original conversation saved in a new node; launch delivered, startup is not confirmed.' }),
+          result: { id, originalId, ...launched } }
+      } catch (error) {
+        return { ok: false, error: `original-resume-refused: ${error instanceof Error ? error.message : String(error)}; inspect the branch, do not repeat it` }
+      }
+    })
   }
 
   /** File one run-history line under the issue card. Never throws: history is a record of work,
@@ -1942,7 +2020,8 @@ export class HeadlessNodeFactory {
 
   /** Start a durable batch, then patch outcomes against fresh state. Never called before save. */
   private async startCreated(
-    target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean
+    target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean,
+    isCurrent?: () => boolean
   ) {
     const failed: string[] = []
     // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
@@ -1954,7 +2033,7 @@ export class HeadlessNodeFactory {
     }
     for (const node of created) {
       try {
-        if (this.stopped) { fail(node.id, 'cancelled'); continue }
+        if (this.stopped || (isCurrent && !isCurrent())) { fail(node.id, 'cancelled'); continue }
         const currentWorkspace = (await this.contentWriter.edit((fresh) => fresh)).value
         const holders = nodeProjects(currentWorkspace, node.id)
         const currentProject = holders.length === 1 && holders[0].id === target.id ? holders[0] : undefined
@@ -1975,7 +2054,7 @@ export class HeadlessNodeFactory {
           if (this.deps.releaseHeadlessAfterWork) { this.attached.delete(node.id); this.deps.ptyManager.releaseHeadless(node.id) }
           continue
         }
-        const launched = await this.launch(target, node, command)
+        const launched = await this.launch(target, node, command, isCurrent)
         if (trackAgentStartup && launched.fresh) this.awaitingFirstWorking.add(node.id)
         if (launched.outcome === 'delivered') { this.noteDelivered(node.id, command); node.pendingLaunch = undefined }
         else fail(node.id, launched.reason)

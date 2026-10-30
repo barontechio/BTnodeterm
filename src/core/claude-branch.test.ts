@@ -95,6 +95,17 @@ describe('host Claude branch proof', () => {
     expect(deps.onDispatched).not.toHaveBeenCalled()
   })
 
+  it('refuses an unreadable baseline or a session change during inspection before typing', async () => {
+    for (const changed of [true, false]) {
+      const f = fixture(); f.deps.capture.mockImplementation(async () => {
+        if (changed) f.state.sessionId = otherId
+        return changed ? 'old screen' : ''
+      })
+      expect(await performClaudeBranch(originalId, f.deps)).toMatchObject({ outcome: 'refused' })
+      expect(f.deps.submit).not.toHaveBeenCalled(); expect(f.deps.onDispatched).not.toHaveBeenCalled()
+    }
+  })
+
   it('retains uncertain delivery and never retries a failed or withheld submit', async () => {
     for (const reason of ['failed', 'not-submitted'] as const) {
       const f = fixture(); const submit = vi.fn(async () => ({ sent: false as const, reason }))

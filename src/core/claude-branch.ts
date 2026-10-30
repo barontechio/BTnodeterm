@@ -2,6 +2,7 @@ import type { EmptyPromptResult } from '../shared/text-delivery'
 import { TEXT_NOT_SUBMITTED } from '../shared/text-delivery'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const isClaudeBranchSessionId = (value: unknown): value is string => typeof value === 'string' && UUID.test(value)
 const MAX_CAPTURE = 256 * 1024
 // capture-pane can wrap inside a UUID. Accept line wrapping within that fixed grammar only.
 const wrapped = (count: number) => Array.from({ length: count }, () => '[0-9a-f]').join('(?:[ \\t]*\\r?\\n[ \\t]*)?')
@@ -50,7 +51,7 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  * Does not open a copy, authorize a caller or acquire a node claim; the domain adapter owns those.
  */
 export async function performClaudeBranch(original: string, deps: Dependencies): Promise<ClaudeBranchResult> {
-  if (!UUID.test(original)) return { outcome: 'refused', reason: 'branch-original-session-invalid' }
+  if (!isClaudeBranchSessionId(original)) return { outcome: 'refused', reason: 'branch-original-session-invalid' }
   const originalId = original.toLowerCase(); const now = deps.now ?? Date.now
   let attempted = false; let marked = false
   const check = () => { if (deps.signal.aborted) throw new Error('branch-cancelled'); deps.assertCurrent() }
@@ -63,7 +64,9 @@ export async function performClaudeBranch(original: string, deps: Dependencies):
   try {
     check()
     if (session() !== originalId) throw new Error('branch-session-changed')
-    const before = evidence(await deps.capture(), originalId)
+    const initial = await deps.capture()
+    if (!initial.trim()) throw new Error('branch-capture-unavailable')
+    const before = evidence(initial, originalId)
     check()
     if (session() !== originalId) throw new Error('branch-session-changed')
     attempted = true

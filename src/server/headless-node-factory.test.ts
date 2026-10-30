@@ -17,6 +17,7 @@ import type { AgentState } from '../shared/agents/normalize'
 import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
 import { RUN_NOW_AFTER_SUCCESS_REFUSAL, type StationOutcomeRecord } from '../shared/station-outcome'
+import { resolveProjectSettings } from '../shared/project-settings'
 import {
   DEFAULT_SETTINGS,
   type CanvasMutation,
@@ -198,6 +199,95 @@ describe('HeadlessNodeFactory', () => {
     factory.stop()
     resetPlatformForTests()
     fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  describe('host-only original conversation resume', () => {
+    const originalId = 'c231df2f-74df-43a0-807d-d389a36d16ba'
+    const target = async () => {
+      const opened = await factory.openAgent('term-source', { agent: 'claude' }, true)
+      expect(opened.ok).toBe(true)
+      return (opened.result as { id: string }).id
+    }
+
+    it('persists and resumes the exact original with the target account, cwd and model', async () => {
+      const targetId = await target(); const cwd = path.join(projectDir, 'subdir'); fs.mkdirSync(cwd)
+      fs.mkdirSync(path.join(dataDir, 'claude-accounts/branch-account'), { recursive: true })
+      settingsOverride.claudeAccounts = [{ id: 'branch-account', label: 'Branch', createdAt: 1 }]
+      await store.updateWorkspace((workspace) => {
+        Object.assign(workspace.projects[0].nodes.find((node) => node.id === targetId)!,
+          { accountId: 'branch-account', cwd, agentModel: 'model-x', title: 'Target' })
+        return workspace
+      })
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok).toBe(true)
+      const id = (reply.result as { id: string }).id
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === id)).toMatchObject({
+        agentId: 'claude', accountId: 'branch-account', agentSessionId: originalId, cwd, agentModel: 'model-x', title: 'Target (original)' })
+      expect(pty.creates.find((created) => created.persistKey === id)?.accountId).toBe('branch-account')
+      expect(pty.sends.find((send) => send.nodeId === id)?.text).toContain(`--resume ${originalId}`)
+      expect(pty.sends.find((send) => send.nodeId === id)?.text).toContain("--model 'model-x'")
+      expect(factory.ownsSpawn('term-source', id)).toBe(true)
+    })
+
+    it('rechecks target presence in the save queue after asynchronous capability work', async () => {
+      const targetId = await target(); const count = pty.creates.length; const caps = await factoryDeps.cliCaps()
+      vi.spyOn(factoryDeps, 'cliCaps').mockImplementationOnce(async () => {
+        await store.updateWorkspace((workspace) => {
+          workspace.projects[0].nodes = workspace.projects[0].nodes.filter((node) => node.id !== targetId)
+          return workspace
+        })
+        return caps
+      })
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok).toBe(false); expect(pty.creates).toHaveLength(count)
+      expect((await store.load()).projects[0].nodes.some((node) => node.title.endsWith('(original)'))).toBe(false)
+    })
+
+    it('retains a durable launch without typing when its owner leaves during PTY creation', async () => {
+      const targetId = await target(); let current = true; const sent = pty.sends.length
+      pty.beforeCreate = async () => { current = false }
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => current)
+      expect(reply.ok).toBe(false)
+      const id = (reply.result as { id: string }).id
+      expect(pty.sends).toHaveLength(sent)
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === id)?.pendingLaunch).toMatchObject({
+        command: expect.stringContaining(`--resume ${originalId}`), executor: 'server', manualOnly: true })
+    })
+
+    it('refuses an already represented original conversation and an unavailable target account', async () => {
+      const targetId = await target(); const created = pty.creates.length
+      await store.updateWorkspace((workspace) => {
+        workspace.projects[0].nodes[0].agentSessionId = originalId
+        return workspace
+      })
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('already has another node') })
+      await store.updateWorkspace((workspace) => {
+        delete workspace.projects[0].nodes[0].agentSessionId
+        workspace.projects[0].nodes.find((node) => node.id === targetId)!.accountId = 'missing'
+        return workspace
+      })
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('account is unavailable') })
+      expect(pty.creates).toHaveLength(created)
+    })
+
+    it('requires host trust before resuming through the original project wrapper', async () => {
+      const targetId = await target()
+      const info = { resolved: resolveProjectSettings(undefined, {
+        agents: { defaultAgentId: 'claude', launchCmd: 'project-claude --safe' } }),
+      trusted: { agents: false, shell: false } }
+      factoryDeps.projectLaunchInfo = async () => info
+      const request = factoryDeps.requestAgentsTrust = vi.fn()
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('requires owner trust') })
+      expect(request).toHaveBeenCalledWith('project-1')
+      info.trusted.agents = true
+      const resumed = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(resumed.ok).toBe(true)
+      expect(pty.sends.find((send) => send.nodeId === (resumed.result as { id: string }).id)?.text)
+        .toContain(`project-claude --safe --resume ${originalId}`)
+    })
   })
 
   it('creates a terminal PTY, persists both workspace index and project file, and publishes it', async () => {
