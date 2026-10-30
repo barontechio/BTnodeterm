@@ -44,6 +44,9 @@ def main():
         leaf = session + '.jsonl'
         matches = []
         names = []
+        def version(value): return (value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns)
+        root_version = version(os.fstat(root))
+        discovered = []
         with os.scandir(root) as entries:
             for entry in entries:
                 if len(names) >= ${DIRECTORY_LIMIT}: raise OSError()
@@ -53,10 +56,16 @@ def main():
             if stat.S_ISLNK(entry.st_mode): raise Unsafe()
             if not stat.S_ISDIR(entry.st_mode): continue
             with opened(name, directory, root) as project:
+                discovered.append((name, version(os.fstat(project))))
                 try: item = os.stat(leaf, dir_fd=project, follow_symlinks=False)
                 except FileNotFoundError: continue
                 if not stat.S_ISREG(item.st_mode): raise Unsafe()
                 matches.append(name)
+        def discovery_current():
+            if version(os.fstat(root)) != root_version: raise Unsafe()
+            for name, expected in discovered:
+                if version(os.stat(name, dir_fd=root, follow_symlinks=False)) != expected: raise Unsafe()
+        discovery_current()
         if not matches:
             directories_current()
             return 66
@@ -68,6 +77,7 @@ def main():
         if not stat.S_ISREG(initial.st_mode): raise Unsafe()
         def current():
             directories_current()
+            discovery_current()
             named = os.stat(leaf, dir_fd=project, follow_symlinks=False)
             if not stat.S_ISREG(named.st_mode) or not same(named, initial): raise Unsafe()
         current()

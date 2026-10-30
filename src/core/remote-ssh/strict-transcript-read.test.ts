@@ -137,4 +137,18 @@ os.scandir = many
 os.supports_fd.add(many)`
     expect(await execute(instrument(f.q, before))).toEqual({ code: 68, stdout: '' })
   })
+
+  it('does not publish absence when a scanned project changes during discovery', async () => {
+    const f = fixture()
+    const before = `import os
+original_stat = os.stat
+def changed(name, **kw):
+    try: return original_stat(name, **kw)
+    except FileNotFoundError:
+        if name == ${JSON.stringify(sessionId + '.jsonl')}:
+            with open(${JSON.stringify(f.file)}, 'w') as out: out.write('new transcript')
+        raise
+os.stat = changed`
+    expect(await execute(instrument(f.q, before))).toEqual({ code: 67, stdout: '' })
+  })
 })
