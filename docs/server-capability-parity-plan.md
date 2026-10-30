@@ -178,6 +178,11 @@ session/account/manual-title identity before publishing, prevents overlapping pa
 late publications after stop. Both Server close paths (and the already-running-server exit) stop
 the sweep. Focused tests include a real Server owner WebSocket reading a real temporary title file.
 
+This node-bound title snapshot passes 24,445 tests (109 skipped), typecheck and both builds.
+The independent [session title freshness #1327](https://github.com/eneskirca/nodeterm/pull/1327)
+exports the shared revalidation/lifetime fixes directly on upstream/main: 24,166 tests
+(109 skipped), typecheck and both builds, with no dependency changes.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |

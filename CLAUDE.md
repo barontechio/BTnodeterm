@@ -11367,3 +11367,10 @@ creator/project policy and single-use exact-text owner approval. A draft/dialog 
 nothing. Possible paste or uncertain submit is never resent. Mark the existing handover tracker
 and withdraw older outcomes inside exclusion before returning a submitted/uncertain result; the
 next hook may not have arrived. Desktop retains its existing confirmation/waiver orchestration.
+
+Server session-title RPC carries a trailing node id and uses `ServerSessionNames` to derive
+the current account/harness/host/session. Remote, missing or changed targets return no title;
+never let them search local histories. JSON-null optional arguments are normalized at the wire
+adapter. Both RPC and sweep discard changed bindings after a read; the shared sweep also checks
+manual-title/session/account state immediately before publication. Its timer passes do not overlap,
+and Server stops them on both shutdown paths so an in-flight read cannot publish after disposal.
