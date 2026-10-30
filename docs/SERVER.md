@@ -788,6 +788,12 @@ directory**.
 
 ### Opt-in canvas control and creator ownership
 
+The owning core loads `worktree-removals.json` before enabling launches. Normally it is absent and
+no file is created. If an interrupted removal is recorded, new physical starts inside that path
+are refused before falling back to home, including dangling aliases. Corrupt/unreadable recovery
+state refuses new starts until inspected; existing live panes remain usable. This is recovery
+infrastructure: confirmed agent worktree deletion and its recovery UI are still unavailable.
+
 Server canvas control is disabled by default. Set `NODETERM_SERVER_CANVAS_CONTROL=1` (or pass
 `--canvas-control`) to install the Server-local shim and enable its `/control/*` implementation.
 Every enabled request requires verified node identity. **Enabling it lets an agent session run

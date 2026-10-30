@@ -106,6 +106,7 @@ export class WorktreeRemovalJournal {
     })
   }
   list(): WorktreeRemovalRecord[] { this.ready(); return structuredClone(this.rows) }
+  reservedPaths(): string[] { this.ready(); return this.rows.map((row) => row.worktreePath) }
   blocks(canonicalDirectory: string): boolean {
     this.ready()
     if (!path.isAbsolute(canonicalDirectory) || path.resolve(canonicalDirectory) !== canonicalDirectory)

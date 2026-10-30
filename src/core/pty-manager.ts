@@ -1188,6 +1188,10 @@ export class PtyManager {
   private readonly controlDeliveries = new Map<string, number>()
   private backendStarts = 0
   private backendStartsPaused = false
+  private worktreeRecoveryAdmission: ((directory: string) => void) | null = null
+
+  /** Host-local recovery facts, injected by the owning shell; never a renderer-supplied check. */
+  setWorktreeRecoveryAdmission(check: ((directory: string) => void) | null): void { this.worktreeRecoveryAdmission = check }
 
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
@@ -4384,6 +4388,7 @@ export class PtyManager {
   ): string {
     this.nodeExecution.assertAllowed(options.persistKey ?? '')
     if (this.backendStartsPaused) throw new NodeExecutionError('busy')
+    if (!options.sshRemote) this.worktreeRecoveryAdmission?.(options.cwd || os.homedir())
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
     // node-pty's darwin spawn path LEAKS the pty it opened when `posix_spawn` fails:

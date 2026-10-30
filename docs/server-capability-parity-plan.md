@@ -414,6 +414,12 @@ requires reload after uncertain persistence. The filesystem must support directo
 deletion command is enabled by this storage foundation. Directory/canvas admission and the removal
 transaction remain the next adapter gate.
 
+Both owning shells now load recovery state before launches. Pending/recovered path markers block
+new physical starts before stale-cwd fallback, including missing descendants and dangling symlink
+aliases. Live co-attachments and unrelated directories retain their behavior; an empty journal adds
+no path-resolution IO. A real Server owner WebSocket fixture refuses a cold start inside a prepared
+removal. The directory/canvas mutation admission and confirmed removal/recovery UI remain pending.
+
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.
 - Unbind keeps the directory. Removal requires explicit confirmation, checks worktree ownership and uncommitted work, and refuses to affect the primary checkout or another worktree.

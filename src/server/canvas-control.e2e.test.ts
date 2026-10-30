@@ -29,6 +29,12 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
     fs.mkdirSync(transcripts, { recursive: true })
     fs.writeFileSync(path.join(transcripts, `${fixtureSession}.jsonl`), JSON.stringify({ type: 'custom-title', customTitle: 'Owner session title' }) + '\n')
     fs.mkdirSync(dataDir); fs.mkdirSync(cwd)
+    const recoveryCwd = path.join(root, 'removed-worktree')
+    fs.writeFileSync(path.join(dataDir, 'worktree-removals.json'), JSON.stringify({ kind: 'worktree-removals', version: 1, records: [{
+      id: 'prepared-removal', projectId: 'p', groupId: 'worktree-group', repoPath: cwd, worktreePath: recoveryCwd,
+      fallbackCwd: cwd, branch: 'feature', directoryStamp: '1:2', createdAt: Date.now(), phase: 'prepared',
+      members: [{ nodeId: 'worktree-group', binding: 'a'.repeat(64) }]
+    }] }))
     initPlatform(fakePlatform({ userDataDir: dataDir }))
     const store = new WorkspaceStore()
     const source = { id: 'source', kind: 'terminal' as const, agentId: 'claude' as const, title: 'Builder', color: '#000', group: null,
@@ -90,6 +96,7 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
         const id = ++requestId; pending.set(id, { resolve, reject }); socket!.send(JSON.stringify({ t: 'req', id, method, args } satisfies RpcRequest))
       })
       expect(await request(IPC.licenseCapabilities)).toMatchObject({ enabled: true, hostContext: 'server' })
+      await expect(request(IPC.ptyCreate, { persistKey: 'recovery-blocked-node', cwd: recoveryCwd, cols: 80, rows: 24 })).rejects.toThrow('worktree-recovery-required')
       expect(await request(IPC.controlBranchClaude, 'source')).toMatchObject({ ok: false, error: expect.stringContaining('branch-refused:') })
       expect((await store.load()).projects.flatMap((project) => project.nodes).some((node) => node.title.endsWith('(original)'))).toBe(false)
       expect(await request(IPC.ptyReadSessionName, fixtureSession, undefined, 'claude', 'source')).toBe('Owner session title')

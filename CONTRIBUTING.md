@@ -1974,3 +1974,10 @@ doing anything else: new bytes may already exist. Corruption, unknown versions, 
 an observed external edit refuse writes. Persist only bounded node identity hashes, never commands
 or credentials. Recovery phases and retained path tombstones grant no Git, node or canvas authority;
 the domain adapter must supply those and prove each transition. These primitives expose no RPC.
+
+Both owning shells load this journal before enabling launches and inject its physical-start guard
+into `PtyManager`. Check the requested local cwd before stale-cwd fallback or painter teardown.
+Resolve dangling symlink ancestors too: an alias to a removed checkout must not launch in home.
+Unverifiable paths refuse while recovery facts exist; an empty journal adds no path-resolution IO.
+Existing live co-attachments remain usable. Binding admission and the removal/recovery UI still
+belong to the worktree domain adapter.

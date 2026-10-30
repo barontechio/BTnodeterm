@@ -91,6 +91,19 @@ describe('PtyManager headless taps (#925)', () => {
     return m
   }
 
+  it('checks recovery before stale-cwd fallback or allocating a physical backend', async () => {
+    const m = await manager()
+    const existing = await m.createHeadless({ persistKey: 'existing', cols: 80, rows: 24 })
+    const admission = vi.fn((directory: string) => { if (directory === '/removed-checkout') throw new Error('worktree-recovery-required') })
+    m.setWorktreeRecoveryAdmission(admission)
+    await expect(m.createHeadless({ persistKey: 'blocked', cwd: '/removed-checkout', cols: 80, rows: 24 })).rejects.toThrow('recovery-required')
+    expect(admission).toHaveBeenCalledWith('/removed-checkout'); expect(spawned).toHaveLength(1)
+    expect((await m.createHeadless({ persistKey: 'existing', cols: 80, rows: 24 })).sessionId).toBe(existing.sessionId)
+    expect(admission).toHaveBeenCalledOnce()
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    expect(spawned).toHaveLength(2); m.killAll()
+  })
+
   it('holds worktree members and new backend starts while unrelated live input remains available', async () => {
     const m = await manager()
     await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })

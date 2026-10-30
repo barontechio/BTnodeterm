@@ -63,6 +63,7 @@ import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../cor
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
 import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
+import { initWorktreeRecovery } from '../core/worktree-recovery'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
@@ -875,6 +876,7 @@ export async function startServer(
   registerIntegrationIpc(integrations)
   const hookStartupWarning = await hookServer.startForApp()
   if (hookStartupWarning) console.error('[nodeterm-server]', hookStartupWarning)
+  const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null)
   // Safe default and rollback path. The opt-in runtime replaces this handler only after its
   // workspace-backed services are ready; a failed initialization therefore degrades to the same
   // named permanent refusal rather than a half-wired execution surface.
@@ -1382,6 +1384,7 @@ export async function startServer(
         pressure.stop()
         ptyPressure.stop()
         canvasControl?.stop()
+        await worktreeRecovery?.idle()
         await stopTranscriptSearch()
         workspaceWatcher.dispose()
         await contextLink.stop()
@@ -1471,6 +1474,7 @@ export async function startServer(
       pressure.stop()
       ptyPressure.stop()
       canvasControl?.stop()
+      await worktreeRecovery?.idle()
       await stopTranscriptSearch()
       workspaceWatcher.dispose()
       await contextLink.stop()
