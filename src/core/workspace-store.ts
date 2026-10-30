@@ -254,6 +254,15 @@ export async function writeAtomic(filePath: string, content: string): Promise<vo
   await writeFileAtomic(filePath, content)
 }
 
+/** Host-local execution exclusion. No browser payload can supply or disable this policy. */
+export interface WorkspaceExecutionAdmission {
+  active(): boolean
+  assertWorkspace(workspace: Workspace): void
+  assertProject(project: Project): void
+  assertStorageChange(projectId: string): void
+  assertCurrent(): void
+}
+
 /**
  * Whether `real` (already a real path) is the filesystem root, the real home directory, or a folder
  * that contains it. A shared folder is readable by every teammate, Viewers included, and a home
@@ -360,6 +369,16 @@ export class WorkspaceStore {
   private index: WorkspaceIndexV3 | null = null
   /** Optional hook fired after every load()/save() — the watcher re-syncs its watch set (Task 5). */
   onPersist?: () => void
+  private executionAdmission: WorkspaceExecutionAdmission | null = null
+  setExecutionAdmission(admission: WorkspaceExecutionAdmission | null): void { this.executionAdmission = admission }
+
+  private admitProjectFile(entry: IndexEntryV3, candidate: ProjectFileV1 | string): void {
+    if (!this.executionAdmission?.active()) return
+    const file = typeof candidate === 'string' ? JSON.parse(candidate) as ProjectFileV1 : candidate
+    const project = fileToProject(file, { id: entry.id, cwd: entry.cwd, ssh: entry.ssh,
+      localExec: localExecOverlay(entry, file) })
+    this.executionAdmission.assertProject(isFolderDataRef(entry) ? { ...project, storeInAppData: true } : project)
+  }
   /**
    * Some load in THIS run found no readable workspace.json — missing (deleted, a first run, a crash
    * between the corrupt-file set-aside and the next write), unreadable, unparsable, or parsable but no
@@ -1110,6 +1129,7 @@ export class WorkspaceStore {
   /** The index write itself, WITHOUT queueing — for callers that are already running on
    *  `saveChain` (queueing from inside a chain step would wait on the step itself). */
   private async writeIndexNow(): Promise<void> {
+    this.executionAdmission?.assertCurrent()
     const index = this.index
     if (!index) return
     this.applySettingsToIndex(index)
@@ -1276,6 +1296,7 @@ export class WorkspaceStore {
         throw new Error(`workspace-save-unavailable: ${p.id}; resolve the project file before saving`)
       }
     }
+    this.executionAdmission?.assertWorkspace(next)
     beforeSave?.(current, next)
     if (sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
     await this.saveNow(next, opts.localOnly === true, changed)
@@ -1445,6 +1466,7 @@ export class WorkspaceStore {
     const read = await this.readProjectFile(cwd, false)
     if (!read) return false
     const candidate = projectToFile(withContent(fileToProject(read.file, { id: e.id, cwd }), content), 0, savedAt)
+    this.admitProjectFile(e, candidate)
     // Unchanged: nothing to write, and no rev to burn.
     if (sameProjectContent(read.file, candidate)) return true
     let known: ProjectFileV1 | null = null
@@ -1485,6 +1507,7 @@ export class WorkspaceStore {
     const cachedById = new Map((Array.isArray(cached.nodes) ? cached.nodes : []).map((n) => [n.id, n]))
     const nodes = stripSharedNodeExec(content.nodes).map((n) => carryLocalNodeExec(cachedById.get(n.id), n))
     const updated = withContent(cached, { ...content, nodes })
+    this.executionAdmission?.assertProject(isFolderDataRef(e) ? { ...updated, cwd: e.cwd, storeInAppData: true } : updated)
     const viaFile = e.dataFile === true && isInlineProjectFileId(e.id)
     if (viaFile) {
       const landed = await this.writeDataFile(e.id, projectToFile(updated, 0, savedAt))
@@ -1526,6 +1549,7 @@ export class WorkspaceStore {
     // (the project file, the data file and the index are all written after this line). Never catch
     // it and write the workspace as handed: that is the stale copy the overlay exists to overrule.
     if (this.contentAuthority) workspace = await this.contentAuthority.overlaySave(workspace)
+    this.executionAdmission?.assertWorkspace(workspace)
     const savedAt = new Date().toISOString()
     const previousIndex = this.index
     const { index, files, dataFiles } = splitWorkspace(workspace, (id) => this.revs.get(id) ?? 0, savedAt)
@@ -1812,6 +1836,8 @@ export class WorkspaceStore {
    * also what makes a half-done migration consistent in both directions.
    */
   private async writeDataFile(projectId: string, candidate: ProjectFileV1): Promise<DataFileWrite> {
+    const admittedEntry = this.index?.entries.find((entry) => entry.id === projectId)
+    if (admittedEntry) this.admitProjectFile(admittedEntry, candidate)
     if (!isInlineProjectFileId(projectId)) return 'skipped'
     const file = inlineFilePath(projectId)
     const prev = this.lastWritten.get(file)
@@ -1956,6 +1982,7 @@ export class WorkspaceStore {
   }
 
   private async releaseFolderFilesNow(projectId: string, removeTracked: boolean): Promise<ReleaseFolderFilesResult> {
+    this.executionAdmission?.assertStorageChange(projectId)
     const e = this.index?.entries.find((x) => x.id === projectId)
     if (!e || !isFolderDataRef(e) || !e.cwd) return { ok: false, reason: 'not-app-data' }
     if (!isInlineProjectFileId(e.id) || !this.lastWritten.has(inlineFilePath(e.id))) {
@@ -2032,7 +2059,14 @@ export class WorkspaceStore {
     return run
   }
 
-  async prepareFolderStorage(projectId: string): Promise<PrepareFolderStorageResult> {
+  prepareFolderStorage(projectId: string): Promise<PrepareFolderStorageResult> {
+    const run = this.saveChain.then(() => this.prepareFolderStorageNow(projectId))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async prepareFolderStorageNow(projectId: string): Promise<PrepareFolderStorageResult> {
+    this.executionAdmission?.assertStorageChange(projectId)
     const e = this.index?.entries.find((x) => x.id === projectId)
     if (!e || !isFolderDataRef(e) || !e.cwd) return { ok: false, reason: 'not-app-data' }
     const state = await this.projectFileState(e.cwd)
@@ -2355,6 +2389,16 @@ export class WorkspaceStore {
   projectTargetInfo(projectId: string): { cwd?: string; ssh?: Project['ssh']; name: string } | null {
     const e = this.index?.entries.find((x) => x.id === projectId)
     return e ? { cwd: e.cwd, ssh: e.ssh, name: e.name } : null
+  }
+
+  /** Host-only location binding, using the same storage kind as load(). No disk IO or private
+   *  launch data. Ambiguous entries cannot authorize a host execution reservation. */
+  projectExecutionLocation(projectId: string): Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData'> | undefined {
+    const entries = this.index?.entries.filter((entry) => (entry.project?.id ?? entry.id) === projectId) ?? []
+    if (entries.length !== 1) return undefined
+    const entry = entries[0]
+    return structuredClone({ id: projectId, cwd: entry.cwd ?? entry.project?.cwd,
+      ssh: entry.ssh ?? entry.project?.ssh, storeInAppData: isFolderDataRef(entry) || undefined })
   }
 
   /** Resolve the shared project together with its machine-local trust identity. The approval id
@@ -2853,6 +2897,7 @@ export class WorkspaceStore {
     }
     const updated = appendProjectNode(raw, input, now, accountColor)
     if (updated === null) return false
+    this.admitProjectFile(e, updated)
     try {
       await writeAtomic(file, updated)
     } catch {
@@ -2922,6 +2967,7 @@ export class WorkspaceStore {
       }
       const updated = removeProjectNode(raw, nodeId, now)
       if (updated === null) continue // not in this project (or unreadable file) — keep looking
+      this.admitProjectFile(e, updated)
       try {
         await writeAtomic(file, updated)
       } catch {
@@ -3133,6 +3179,7 @@ export class WorkspaceStore {
     }
     const updated = transform(raw)
     if (updated === null) return current()
+    this.admitProjectFile(e, updated)
     try {
       await writeAtomic(file, updated)
     } catch {

@@ -57,8 +57,17 @@ import type { CanvasMutation, MutationStamp } from '../shared/types'
 import { oneLine } from '../shared/one-line'
 
 export interface ClientMutationRejection { reason: string; canonical?: CanvasMutation }
-type ClientMutationAdmission = (projectId: string, mutation: CanvasMutation) => ClientMutationRejection | null
+type ClientMutationAdmission = (projectId: string, mutation: CanvasMutation, fromOwner: boolean) => ClientMutationRejection | null
 const clientAdmissions = new WeakMap<CorePlatform, ClientMutationAdmission>()
+type MutationObserver = (projectId: string, mutation: CanvasMutation, trusted: boolean) => void
+const mutationObservers = new WeakMap<CorePlatform, MutationObserver>()
+
+/** Host-local observation in the same total order, including Core publications. This grants no
+ * authority to publish or persist. Called before wire fan-out with owner-local launch provenance. */
+export function setCanvasMutationObserver(observer: MutationObserver | null): void {
+  if (observer) mutationObservers.set(platform(), observer)
+  else mutationObservers.delete(platform())
+}
 
 /** Host-owned domain admission before a client op enters the total order. Core publishers keep
  * their own transaction checks. A refused optimistic edit receives a separate canonical op,
@@ -73,7 +82,7 @@ function clientMutationRefused(p: CorePlatform, senderId: number, projectId: str
   const admit = clientAdmissions.get(p)
   if (!admit) return false
   let rejection: ClientMutationRejection | null
-  try { rejection = admit(projectId, mutation) }
+  try { rejection = admit(projectId, mutation, fromOwner) }
   catch { rejection = { reason: 'The host could not validate this edit. Reload the project before retrying.' } }
   if (!rejection) return false
   // Retire this sender's optimistic pending slot first. The refused value reaches neither the
@@ -87,7 +96,7 @@ function clientMutationRefused(p: CorePlatform, senderId: number, projectId: str
     delete correction.src
     correction.seen = seq
     const stamped = stampMutation(correction, ++seq)
-    tellListener(projectId, stamped)
+    tellListener(projectId, stamped, true)
     fanOutMutation(p, projectId, stamped, true)
   }
   p.sendTo(senderId, IPC.canvasMutationRejected, projectId, oneLine(rejection.reason || 'The host refused this edit. Reload the project.').slice(0, 512))
@@ -207,7 +216,9 @@ export function setReflectedListener(fn: ((projectId: string, m: CanvasMutation)
  *  the authority's state carries no exec field (core/canvas-authority.ts rule 1), and a launch
  *  reaches disk only through a save's own exec carry, into the machine-local index. Its reducer
  *  would drop an unvouched launch anyway; stripping it here keeps it out of the op log too. */
-function tellListener(projectId: string, stamped: CanvasMutation): void {
+function tellListener(projectId: string, stamped: CanvasMutation, trusted = false): void {
+  try { mutationObservers.get(platform())?.(projectId, stamped, trusted) }
+  catch (err) { console.warn('[canvas-sync] the host mutation observer threw', err) }
   if (!reflectedListener) return
   try {
     reflectedListener(projectId, sanitizeInboundMutation(stamped))
@@ -241,7 +252,7 @@ export function publishCanvasMutation(
   if (!clean) return false
   const p = platform()
   const stamped = stampMutation(clean, ++seq)
-  tellListener(projectId, stamped)
+  tellListener(projectId, stamped, trusted)
   fanOutMutation(p, projectId, stamped, trusted)
   return true
 }
@@ -277,7 +288,7 @@ export function initCanvasSync(): void {
     if (!clean) return
     if (clientMutationRefused(p, senderId, projectId, clean, fromOwner)) return
     const stamped = stampMutation(clean, ++seq)
-    tellListener(projectId, stamped)
+    tellListener(projectId, stamped, fromOwner)
     fanOutMutation(
       { clientIds: () => reflectTargets(p.clientIds(), senderId), sendTo: p.sendTo.bind(p), isOwnerClient: p.isOwnerClient?.bind(p) },
       projectId,

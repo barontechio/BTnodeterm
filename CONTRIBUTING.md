@@ -60,6 +60,12 @@ projections between Desktop and Server. Host commands authorize every affected n
 serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
 lazy defaults; assignment changes never launch or type into a session.
 
+Host operations that need stable canvas execution metadata can use `CanvasExecutionReservations`
+with a real node batch claim. Acquire the metadata reservation inside the workspace writer FIFO,
+retain it until dispatched work settles, and release explicitly. Store admission runs before Core
+publication and disk writes; client admission corrects refused optimistic edits. Ordered mutation
+observation keeps allowed visual changes in corrections. This primitive does not enable removal.
+
 Global transcript search is owner-only and local to the host's configured Claude account roots.
 Index refresh identity is the transcript path, since session ids can repeat across accounts.
 Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.

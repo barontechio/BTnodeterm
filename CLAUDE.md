@@ -138,6 +138,16 @@ human-facing half of the same rule.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+`CanvasExecutionReservations` is a host-local execution-metadata fence, separate from historical
+worktree recovery path markers. Acquire it with the actual node batch permit inside the workspace
+writer FIFO; waiting for `idle()` and acquiring later leaves a gap. It excludes execution, account,
+directory, storage and group membership changes while allowing layout edits and unrelated nodes.
+`WorkspaceStore.setExecutionAdmission` checks candidate content before publication/persistence,
+including authority flushes and phone writers. Client admission and the ordered host observer keep
+refused optimistic edits convergent without reverting accepted visual edits or losing local exec
+carry. Retain the fence through actual effect settlement even after owner departure. The primitive
+does not grant actor rights, lock external filesystem writers, or enable a worktree removal RPC.
+
 ## What this is
 
 **Node-based terminal manager** (BUSL-1.1, converts to MIT after 4 years — see `LICENSE`): multiple real terminals live on a single

@@ -420,6 +420,14 @@ aliases. Live co-attachments and unrelated directories retain their behavior; an
 no path-resolution IO. A real Server owner WebSocket fixture refuses a cold start inside a prepared
 removal. The directory/canvas mutation admission and confirmed removal/recovery UI remain pending.
 
+The canvas execution reservation primitive now pairs an actual host batch claim with conditional
+workspace admission, acquired inside the store FIFO. Folder, app-data and inline content writers,
+phone registration/removal and storage changes reject incompatible execution metadata before
+publication or disk writes. Optimistic client correction retains accepted visual updates through
+an ordered host observer and keeps private exec carry. Reservations outlive owner departure until
+the dispatched effect settles. This primitive is not yet installed as a removal transaction; path
+reference admission, recovery actions and confirmed owner/agent removal remain pending.
+
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.
 - Unbind keeps the directory. Removal requires explicit confirmation, checks worktree ownership and uncommitted work, and refuses to affect the primary checkout or another worktree.
