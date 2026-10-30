@@ -10,6 +10,7 @@
 // overwrite hardlink. Based on @Corvin's `codex-accounts.ts` in PR #112, re-sliced onto the PR 3/4
 // primitives with the SSH transfer source leg (its remote landing is PR 6).
 import { randomUUID } from 'crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { execFile } from 'child_process'
 import { promises as fs } from 'fs'
 import os from 'os'
@@ -195,7 +196,7 @@ export interface CodexAccountServiceDeps {
 
 /** Same managed-home primitives in both shells; owners are connection lifetimes, never ids alone. */
 export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispose(): void } {
-  const waiters = new Map<string, { cancelled: boolean }>()
+  const waiters = new Map<string, { cancelled: boolean; cancel(): void }>()
   const pendingSwitchExposures = new Map<string, PendingSwitchExposure>()
   const removingCodexAccounts = new Set<string>()
   function releasePendingSwitch(token: string): void {
@@ -230,8 +231,9 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
    * (that would mint, poll or delete a home on the wrong machine).
    */
   const remoteFor = (ctx?: { projectId?: string }): { mgr: CodexRemoteAccounts; projectId: string } | null => {
-    const projectId = typeof ctx?.projectId === 'string' && ctx.projectId ? ctx.projectId : undefined
-    if (!projectId) return null
+    if (ctx === undefined || ctx === null) return null
+    const projectId = typeof ctx.projectId === 'string' && ctx.projectId.trim() ? ctx.projectId : undefined
+    if (!projectId) throw new Error('ssh-invalid-project')
     const mgr = deps.remote?.()
     if (!mgr) throw new Error('SSH is not available in this build')
     return { mgr, projectId }
@@ -256,23 +258,27 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
     const remote = remoteFor(ctx)
     const home = localCodexAccountHome(id)
     if (waiters.size >= 32 || waiters.has(id)) throw new Error('Codex login wait is already pending or busy')
-    const waiter = { cancelled: false }
-    const unsubscribe = owner.onDeparture(() => { waiter.cancelled = true })
+    const abort = new AbortController()
+    const waiter = { cancelled: false, cancel() { this.cancelled = true; abort.abort() } }
+    const pause = () => delay(LOGIN_POLL_MS, undefined, { signal: abort.signal }).catch((error) => { if (!abort.signal.aborted) throw error })
+    const live = () => !disposed && owner.active() && !waiter.cancelled && Date.now() < deadline
+    const unsubscribe = owner.onDeparture(() => waiter.cancel())
     waiters.set(id, waiter)
     const deadline = Date.now() + LOGIN_TIMEOUT_MS
     try {
-      while (!disposed && owner.active() && !waiter.cancelled && Date.now() < deadline) {
+      while (live()) {
         if (remote) {
           // Same gate as locally (a real, non-symlink auth.json), asked ON the host. The email comes
           // from the account's own app-server; a host that cannot run one (no node/curl for the
           // relay) still completes the login, just without an email to name the row by.
           if (await remote.mgr.remoteCodexAuthPresent(remote.projectId, id)) {
+            if (!live()) return null
             const identity = await remote.mgr
               .remoteCodexAccountIdentity(remote.projectId, id)
               .catch(() => null)
-            return identity ?? { email: null }
+            return live() ? identity ?? { email: null } : null
           }
-          await new Promise((resolve) => setTimeout(resolve, LOGIN_POLL_MS))
+          if (live()) await pause()
           continue
         }
         try {
@@ -281,12 +287,12 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
           const auth = await fs.lstat(path.join(home, 'auth.json'))
           if (auth.isFile() && !auth.isSymbolicLink()) {
             const identity = await accountIdentity(id)
-            if (identity) return identity
+            if (identity) return live() ? identity : null
           }
         } catch {
           // No credential file yet, or its daemon is not ready — keep polling.
         }
-        await new Promise((resolve) => setTimeout(resolve, LOGIN_POLL_MS))
+        if (live()) await pause()
       }
       return null
     } finally {
@@ -297,7 +303,7 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
 
   handle(IPC.codexAccountsCancelWait, (_event, id: string) => {
     const waiter = waiters.get(id)
-    if (waiter) waiter.cancelled = true
+    if (waiter) waiter.cancel()
   })
 
   // The two READS fail closed to `null` when a remote ctx cannot be served (no SSH manager): an
@@ -334,7 +340,7 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
     const remote = remoteFor(ctx)
     if (remote) {
       const waiter = waiters.get(id)
-      if (waiter) waiter.cancelled = true
+      if (waiter) waiter.cancel()
       // Stops the account's app-server and deletes its home ON the host (credential included).
       if (!(await remote.mgr.remoteCodexAccountRemove(remote.projectId, id))) {
         throw new Error('Could not remove the Codex account on the SSH host — is it connected?')
@@ -354,7 +360,7 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
     removingCodexAccounts.add(id)
     try {
       const waiter = waiters.get(id)
-      if (waiter) waiter.cancelled = true
+      if (waiter) waiter.cancel()
       try {
         const codex = await findInLoginPath('codex')
         if (codex) {
@@ -551,7 +557,7 @@ export function initCodexAccountService(deps: CodexAccountServiceDeps): { dispos
   )
   return { dispose: () => {
     disposed = true
-    for (const waiter of waiters.values()) waiter.cancelled = true
+    for (const waiter of waiters.values()) waiter.cancel()
     for (const token of [...pendingSwitchExposures.keys()]) releasePendingSwitch(token)
   } }
 }

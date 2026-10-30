@@ -71,6 +71,24 @@ describe('Server managed Codex owner RPC with real rollout files', () => {
     expect(fs.readFileSync(source, 'utf8')).toContain('thread-one')
   })
 
+  it('routes explicit remote accounts to SSH and discards a login result after owner departure', async () => {
+    accounts.dispose()
+    let answer!: (value: boolean) => void
+    const remote = {
+      remoteCodexAccountAdd: vi.fn(async () => ({ home: '/remote/isolated' })),
+      remoteCodexAuthPresent: vi.fn(() => new Promise<boolean>((resolve) => { answer = resolve })),
+      remoteCodexAccountIdentity: vi.fn(async () => ({ email: 'remote@example.invalid' })),
+      remoteCodexAccountRemove: vi.fn(async () => true), remoteCodexSwitchThread: vi.fn(async () => ({}))
+    }
+    accounts = registerServerCodexAccounts(platform, () => remote)
+    expect(await call(first, IPC.codexAccountsAdd, { projectId: 'remote' })).toMatchObject({ ok: true, result: { home: '/remote/isolated' } })
+    expect(remote.remoteCodexAccountAdd).toHaveBeenCalledWith('remote', expect.any(String))
+    const waiting = call(first, IPC.codexAccountsWaitLogin, 'source', { projectId: 'remote' })
+    accounts.forgetClient(first); platform.detach(first); answer(true)
+    expect(await waiting).toMatchObject({ ok: true, result: null })
+    expect(await call(second, IPC.codexAccountsAdd, {})).toMatchObject({ ok: false, error: { message: 'ssh-invalid-project' } })
+  })
+
   it('releases reservations on departure and refuses a stale connection or replay', async () => {
     const ticket = token(await prepare())
     accounts.forgetClient(first); platform.detach(first)
