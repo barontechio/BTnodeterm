@@ -4,7 +4,7 @@ import type { AgentId } from '../shared/agents/config'
 import { IPC } from '../shared/ipc'
 import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import type { EmptyPromptResult } from '../shared/text-delivery'
-import { DEFAULT_SETTINGS, type CanvasNodeState } from '../shared/types'
+import { DEFAULT_SETTINGS, type CanvasNodeState, type Settings } from '../shared/types'
 import { ConfirmedNodeWrite } from './confirmed-node-write'
 import { NodeExecutionCoordinator } from './node-execution'
 import { OwnerConfirmationBroker } from './owner-confirmation'
@@ -23,6 +23,7 @@ describe('confirmed host node write', () => {
   let sourceSession: string; let targetSession: string; let state: 'done' | 'working'
   let physical: object; let owns: boolean; let stopped: boolean; let owner: PaneOwner
   let handedOver: boolean
+  let settings: Settings
   let paneOwner: ReturnType<typeof vi.fn<() => Promise<PaneOwner | null>>>
   let send: ReturnType<typeof vi.fn<(id: string, text: string, agentId: AgentId) => Promise<EmptyPromptResult>>>
   const run = () => control.run('source', { node: 'target', text: 'Review the implementation\nKeep my files.' }, true)
@@ -43,10 +44,11 @@ describe('confirmed host node write', () => {
     sourceSession = 'source-session'; targetSession = 'target-session'; state = 'done'
     physical = {}; owns = true; stopped = false; owner = structuredClone(foreground)
     handedOver = false
+    settings = structuredClone(DEFAULT_SETTINGS)
     execution = new NodeExecutionCoordinator(); broker = new OwnerConfirmationBroker(host)
     paneOwner = vi.fn(async () => owner)
     send = vi.fn(async (_id: string, _text: string, _agentId: AgentId): Promise<EmptyPromptResult> => ({ sent: true }))
-    control = new ConfirmedNodeWrite({ workspace, confirmations: broker, settings: () => DEFAULT_SETTINGS,
+    control = new ConfirmedNodeWrite({ workspace, confirmations: broker, settings: () => settings,
       runtime: (id) => ({ agentId: 'claude', sessionId: id === 'source' ? sourceSession : targetSession,
         state: id === 'target' ? state : 'working', verified: true }), scope: () => 'creator',
       ownsSpawn: () => owns, stopped: () => stopped,
@@ -156,6 +158,16 @@ describe('confirmed host node write', () => {
     expect(send).not.toHaveBeenCalled()
     expect(workspace.getNodeResolved('target')?.pendingLaunch).toBeUndefined()
     expect(workspace.getNodeForHostAction('target')?.pendingLaunch?.command).toBe('claude --resume elsewhere')
+  })
+
+  it('refuses a linked-account directory change after approval even when the account id is unchanged', async () => {
+    settings.claudeAccounts = [{ id: 'linked', label: 'Linked', configDir: '/old-account', createdAt: 1 }]
+    await change((target) => { target.accountId = 'linked' })
+    broker.connect(1); const pending = run(); const request = await prompt()
+    settings.claudeAccounts[0].configDir = '/new-account'
+    await approve(request)
+    expect(await pending).toMatchObject({ ok: false, result: { outcome: 'refused' } })
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('reports uncertainty after owner departure during a dispatch and accepts a normal hook state transition', async () => {

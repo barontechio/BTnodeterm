@@ -9,6 +9,7 @@ export interface SessionNameTarget {
   sessionId: string
   agentId: string
   accountId?: string
+  accountConfigDir?: string
   cwd?: string
   projectCwd?: string
   remote: boolean

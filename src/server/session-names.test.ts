@@ -38,7 +38,7 @@ describe('Server node-bound session name reads', () => {
 
   it('drops a local result if routing, account, session or project changes during its read', async () => {
     for (const patch of [{ remote: true }, { accountId: 'other' }, { sessionId: 'replacement' },
-      { projectId: 'other' }, { cwd: '/other' }]) {
+      { projectId: 'other' }, { cwd: '/other' }, { accountConfigDir: '/relinked-account' }]) {
       let target = fixture(); let finish!: (name: string) => void
       const read = vi.fn(() => new Promise<string>((resolve) => { finish = resolve }))
       const names = new ServerSessionNames({ owner: () => true, target: () => target, read })

@@ -805,11 +805,28 @@ An uncertain delivery is reported explicitly and must not be resent: inspect the
 submitted and uncertain input retain the existing pending-work hold until recovery or a completed
 new turn, covering the interval before a new hook arrives. Text is limited to 64 KiB.
 
+`branch --node <id>` supports a different, verified idle local Claude node on a live POSIX tmux
+pane. It uses the same creator/project policy and requires individual owner approval of the exact
+account/folder/session. The original transcript must be readable in that account. One host claim
+spans composer inspection, fixed `/branch` input and verification of fresh output plus the matching
+new runtime session. An old `/resume` line is insufficient. Draft refusals preserve input; possible
+or unconfirmed input is never automatically repeated.
+
+After a confirmed branch, the selected pane stays on its new session. The host reserves a new node
+before publishing/persisting it, then resumes the original with its saved account, folder, model and
+trusted project launcher. A failed launch keeps its exact command for manual recovery; the reply
+distinguishes a confirmed branch with an incomplete copy from an uncertain branch command. The
+continuation rechecks owner lifetime and the physical generation before typing. SSH, Windows,
+session-host and Zellij branch delivery remain unavailable. The legacy Desktop/renderer branch
+path still needs its own coordinated adapter; these CLI guarantees do not describe that UI path.
+
 Mounted agent nodes now read their session titles through the owner WebSocket API, using the same
 per-agent reader as the host sweep. Requests carry the node id so equal conversation ids on
 different accounts/hosts cannot choose a reader by caller-supplied metadata. A remote, missing,
 pending-launch or replaced target returns no adopted title, preserving the node's existing title.
 SSH title reads remain pending; this path never falls through to the server's local histories.
+Title freshness also binds a linked account's directory, so re-linking the same account id cannot
+publish a title read from its previous folder.
 
 **Wider reach: `--control-scope project`.** `NODETERM_SERVER_CONTROL_SCOPE=project` (or
 `--control-scope project`; default `creator`, an unknown value fails the boot) lets an agent act on

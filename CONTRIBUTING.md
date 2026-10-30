@@ -1941,3 +1941,10 @@ Its notification runs after the Enter exec is issued and before awaiting its rep
 notification still waits for the real submit promise to settle. It grants no runtime identity by
 itself: the branch protocol must verify fresh output and a matching verified session, and the
 owner-confirmed domain service must hold the physical-node claim. No callback crosses IPC.
+
+`ConfirmedNodeBranch` and `ConfirmedNodeWrite` share `LocalClaudeActionTarget`, including linked
+account-directory identity and machine-local held launches. Branch approval stays outside queues;
+only the actual Enter dispatch permits a target session transition. Require fresh pane output and
+the matching verified new runtime before opening the original. Its continuation reserves the new
+node before publication, preserves launch recovery, and uses the existing delivery/creator ledgers.
+Legacy Desktop/renderer branch orchestration remains a separate adapter, not an implicit guarantee.

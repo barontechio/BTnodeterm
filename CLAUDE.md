@@ -11389,3 +11389,13 @@ set of nodes under one async execution context. Nested single claims do not own 
 busy member/capacity overflow before claiming any; owner departure keeps every fence until real
 work settles. Expired continuations remain invalid after release. This host-only primitive grants
 neither filesystem path ownership nor worktree-removal authority.
+
+Server CLI branching uses `ConfirmedNodeBranch` plus `LocalClaudeActionTarget`, sharing `write`'s
+caller/project/account checks. Bind linked config directories too. Owner consent precedes queues;
+the fixed local POSIX tmux submit path announces Enter dispatch before allowing the expected target
+session change. Fresh pane evidence and its verified runtime id are both required. Unknown input
+is never repeated. A confirmed branch's original-resume transaction reserves its new node before
+publication, binds its physical generation and retains failed launches for recovery. Private exec
+checks use `getNodeForHostAction`, never a shared record that omits pending commands. Backend
+resources/callbacks leave node-action ALS; expired application continuations do not. The legacy
+renderer/Desktop branch path still needs a coordinated domain adapter.

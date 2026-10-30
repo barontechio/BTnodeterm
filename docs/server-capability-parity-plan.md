@@ -28,8 +28,9 @@ and execution coordination work below. The PR 07 snapshot passed 24,275 tests wi
 shutdown-order source assertion; retaining the expected cleanup order fixes that assertion.
 The PR 08 snapshot passes all 24,288 tests (109 skipped) and both builds. Local audio/video
 streaming and `show-video` are connected through scoped, expiring owner references and authenticated
-HTTP Range responses. PR 09 is sequenced with host execution coordination before enabling it:
-the existing renderer `/branch` flow has no exclusion against restart/account changes.
+HTTP Range responses. The first PR 09 Server CLI adapter now uses owner-confirmed host execution,
+fresh branch/runtime proof and a reserved original-resume node. The existing renderer `/branch`
+flow still needs its coordinated Desktop/UI adapter for restart/account exclusion.
 The PR 10 snapshot passes all 24,302 tests (109 skipped) and both builds. External URL previews
 and optional isolated static HTML previews are now connected. Static HTML intentionally keeps
 scripts disabled: resource CSP alone cannot contain a script's self-navigation. Script-enabled
@@ -158,8 +159,8 @@ uncertain dispatches mark the existing handover tracker before releasing the nod
 older outcomes, so late hooks cannot make a second write reuse the previous idle state. Desktop
 retains its existing confirmation/waiver flow; the shared PTY boundary supplies its exclusion checks.
 Other agents and SSH writes remain explicitly unavailable until their input/identity readers meet
-the same checks. Branching, removal and the remaining account/restart orchestration still require
-their own coordinated adapters.
+the same checks. Removal and the remaining account/restart orchestration still require their own
+coordinated adapters. Server CLI branching is described below; the legacy renderer path remains pending.
 
 The Server message-envelope adapter now also lives in core and delegates to a compound
 PtyManager operation. One pane-write slot spans capture, paste, settlement and Enter, preventing
@@ -387,6 +388,16 @@ These are four independent leaf PRs that can proceed after their own mutation/po
 **Accept when:** two stations cannot claim the same directory or branch incorrectly; dirty/unreadable worktrees are preserved; bindings reconcile after restart; a failed canvas commit exposes the created directory for recovery. Land unbind/create before removal if the confirmation broker is not ready.
 
 ### PR 09 Share conversation branching
+
+The first Server CLI implementation is connected through `ConfirmedNodeBranch`. It shares saved
+target/account policy with `write`, verifies the original transcript and foreground pane, requires
+individual owner approval, and holds a node claim through fixed typed submission and fresh
+marker/runtime correlation. A dispatch notice permits only the expected target session transition.
+The original-resume continuation claims its new id before canvas publication and binds account,
+folder, model, owner lifetime and physical generation through launch. It preserves a durable manual
+recovery command on failure and reports a confirmed branch separately from an uncertain effect.
+This first adapter is local POSIX tmux Claude only, excludes the caller and bounds pending branch
+intents to one per target/32 per host. Desktop/UI coordination remains an acceptance gate below.
 
 - Extract the existing Claude branching workflow, including parking/resuming the correct session, transcript availability, account identity and per-node execution locks.
 - Preserve the current node/new node conversation mapping and refuse unsupported providers explicitly.

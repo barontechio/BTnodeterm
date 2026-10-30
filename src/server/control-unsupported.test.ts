@@ -246,6 +246,18 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     deliver: vi.fn(async () => ({ ok: true as const, message: 'queued' }))
   })
 
+  it('routes branch only after identity and argument checks, and names a missing adapter', async () => {
+    const branch = vi.fn(async () => ({ ok: true as const }))
+    const handler = createServerEditionControlHandler({ ...actions(), branch })
+    expect(await handler({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: false })).toMatchObject({ ok: false })
+    expect(await handler({ verb: 'branch', nodeId: 'src', args: {}, verified: true })).toMatchObject({ ok: false })
+    expect(branch).not.toHaveBeenCalled()
+    await handler({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: true })
+    expect(branch).toHaveBeenCalledWith('src', { node: 'target' }, true)
+    expect(await createServerEditionControlHandler(actions())({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: true }))
+      .toMatchObject({ ok: false, message: expect.stringContaining('branch-unavailable') })
+  })
+
   it('routes report-outcome to its action, after the shared parse', async () => {
     const a = actions()
     const handler = createServerEditionControlHandler(a)

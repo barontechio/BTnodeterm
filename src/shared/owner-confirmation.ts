@@ -1,4 +1,4 @@
-export type OwnerAction = 'write' | 'settings' | 'remove-worktree' | 'account-switch' | 'ssh-trust' | 'browser-control'
+export type OwnerAction = 'write' | 'branch' | 'settings' | 'remove-worktree' | 'account-switch' | 'ssh-trust' | 'browser-control'
 export interface OwnerConfirmation {
   id: string
   token: string

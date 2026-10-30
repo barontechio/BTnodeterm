@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import { ConfirmedNodeWrite } from '../core/confirmed-node-write'
+import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
+import { transcriptPresence } from '../core/transcript-reader'
 import type { OwnerConfirmationBroker } from '../core/owner-confirmation'
 import type { ControlScope } from './control-scope'
 import path from 'node:path'
@@ -251,7 +253,7 @@ export async function initServerCanvasControl(
 
   factoryRef = factory
 
-  const nodeWrites = deps.confirmations ? new ConfirmedNodeWrite({
+  const nodeActionDeps = deps.confirmations ? {
     workspace: deps.workspaceStore, pty: deps.ptyManager, confirmations: deps.confirmations,
     settings: deps.settings, scope: () => factory.controlScope,
     ownsSpawn: (source, target) => factory.ownsSpawn(source, target),
@@ -266,6 +268,11 @@ export async function initServerCanvasControl(
       return { agentId: entry?.agentId, sessionId: entry?.sessionId, state: entry?.state,
         verified: entry?.stateVerified === true && !entry.restored && !entry.idleInferred }
     }
+  } satisfies ConstructorParameters<typeof ConfirmedNodeWrite>[0] : undefined
+  const nodeWrites = nodeActionDeps ? new ConfirmedNodeWrite(nodeActionDeps) : undefined
+  const nodeBranches = nodeActionDeps ? new ConfirmedNodeBranch({ ...nodeActionDeps,
+    originalAvailable: async (id, accountId) => await transcriptPresence(id, accountId) === 'present',
+    resumeOriginal: (...args) => factory.resumeClaudeOriginal(...args)
   }) : undefined
 
   const messaging: AgentMessagingDeps = {
@@ -342,6 +349,7 @@ export async function initServerCanvasControl(
 
   const actions: ServerEditionControlActions = {
     write: nodeWrites ? (nodeId, args, verified) => nodeWrites.run(nodeId, args, verified) : undefined,
+    branch: nodeBranches ? (nodeId, args, verified) => nodeBranches.run(nodeId, args, verified) : undefined,
     orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),
     worktree: (verb, nodeId, args, verified) => factory.worktree(verb, nodeId, args, verified),
     reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {

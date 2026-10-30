@@ -27,7 +27,7 @@ export const CONTROL_SUPPORT = {
   'spawn-team': 'partial',
   'open-worktree': 'partial',
   'close-worktree': 'partial',
-  branch: 'unsupported',
+  branch: 'partial',
   rename: 'partial',
   color: 'supported',
   write: 'partial',
@@ -53,6 +53,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  branch: 'Verified idle local POSIX tmux Claude panes within operator scope; cannot branch the caller. Requires individual owner approval, a readable original transcript and a proven new session. Uncertain input must never be repeated.',
   write: 'Local verified idle Claude panes with an empty composer, within operator scope. Requires an attached owner and individual confirmation; uncertain input must never be resent.',
   'show-web': 'External HTTP(S) URLs use a sandboxed iframe; static local HTML requires a distinct configured HTTPS preview hostname. Local scripts and network resource loads are disabled.',
   'show-video': 'Local audio/video files; authenticated owner streaming with browser-dependent codec support. No SSH fallback.',

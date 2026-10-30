@@ -554,6 +554,7 @@ export async function startServer(
       const account = node.accountId ? (base === 'claude' ? settingsStore.get().claudeAccounts :
         base === 'codex' ? settingsStore.get().codexAccounts : []).find((candidate) => candidate.id === node.accountId) : undefined
       return { projectId: projects[0], nodeId, sessionId: entry.sessionId, agentId: node.agentId, accountId: node.accountId,
+        accountConfigDir: account && 'configDir' in account && typeof account.configDir === 'string' ? account.configDir : undefined,
         cwd: node.cwd, projectCwd: project.cwd,
         remote: !!project.ssh || isRemoteSessionNode(node) || !!ptyManager.sshRemoteForNode(nodeId),
         accountAvailable: !node.accountId || !!account && !account.pending && !account.host }

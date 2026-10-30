@@ -69,6 +69,8 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       await expect(cli('write', '--node', 'source', '--text', 'do not dispatch')).rejects.toMatchObject({
         stderr: expect.stringContaining('write-refused:')
       })
+      await expect(cli('branch', '--node', 'private')).rejects.toMatchObject({ stderr: expect.stringContaining('branch-refused:') })
+      expect((await store.load()).projects.flatMap((project) => project.nodes).some((node) => node.title.endsWith('(original)'))).toBe(false)
 
       socket = new WebSocket(`ws://127.0.0.1:${server.port}/ws`, { headers: { cookie: `nt_session=${session}` } })
       let requestId = 0
