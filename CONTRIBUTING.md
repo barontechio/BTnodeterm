@@ -184,6 +184,12 @@ keeps Electron prompts and IPC in main. Compatibility exports preserve old impor
 host-key, integration-consent, pending-kill, tunnel-repair and account-home checks when adding a shell.
 `core/ssh-store.ts` acknowledges serialized inventory edits only after owner-only atomic persistence.
 
+SSH secret prompts use `core/remote-ssh/passphrase-prompts.ts`: one recipient lifetime per
+request, bounded pending state, explicit decline distinct from no answer, and no secret echo/store.
+Reload/disconnect invalidates its tickets. Askpass and app-owned ssh-agent services also live in
+core; native adapters retain their pre-core data-directory namespace so instances cannot unlink
+one another's sockets. Start these services lazily and release them with their owning shell.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

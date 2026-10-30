@@ -80,6 +80,14 @@ consent, partial-write and account-home guards. Source guards follow the actual 
 The SSH inventory also lives in core: FIFO mutations return only after 0600 atomic persistence,
 keep the old cache on failure and return copies to callers.
 
+`PassphrasePrompts` is the host-only SSH secret-response broker. A request names one recipient
+owner lifetime and has a random id plus deadline; another connection, reload, expiry or oversized
+answer cannot resolve it. No-UI/disconnect/failure yields undefined; only explicit Cancel yields
+null. Release timers and transport waits on every exit, and never persist or broadcast an answer.
+Desktop hooks renderer departure into this service. `ssh-agent` and `ssh-askpass` are shared core
+services with native compatibility adapters; keep data-dir socket namespaces identical before and
+after CorePlatform initialization.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 

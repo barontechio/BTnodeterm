@@ -3,9 +3,10 @@ import { runScpArgv, runSshArgv, startNativeMaster } from '../../core/remote-ssh
 import path from 'path'
 import { spawn, execFile, execFileSync } from 'child_process'
 import { app, ipcMain } from 'electron'
-import { MASTER_STDERR_CAP, PROMPT_WAIT_MS } from '../../core/remote-ssh/ssh-project-limits'
+import { MASTER_STDERR_CAP } from '../../core/remote-ssh/ssh-project-limits'
 import { IPC } from '../../shared/ipc'
-import { getMainWindow, sendToMain } from '../main-window'
+import { getMainWindow, sendToMain, type MainWindowLike } from '../main-window'
+import { PassphrasePrompts, type PassphraseRecipient } from '../../core/remote-ssh/passphrase-prompts'
 import { type SshConnection } from '../../shared/ssh'
 import type { SshPassphraseRequest, SshProjectStatusEvent } from '../../shared/types'
 import { findExecutableSync, shellPathNow } from '../../core/exec-path'
@@ -47,99 +48,39 @@ function scpBin(): string {
   return found ?? 'scp'
 }
 
-/**
- * Pending renderer answers to sshPassphraseRequest, keyed by requestId. One `ipcMain.handle` for
- * sshPassphraseSubmit resolves whichever entry the user answered.
- */
-const pendingPassphrasePrompts = new Map<string, (value: string | null) => void>()
-
-/**
- * Push to the renderer without ever letting the UI's health become load-bearing. `isDestroyed()`
- * on the window is NOT enough: `webContents.send` throws "Render frame was disposed" when the
- * frame is gone but the window object is not (a renderer crash, Cmd+R, navigation, quit). Left
- * unguarded that throw either abandoned an in-flight passphrase prompt (answered as empty, so ssh
- * dropped the key and the connect died with a bare Permission denied) or, from the expiry timer
- * below, escaped as an UNCAUGHT exception in the main process. Returns false when nothing could
- * be delivered.
- *
- * The explicit getMainWindow() probe is the other half: sendToMain's optional chain silently
- * NO-OPS when there is no window at all (macOS close-to-dock, or before the first window exists),
- * so without the probe this returned true for a send nobody received. That false "delivered" kept
- * promptForPassphrase's no-UI branch dead exactly when it was needed: with the window closed and
- * the watchdog respawning a master after a network drop, the prompt was "sent" to nothing and the
- * askpass curl held the ssh master for the full 5-minute expiry, repeating every watchdog cycle
- * until the window was reopened.
- *
- * ACCEPTED gap: `true` still only means "the webContents took the send". During a Cmd+R reload
- * the frame is alive before React has re-attached onPassphraseRequest, so a prompt raised in
- * that window is dropped and its connect rides the prompt expiry, after which the watchdog's
- * next reconnect prompts again into the now-attached listener. Closing it needs a renderer ack
- * handshake per prompt; a one-in-a-reload race that self-heals within one expiry does not buy
- * that machinery.
- */
-function pushToRenderer(channel: string, payload: unknown): boolean {
-  if (!getMainWindow()) return false
-  try {
-    sendToMain(channel, payload)
-    return true
-  } catch {
-    return false
+const passphrasePrompts = new PassphrasePrompts()
+const promptRecipients = new Map<MainWindowLike, { recipient: PassphraseRecipient; depart(): void; id?: number }>()
+function releasePromptWindow(window: MainWindowLike): void {
+  const entry = promptRecipients.get(window); promptRecipients.delete(window); entry?.depart()
+}
+export function forgetSshPassphraseOwner(id: number): void {
+  for (const [window, entry] of promptRecipients) if (entry.id === id) releasePromptWindow(window)
+}
+function nativePromptRecipient(): PassphraseRecipient | null {
+  const window = getMainWindow(); if (!window) return null
+  const previous = promptRecipients.get(window); if (previous) return previous.recipient
+  let live = true; const listeners = new Set<() => void>()
+  const owner = { active: () => live && getMainWindow() === window,
+    onDeparture: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
+  const recipient: PassphraseRecipient = { owner,
+    request: (message) => {
+      if (!owner.active()) return false
+      try { window.webContents.send(IPC.sshPassphraseRequest, message); return true } catch { return false }
+    },
+    dismiss: (requestId) => { if (owner.active()) window.webContents.send(IPC.sshPassphraseDismiss, { requestId }) }
   }
+  promptRecipients.set(window, { recipient, id: window.webContents.id, depart: () => {
+    live = false; for (const listener of [...listeners]) listener(); listeners.clear()
+  } })
+  window.on('closed', () => releasePromptWindow(window))
+  return recipient
 }
-
-/** `null` means the user actively declined; `undefined` means nobody ever answered (the prompt
- *  expired or there was no UI to ask). Only a real decline should be reported as a cancellation. */
-type PromptOutcome = string | null | undefined
-
-/** Exported for tests: the whole main-side prompt path (deliver, expire, dismiss, no-UI) runs
- *  without Electron, with the window faked through main-window's setMainWindow. */
-export function promptForPassphrase(req: {
-  identityFile: string
-  retry: boolean
-  /** `user@host` this unlock is for, when the asking master could be identified. One key can
-   *  serve several servers and this prompt can fire from the watchdog long after any connect
-   *  dialog closed, so without it the dialog names a key and no destination. */
-  target?: string
-}): Promise<PromptOutcome> {
-  return new Promise((resolve) => {
-    const requestId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`
-    // Auto-resolve an abandoned prompt (user walked away, never answered or hit Cancel) instead
-    // of leaking the map entry and the askpass curl's HTTP request forever. Same bound as
-    // PROMPT_WAIT_MS, so the connect() wait loop, this timeout, and the askpass script's own
-    // curl --max-time all give up around the same point. The dismiss event closes the
-    // renderer's dialog too, so a late answer cannot land in a request that no longer exists.
-    const timer = setTimeout(() => {
-      pendingPassphrasePrompts.delete(requestId)
-      pushToRenderer(IPC.sshPassphraseDismiss, { requestId })
-      resolve(undefined) // expired, not declined
-    }, PROMPT_WAIT_MS)
-    pendingPassphrasePrompts.set(requestId, (value) => {
-      clearTimeout(timer)
-      resolve(value)
-    })
-    const payload: SshPassphraseRequest = {
-      requestId,
-      identityFile: req.identityFile,
-      retry: req.retry,
-      target: req.target
-    }
-    if (!pushToRenderer(IPC.sshPassphraseRequest, payload)) {
-      // No UI could receive it, so no answer is ever coming. Fail now rather than hold ssh (and
-      // the connect) for the full expiry window.
-      clearTimeout(timer)
-      pendingPassphrasePrompts.delete(requestId)
-      resolve(undefined)
-    }
-  })
+export function promptForPassphrase(req: Omit<SshPassphraseRequest, 'requestId'>): Promise<string | null | undefined> {
+  return passphrasePrompts.request(req, nativePromptRecipient())
 }
-
-/** The main-side half of the sshPassphraseSubmit IPC: resolve the pending prompt for
- *  `requestId` with the user's answer (null = declined). A stale/unknown requestId (already
- *  expired, double submit) is a silent no-op. Exported so the (requestId, value) contract is
- *  unit-testable; initSshProject's ipcMain.handle is a one-line delegate to this. */
 export function resolvePassphrasePrompt(requestId: string, value: string | null): void {
-  pendingPassphrasePrompts.get(requestId)?.(value)
-  pendingPassphrasePrompts.delete(requestId)
+  const recipient = nativePromptRecipient()
+  if (recipient) passphrasePrompts.submit(recipient.owner, requestId, value)
 }
 
 /** One concurrency budget per ControlMaster, shared by every ssh exec child this process runs
@@ -182,9 +123,9 @@ export function initSshProject(
   // No window reference is threaded through here on purpose: every renderer push resolves the
   // live window AT SEND TIME (getMainWindow/sendToMain), because a captured BrowserWindow goes
   // stale across a macOS close/reopen cycle (see main-window.ts).
-  ipcMain.handle(IPC.sshPassphraseSubmit, (_e, requestId: string, value: string | null) =>
-    resolvePassphrasePrompt(requestId, value)
-  )
+  ipcMain.handle(IPC.sshPassphraseSubmit, (event, requestId: string, value: string | null) => {
+    if (getMainWindow()?.webContents.id === event.sender.id) resolvePassphrasePrompt(requestId, value)
+  })
   // WINDOWS (and NODETERM_NATIVE_SSH=1): OpenSSH cannot multiplex there, so every runner below is
   // served by the in-process transport instead (core/remote-ssh/native/). The manager does not
   // know: it still builds OpenSSH argv and reads OpenSSH-shaped answers. Decided ONCE here, at

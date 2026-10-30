@@ -446,7 +446,7 @@ import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
 import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
-import { initSshProject, onSshProjectStatus } from './remote-ssh/ssh-project'
+import { initSshProject, onSshProjectStatus, forgetSshPassphraseOwner } from './remote-ssh/ssh-project'
 import { resyncProjectAgents, RESYNC_TRANSCRIPT_TAIL_BYTES } from './remote-ssh/agent-resync'
 import { setGitRemoteResolver, type GitRemoteRef } from '../core/remote-ssh/remote-git'
 import { SshFs, sshAppendArgs, sshTailArgs, sshSizeArgs, sshWriteArgs } from './ssh-fs'
@@ -1361,6 +1361,7 @@ function createWindow(): BrowserWindow {
     workspaceStore.forgetClient(presenceId)
     ownerConfirmations.forgetClient(presenceId)
     forgetCodexAccountOwner(presenceId)
+    forgetSshPassphraseOwner(presenceId)
     dropGitHubClient?.(presenceId)
   })
   win.on('closed', () => {

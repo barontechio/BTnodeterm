@@ -5,7 +5,7 @@
 // Before these tests, a swapped (requestId, value) argument or a renamed channel was green
 // everywhere except a live app.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { promptForPassphrase, resolvePassphrasePrompt } from './ssh-project'
+import { promptForPassphrase, resolvePassphrasePrompt, forgetSshPassphraseOwner } from './ssh-project'
 import { setMainWindow, type MainWindowLike } from '../main-window'
 import { IPC } from '../../shared/ipc'
 import type { SshPassphraseRequest } from '../../shared/types'
@@ -24,6 +24,7 @@ function installWindow(opts?: { destroyed?: boolean; sendThrows?: boolean }): Se
     focus: () => {},
     on: () => {},
     webContents: {
+      id: 42,
       send: (channel: string, ...args: unknown[]) => {
         // Mirrors the real failure mode: webContents.send throws "Render frame was disposed"
         // while the window object itself still looks alive.
@@ -115,5 +116,18 @@ describe('promptForPassphrase / resolvePassphrasePrompt', () => {
     resolvePassphrasePrompt(reqA.requestId, 'for-a')
     await expect(a).resolves.toBe('for-a')
     await expect(b).resolves.toBe('for-b')
+  })
+
+  it('cancels a departed document and never transfers its request to a reloaded document', async () => {
+    const sent = installWindow()
+    const old = promptForPassphrase({ identityFile: '/key', retry: false })
+    const oldRequest = sent[0].payload as unknown as SshPassphraseRequest
+    forgetSshPassphraseOwner(42)
+    expect(await old).toBeUndefined()
+    const current = promptForPassphrase({ identityFile: '/key', retry: false })
+    const request = sent.filter((message) => message.channel === IPC.sshPassphraseRequest).at(-1)!.payload as unknown as SshPassphraseRequest
+    resolvePassphrasePrompt(oldRequest.requestId, 'stale')
+    resolvePassphrasePrompt(request.requestId, 'current')
+    expect(await current).toBe('current')
   })
 })

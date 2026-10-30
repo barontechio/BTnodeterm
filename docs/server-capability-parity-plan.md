@@ -68,6 +68,11 @@ moved into core, with compatibility exports and native shell adapters. The focus
 Server SSH wiring and a shared owner prompt adapter remain separate work; the extraction does not
 enable them by itself.
 
+The shared SSH authentication services now include askpass, app-owned agent lifetime and the
+owner-bound passphrase-response broker. Desktop consumes them and cancels prompts on document
+departure; the Server connection adapter remains part of PR 16. Existing instance socket namespaces
+are preserved. Focused tests cover wrong recipient, replay, expiry, reload and bounded cleanup.
+
 Baseline inspected on 2026-10-29:
 
 | Item | Reference |
