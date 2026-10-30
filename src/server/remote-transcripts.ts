@@ -1,5 +1,5 @@
 import { capabilityAgentId } from '../shared/agents/config'
-import { isRemoteSessionNode } from '../shared/worktree'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { sshEndpointKey, sshHostKey, type SshConnection } from '../shared/ssh'
 import type { Settings } from '../shared/types'
 import type { WorkspaceStore } from '../core/workspace-store'
@@ -42,9 +42,7 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     try { return await requests.run({ owner, signal: abort.signal }, operation) }
     finally { abort.abort(); unsubscribe() }
   }
-  const isRemoteNode = (id: string) => !!deps.workspace.sshProjectIdForNode(id) ||
-    !!deps.pty.sshRemoteForNode(id) || deps.workspace.relayNodePlacements(id).some((p) =>
-      !!p.projectServer || isRemoteSessionNode(p.node))
+  const isRemoteNode = (id: string) => isRemoteWorkspaceNode(deps.workspace, deps.pty, id)
   const supported = (agentId: string | undefined, nodeId: string | undefined) => {
     if (!deps.enabled || !nodeId) return false
     const node = deps.workspace.getNodeForHostAction(nodeId)

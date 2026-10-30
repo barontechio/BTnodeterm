@@ -703,6 +703,13 @@ that path to the system-default `~/.claude/projects` or a managed account dir
 
 ### Context Link
 
+Remote classification includes saved, disconnected and ambiguously placed SSH records. Without
+an authorized remote reader/capture adapter, those records cannot search local transcripts or
+capture a local unmounted terminal. The current Server adapter refuses remote context reads;
+owner chat/history support does not grant agent context-link access. Each asynchronous linked
+read rechecks its edge, session/account metadata, hook path and local/remote classification before
+returning bytes. A revoked or changed target discards the result; title-only edits retain access.
+
 Context Link works in the Server Edition. The feature itself lives entirely in core
 (`src/core/context-link.ts`) and writes everything under `dataDir`; what it needs from a
 shell is the **link map** — who is linked to whom.

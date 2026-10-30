@@ -62,6 +62,7 @@ import {
 import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
 import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
@@ -916,6 +917,7 @@ export async function startServer(
   // src/server/context-link.ts.
   const contextLink = initServerContextLink({
     ptyManager,
+    isRemoteNode: (id) => isRemoteWorkspaceNode(workspaceStore, ptyManager, id),
     canvases: () => workspaceStore.persistedCanvases()
   })
   // A governed project's outside edit goes to the canvas authority, which publishes the difference

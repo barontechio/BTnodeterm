@@ -208,6 +208,12 @@ exercise both transports, managed-account isolation and owner/guest routing. A l
 256 KiB command benchmark measured median 17.89–44.42 ms across 1–4,096 project entries, excluding
 SSH latency; details and the existing known-path baseline are in `server-ssh-projects.md`.
 
+Context-link classification now includes saved/disconnected remote placements in both shells.
+Server deliberately supplies no remote context reader/capture adapter yet; these reads refuse
+without searching local histories. The shared handler revalidates the selected edge's session,
+account, hook path and routing after asynchronous IO, while preserving reads across title-only
+edits. Context-link authorization remains independent of owner-only remote chat history access.
+
 The independent [remote meter routing #1328](https://github.com/eneskirca/nodeterm/pull/1328)
 exports the no-local-read guards directly on upstream/main without transport/dependency changes:
 24,167 tests (109 skipped), typecheck and both builds. It refuses local rehydration/replay and

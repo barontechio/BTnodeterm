@@ -40,6 +40,8 @@ export interface ServerContextLinkDeps {
   agentSessions?: () => Array<{ nodeId: string; agentId?: string; sessionId?: string }>
   /** nodeId → hook-fed transcript path; part of the change signature, not of the map. */
   transcriptOf?: (nodeId: string) => string
+  /** Include saved/disconnected remote records; absent read adapters must never imply local. */
+  isRemoteNode?: (nodeId: string) => boolean
   sweepMs?: number
 }
 
@@ -80,9 +82,8 @@ export function initServerContextLink(deps: ServerContextLinkDeps): {
   const agentSessions = deps.agentSessions ?? sessionNameSweepEntries
   const transcriptOf = deps.transcriptOf ?? transcriptPathOf
 
-  // No remote deps: the Server Edition runs ON the host whose transcripts and tmux it reads, so
-  // the local-only behavior is the complete answer (SSH projects are a desktop-only concept here).
-  initContextLink(deps.ptyManager, {})
+  // Classification is independent of reader support and connection liveness.
+  initContextLink(deps.ptyManager, { isRemoteNode: deps.isRemoteNode })
 
   // Skip a rewrite when nothing a link document depends on has changed. The map alone is not the
   // whole input — a link's transcript path is resolved at write time from the hook-fed table, and
@@ -93,7 +94,7 @@ export function initServerContextLink(deps: ServerContextLinkDeps): {
     const map = deriveLinkMap({ canvases: deps.canvases, agentSessions })
     const transcripts = Object.values(map)
       .flat()
-      .map((n) => `${n.id}=${transcriptOf(n.id)}`)
+      .map((n) => `${n.id}=${transcriptOf(n.id)}:${deps.isRemoteNode?.(n.id) === true}`)
       .sort()
     const sig = `${JSON.stringify(map)}|${transcripts.join(',')}`
     if (sig === lastSig) return

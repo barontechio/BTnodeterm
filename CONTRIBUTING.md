@@ -1961,3 +1961,8 @@ starts. Refuse dispatch while any backend creation is unresolved; a start may no
 actual cwd yet. Existing unrelated panes remain usable, and owner departure retains the barrier
 until the awaited external work settles. This primitive does not reserve canvas bindings or grant
 permission to remove a directory.
+
+Context-link routing classifies saved remote placements as well as live sessions. A missing remote
+reader or capture adapter must refuse, never search local histories or capture an unmounted local
+pane. Use `isRemoteWorkspaceNode` at the shell seam and recheck link/account/session/routing identity
+after asynchronous reads. Owner-only history support does not authorize an agent context read.
