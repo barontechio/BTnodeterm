@@ -57,6 +57,8 @@ export interface ContextEnsureQuery {
 export type RemoteEnsureOutcome = 'tracked' | 'unresolved'
 
 export interface ContextEnsureDeps {
+  /** Saved/live host routing; known remote records cannot fall through without an adapter. */
+  isRemoteNode?(nodeId: string): boolean
   /** Transport/account generation for remote requests; a reconnect must not join an older read. */
   scopeKey?(q: ContextEnsureQuery): string | undefined
   /**
@@ -67,8 +69,7 @@ export interface ContextEnsureDeps {
   /**
    * Resolve + track a REMOTE (SSH-project) node's transcript on its host, or `null` when this is
    * not a remote session — the same `null` convention `TranscriptIpcDeps.readRemote` uses, and the
-   * signal to take the local path below. Electron-only: the server has no SSH-project manager, and
-   * needs none (it runs ON the host whose transcripts it reads).
+   * signal to take the local path below, unless the host still classifies this node as remote.
    */
   ensureRemote?(q: ContextEnsureQuery): Promise<RemoteEnsureOutcome | null>
 }
@@ -145,6 +146,7 @@ export function registerContextEnsureIpc(deps: ContextEnsureDeps): void {
         // resolved must not fall through to the local resolver: that reads the wrong machine's
         // disk, which for claude means metering an unrelated local session under this node's id.
         if (deps.ensureRemote && (await deps.ensureRemote(q)) !== null) return
+        if (q.nodeId && deps.isRemoteNode?.(q.nodeId)) return
         const tail = deps.tailFor(agentId)
         if (!tail) return
         // The tail's own path is the authoritative hint for claude's resolver (hook-fed when

@@ -1,6 +1,7 @@
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
 import { startTriggerService } from '../core/trigger-service'
 import path from 'path'
@@ -560,13 +561,17 @@ export async function startServer(
   // rather than an unknown channel when canvas control is off.
   registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
+  const isRemoteAgentNode = (nodeId: string): boolean => !!workspaceStore.sshProjectIdForNode(nodeId) ||
+    isRemoteSessionNode(workspaceStore.getNodeResolved(nodeId)) || !!ptyManager.sshRemoteForNode(nodeId)
   const {
     contextTail,
     geminiContextTail,
     codexContextTail,
     cursorContextTail,
-    antigravityContextTail
+    antigravityContextTail,
+    reconcileRouting: reconcileAgentTailRouting
   } = wireAgentStatus(platform, {
+    isRemoteNode: isRemoteAgentNode,
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })
   // Cursor NEEDS YOU, same seam as the desktop (core/agents/cursor-approval.ts).
@@ -602,9 +607,10 @@ export async function startServer(
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
   // it, so a browser agent node's meter filled only on its next turn, exactly the desktop bug
-  // issue #813 reported for SSH nodes. No remote leg here (see registerTranscriptIpc above): this
-  // process runs on the host whose transcripts it reads, so the local locators are complete.
+  // issue #813 reported for SSH nodes. Remote continuous meters are unavailable; known remote
+  // records cannot rehydrate from or replay a namesake on this host.
   registerContextEnsureIpc({
+    isRemoteNode: isRemoteAgentNode,
     tailFor: (agentId) => {
       switch (agentId) {
         case undefined:
@@ -814,6 +820,7 @@ export async function startServer(
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
   workspaceStore.onPersist = () => {
+    reconcileAgentTailRouting()
     workspaceWatcher.sync()
     contextLink.refresh()
     refreshNodeTokens()
