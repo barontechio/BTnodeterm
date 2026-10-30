@@ -84,7 +84,7 @@ export function registerServerSshProjects(deps: {
     integrationReceipts: deps.integrationReceipts,
     // Build artifact, not a dependency on the native shell. Missing/unsafe bundles disable the
     // managed remote runtime through the manager's existing capability result.
-    codexRelaySource: async () => (await readRegularFileNoFollow(path.join(__dirname, '../main/codex-relay.js'), 2 * 1024 * 1024)) ?? '', 
+    codexRelaySource: async () => (await readRegularFileNoFollow(path.join(__dirname, '../main/codex-relay.js'), 2 * 1024 * 1024)) ?? '',
     onStatus: (event) => {
       for (const id of platform.clientIds()) if (eligible(id)) { try { platform.sendTo(id, IPC.sshProjectStatus, event) } catch { /* departed UI */ } }
     }

@@ -93,6 +93,7 @@ Owner-only capability negotiation explains disabled/older hosts. Transfers and r
 explicitly unavailable pending their bounded streaming endpoints; remote transcript/context/usage
 bindings and remaining SSH automation are still outstanding and must not fall back to local data.
 
+The first Server SSH snapshot passes 24,399 tests (109 skipped), typecheck and both builds.
 Both OpenSSH and native-SSH fixtures authenticate an encrypted temporary key over a real loopback
 SSH server, reject another owner tab's passphrase response, read/write quoted remote filenames and
 reconnect under a new connection generation. Queued SSH exec checks target and generation again
