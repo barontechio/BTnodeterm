@@ -1777,3 +1777,9 @@ through `NodeExecutionCoordinator.backend` after dispatch validation. Only that 
 creates `backendCallback` wrappers; physical-generation checks and competing-action fences remain.
 Application promises stay action-bound and cannot start a backend from an expired claim. These
 host internals are never a callback RPC or a way to deliver user input.
+
+`PtyManager.runWorktreeAction` combines the immutable member claim with a temporary barrier
+against new backend starts. A pending start can still be resolving its real cwd, so it refuses
+worktree dispatch; existing unrelated panes remain usable. Owner departure retains the barrier
+until actual external work settles. Domain code still owns directory/canvas reservation and Git
+authorization; this does not enable removal by itself.
