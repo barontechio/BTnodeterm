@@ -219,7 +219,7 @@ describe('HeadlessNodeFactory', () => {
         return workspace
       })
       const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
-      expect(reply.ok).toBe(true)
+      expect(reply.ok, JSON.stringify(reply)).toBe(true)
       const id = (reply.result as { id: string }).id
       expect((await store.load()).projects[0].nodes.find((node) => node.id === id)).toMatchObject({
         agentId: 'claude', accountId: 'branch-account', agentSessionId: originalId, cwd, agentModel: 'model-x', title: 'Target (original)' })
@@ -254,6 +254,36 @@ describe('HeadlessNodeFactory', () => {
         command: expect.stringContaining(`--resume ${originalId}`), executor: 'server', manualOnly: true })
     })
 
+    it('owns the new node before publishing it and through the delivery outcome publication', async () => {
+      const targetId = await target(); const observed: Array<Promise<string>> = []
+      const publish = factoryDeps.publishProject
+      factoryDeps.publishProject = (project) => {
+        publish?.(project)
+        const copy = project.nodes.find((node) => node.title.endsWith('(original)'))
+        if (copy) observed.push(pty.runNodeAction(copy.id, 'write', { current: () => true }, () => 'acquired')
+          .catch((error: Error) => error.message))
+      }
+      factory = new HeadlessNodeFactory(factoryDeps)
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok, JSON.stringify(reply)).toBe(true)
+      expect(observed.length).toBeGreaterThanOrEqual(2)
+      expect(await Promise.all(observed)).toEqual(observed.map(() => 'node-execution-busy'))
+    })
+
+    it('refuses changed copy routing during creation and retains its recovery node', async () => {
+      const targetId = await target(); const sent = pty.sends.length
+      pty.beforeCreate = async (options) => {
+        await store.updateWorkspace((workspace) => {
+          workspace.projects[0].nodes.find((node) => node.id === options.persistKey)!.cwd = dataDir
+          return workspace
+        })
+      }
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok).toBe(false); expect(pty.sends).toHaveLength(sent)
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === (reply.result as { id: string }).id)?.pendingLaunch)
+        .toMatchObject({ manualOnly: true })
+    })
+
     it('refuses an already represented original conversation and an unavailable target account', async () => {
       const targetId = await target(); const created = pty.creates.length
       await store.updateWorkspace((workspace) => {
@@ -284,7 +314,7 @@ describe('HeadlessNodeFactory', () => {
       expect(request).toHaveBeenCalledWith('project-1')
       info.trusted.agents = true
       const resumed = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
-      expect(resumed.ok).toBe(true)
+      expect(resumed.ok, JSON.stringify(resumed)).toBe(true)
       expect(pty.sends.find((send) => send.nodeId === (resumed.result as { id: string }).id)?.text)
         .toContain(`project-claude --safe --resume ${originalId}`)
     })

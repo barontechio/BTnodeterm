@@ -72,6 +72,7 @@ import {
 } from '../shared/agents/config'
 import { assembleLaunchCommand, assembleResumeCommand } from '../shared/agents/launch'
 import { isClaudeBranchSessionId } from './claude-branch'
+import type { NodeExecutionKind, NodeExecutionOptions, NodeExecutionPermit } from './node-execution'
 import type { AgentState, NormalizedAgentEvent } from '../shared/agents/normalize'
 import { oneLine } from '../shared/one-line'
 import { rootPositionWith } from '../shared/root-position'
@@ -126,6 +127,9 @@ export interface ServerControlReply {
 
 /** The PtyManager surface the headless factory uses, kept narrow for deterministic tests. */
 export interface HeadlessPty {
+  nodeExecutionIdentity?(nodeId: string): object | undefined
+  runNodeAction?<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,
+    work: (permit: NodeExecutionPermit) => Promise<T> | T): Promise<T>
   createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult>
   /** Probe only. Boot reconciliation must never turn absence into a fresh session. */
   paneCommand(persistKey: string): Promise<string | null>
@@ -143,7 +147,8 @@ export interface HeadlessPty {
 }
 
 /** WorkspaceStore's mutation surface, also narrow so tests can use the real store or a fake. */
-export type HeadlessWorkspace = Pick<WorkspaceStore, 'load' | 'save'>
+export type HeadlessWorkspace = Pick<WorkspaceStore, 'load' | 'save'> &
+  Partial<Pick<WorkspaceStore, 'getNodeForHostAction' | 'projectIdsForNode' | 'projectTargetInfo'>>
 
 export interface HeadlessNodeFactoryDeps {
   /** Which nodes a caller may read and act on (control-scope.ts). Absent = `creator`. */
@@ -723,7 +728,8 @@ export class HeadlessNodeFactory {
    *   session reachable here. (The desktop releases its client, so it refuses a plain shell instead.)
    * - `createHeadless` goes through `attach()` so the `attached` ledger stays authoritative.
    */
-  private async launch(project: Project, node: CanvasNodeState, command: string, current?: () => boolean): Promise<HeadlessLaunchResult> {
+  private async launch(project: Project, node: CanvasNodeState, command: string, current?: () => boolean,
+    onCreated?: () => boolean): Promise<HeadlessLaunchResult> {
     if (!(await promptReadable(node.pendingLaunch?.promptFile))) return { outcome: 'failed', reason: 'prompt-file-missing' }
     if (!(await this.accountReady(node))) return { outcome: 'failed', reason: 'account-unavailable' }
     if (current && !current()) return { outcome: 'failed', reason: 'cancelled' }
@@ -731,9 +737,11 @@ export class HeadlessNodeFactory {
     try { return await launchHeadless(
       {
         persistentSpawnAvailable: () => pty.persistentSpawnAvailable(),
-        createHeadless: () => {
+        createHeadless: async () => {
           if (current && !current()) return Promise.reject(new Error('launch-owner-expired'))
-          return this.attach(project, node)
+          const created = await this.attach(project, node)
+          if (onCreated && !onCreated()) throw new Error('launch-generation-unavailable')
+          return created
         },
         paneCommand: (key) => pty.paneCommand(key),
         writeHeadless: (key, data) => !this.stopped && (!current || current()) && pty.writeHeadless(key, data),
@@ -934,7 +942,11 @@ export class HeadlessNodeFactory {
   resumeClaudeOriginal(sourceId: string, targetId: string, originalId: string,
     current: () => boolean): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
+      let persistedId: string | undefined
       try {
+        const pty = this.deps.ptyManager; const store = this.deps.workspaceStore
+        if (!pty.runNodeAction || !pty.nodeExecutionIdentity || !store.getNodeForHostAction ||
+          !store.projectIdsForNode || !store.projectTargetInfo) throw new Error('host node exclusion/routing is unavailable')
         if (!isClaudeBranchSessionId(originalId) || sourceId === targetId) throw new Error('invalid branch continuation')
         const select = (workspace: Workspace) => {
           if (this.stopped || !current()) throw new Error('branch approval or target expired')
@@ -972,33 +984,57 @@ export class HeadlessNodeFactory {
           permissionMode: gatePermissionMode(resolvePermissionMode(before.target.project, before.settings), caps.autoPermissionMode) },
         this.deps.env ?? process.env).command
         const id = nextId('term')
-        const committed = await this.contentWriter.edit((workspace) => {
-          const fresh = select(workspace)
-          if (fresh.binding !== before.binding) throw new Error('branch execution/account settings changed')
-          const project = fresh.target.project; const target = fresh.target.node
-          const size = terminalSize(fresh.settings)
-          const node: CanvasNodeState = { id, kind: 'terminal', position: placeRight(project, target, size), size,
-            title: `${target.title || 'Claude'} (original)`, titleAuto: false, color: target.color,
-            group: null, tags: [], agentId: 'claude', agentSessionId: originalId,
-            ...(target.accountId ? { accountId: target.accountId } : {}),
-            ...(target.agentModel ? { agentModel: target.agentModel } : {}), cwd: target.cwd || project.cwd,
-            pendingLaunch: { after: [], command, executor: 'server', attempted: true, manualOnly: true } }
-          project.nodes.push(node)
-          const ropes = project.ropes ??= []; addEdge(ropes, sourceId, id, 'ctrl')
-          const bridges = project.bridges ??= []; addEdge(bridges, sourceId, id, 'link')
-          return { project, node }
+        if (pty.nodeExecutionIdentity(id) || store.getNodeForHostAction(id)) throw new Error('new node identity is already occupied')
+        let expectedCopy = ''; let born = false; let generation: object | undefined
+        const copyBinding = (project: Project, node: CanvasNodeState) => stableStringify({
+          execution: launchIdentity(project, { ...node, pendingLaunch: undefined }),
+          sessionId: node.agentSessionId, model: node.agentModel, clearEnv: node.clearEnv, worktree: node.worktree })
+        const valid = () => {
+          if (this.stopped || !current()) return false
+          if (!persistedId) return !pty.nodeExecutionIdentity!(id)
+          const node = store.getNodeForHostAction!(id); const ids = store.projectIdsForNode!(id)
+          const info = store.projectTargetInfo!(before.target.project.id)
+          if (!node || ids.length !== 1 || ids[0] !== before.target.project.id || !info || info.ssh ||
+            copyBinding({ ...before.target.project, ...info }, node) !== expectedCopy) return false
+          if (node.pendingLaunch ? node.pendingLaunch.command !== command || node.pendingLaunch.executor !== 'server'
+            : this.delivered.get(id) !== command) return false
+          return !born || (!!generation && pty.nodeExecutionIdentity!(id) === generation)
+        }
+        return await pty.runNodeAction(id, 'branch', { current: valid, timeoutMs: 30_000 }, async (permit) => {
+          const committed = await this.contentWriter.edit((workspace) => {
+            const fresh = select(workspace)
+            if (fresh.binding !== before.binding) throw new Error('branch execution/account settings changed')
+            const project = fresh.target.project; const target = fresh.target.node
+            const size = terminalSize(fresh.settings)
+            const node: CanvasNodeState = { id, kind: 'terminal', position: placeRight(project, target, size), size,
+              title: `${target.title || 'Claude'} (original)`, titleAuto: false, color: target.color,
+              group: null, tags: [], agentId: 'claude', agentSessionId: originalId,
+              ...(target.accountId ? { accountId: target.accountId } : {}),
+              ...(target.agentModel ? { agentModel: target.agentModel } : {}), cwd: target.cwd || project.cwd,
+              pendingLaunch: { after: [], command, executor: 'server', attempted: true, manualOnly: true } }
+            project.nodes.push(node)
+            const ropes = project.ropes ??= []; addEdge(ropes, sourceId, id, 'ctrl')
+            const bridges = project.bridges ??= []; addEdge(bridges, sourceId, id, 'link')
+            expectedCopy = copyBinding(project, node)
+            return { project, node }
+          })
+          if (!committed.saved) throw new Error('original resume could not be saved')
+          persistedId = id
+          const { project, node } = committed.value
+          this.ownership.record(id, { sourceNodeId: sourceId, projectId: project.id })
+          await this.publishPersisted([project.id])
+          const launched = await this.startCreated(project, [node], new Map([[id, command]]), true, () => permit.current(), () => {
+            generation = pty.nodeExecutionIdentity!(id); born = true
+            return !!generation && permit.current()
+          })
+          return { ok: launched.failed.length === 0,
+            ...(launched.failed.length ? { error: 'original-resume-launch-failed: the saved node retains its launch; do not repeat branch' }
+              : { message: 'Original conversation saved in a new node; launch delivered, startup is not confirmed.' }),
+            result: { id, originalId, ...launched } }
         })
-        if (!committed.saved) throw new Error('original resume could not be saved')
-        const { project, node } = committed.value
-        this.ownership.record(id, { sourceNodeId: sourceId, projectId: project.id })
-        await this.publishPersisted([project.id])
-        const launched = await this.startCreated(project, [node], new Map([[id, command]]), true, current)
-        return { ok: launched.failed.length === 0,
-          ...(launched.failed.length ? { error: 'original-resume-launch-failed: the saved node retains its launch; do not repeat branch' }
-            : { message: 'Original conversation saved in a new node; launch delivered, startup is not confirmed.' }),
-          result: { id, originalId, ...launched } }
       } catch (error) {
-        return { ok: false, error: `original-resume-refused: ${error instanceof Error ? error.message : String(error)}; inspect the branch, do not repeat it` }
+        return { ok: false, error: `original-resume-refused: ${error instanceof Error ? error.message : String(error)}; inspect the branch, do not repeat it`,
+          ...(persistedId ? { result: { id: persistedId, ids: [persistedId], originalId } } : {}) }
       }
     })
   }
@@ -2021,7 +2057,7 @@ export class HeadlessNodeFactory {
   /** Start a durable batch, then patch outcomes against fresh state. Never called before save. */
   private async startCreated(
     target: Project, created: CanvasNodeState[], commands: ReadonlyMap<string, string>, trackAgentStartup: boolean,
-    isCurrent?: () => boolean
+    isCurrent?: () => boolean, onCreated?: () => boolean
   ) {
     const failed: string[] = []
     // Why each one failed, reported per id (#925): a reply that says only "retained for Run now"
@@ -2054,7 +2090,7 @@ export class HeadlessNodeFactory {
           if (this.deps.releaseHeadlessAfterWork) { this.attached.delete(node.id); this.deps.ptyManager.releaseHeadless(node.id) }
           continue
         }
-        const launched = await this.launch(target, node, command, isCurrent)
+        const launched = await this.launch(target, node, command, isCurrent, onCreated)
         if (trackAgentStartup && launched.fresh) this.awaitingFirstWorking.add(node.id)
         if (launched.outcome === 'delivered') { this.noteDelivered(node.id, command); node.pendingLaunch = undefined }
         else fail(node.id, launched.reason)

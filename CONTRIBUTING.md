@@ -1919,7 +1919,10 @@ a copy; uncertain effects are not retried. The original-resume continuation deri
 from the saved target, honors project launch trust and validates again in the writer's disk queue.
 Persist before launch, retain a failed/cancelled command for manual recovery, and check the owner
 before each actual write. The protocol and continuation alone do not enable the Server command:
-its consent, submit-transition and new-pane exclusion adapters are separate required gates.
+its consent and submit-transition adapters remain required gates. The original-resume continuation
+reserves its new node before casting/persisting it, holds exclusion through launch/outcome publication,
+and adopts the physical generation before typing. Reuse the existing delivered-command ledger when
+the held launch is cleared; clearing a field alone is not delivery evidence.
 
 Backend constructors, shared driver timers and physical lifecycle registration leave node-action
 ALS through `NodeExecutionCoordinator.backend` after dispatch validation. Only that backend context
