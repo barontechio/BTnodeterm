@@ -1,4 +1,6 @@
 import { promises as fs } from 'fs'
+import os from 'os'
+import path from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SshProjectManager } from './ssh-project'
 import { controlPathFor } from '../../core/remote-ssh/control-master'
@@ -16,7 +18,7 @@ function makeMgr(over: Partial<ConstructorParameters<typeof SshProjectManager>[0
   const run = vi.fn(async (args: string[]) => {
     const j = args.join(' ')
     // Anything that is NOT the `-O check` is part of the post-master setup chain.
-    if (!j.includes('-O')) setupCalls.push(j)
+    if (!args.includes('-O')) setupCalls.push(j)
     if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
     if (j.includes('%{http_code}')) return { code: 0, stdout: '204' }
     return { code: 0, stdout: '' }
@@ -38,7 +40,9 @@ afterEach(() => {
 })
 
 describe('early ControlMaster publication (PR 1 part A)', () => {
-  it('publishes the control path on `connecting`, BEFORE the setup chain runs', async () => {
+  it.each(['ssh-home', 'ssh-O-home'])('publishes the control path BEFORE setup with home %s', async (home) => {
+    // A legal home (and thus ControlPath) containing "-O" is not an ssh mux operation.
+    vi.spyOn(os, 'homedir').mockReturnValue(path.join(os.homedir(), home))
     const seenSetupCallsAtPublish: number[] = []
     let setupCalls = 0
     const spawnMaster = vi.fn(() => ({ kill: vi.fn(), on: vi.fn(), pid: () => 1 }))
@@ -48,7 +52,7 @@ describe('early ControlMaster publication (PR 1 part A)', () => {
       spawnMaster,
       run: vi.fn(async (args: string[]) => {
         const j = args.join(' ')
-        if (!j.includes('-O')) setupCalls++
+        if (!args.includes('-O')) setupCalls++
         if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
         if (j.includes('%{http_code}')) return { code: 0, stdout: '204' }
         return { code: 0, stdout: '' }
@@ -188,7 +192,7 @@ describe('background pre-warm (PR 1 part B)', () => {
       spawnMaster: vi.fn(() => ({ kill: vi.fn(), on: vi.fn(), pid: () => 3 })),
       run: vi.fn(async (args: string[]) => {
         const j = args.join(' ')
-        if (j.includes('-O') && !answer) return { code: 1, stdout: '' }
+        if (args.includes('-O') && !answer) return { code: 1, stdout: '' }
         if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
         if (j.includes('%{http_code}')) return { code: 0, stdout: '204' }
         return { code: 0, stdout: '' }
@@ -225,7 +229,7 @@ describe('background pre-warm (PR 1 part B)', () => {
       spawnMaster: vi.fn(() => ({ kill: vi.fn(), on: vi.fn(), pid: () => 31337 })),
       run: vi.fn(async (args: string[]) => {
         const j = args.join(' ')
-        if (j.includes('-O') && !answer) return { code: 1, stdout: '' }
+        if (args.includes('-O') && !answer) return { code: 1, stdout: '' }
         if (j.includes('$HOME')) return { code: 0, stdout: '/home/u' }
         if (j.includes('%{http_code}')) return { code: 0, stdout: '204' }
         return { code: 0, stdout: '' }
