@@ -196,7 +196,8 @@ async function call(path: string, body: unknown, lifetime?: AbortSignal): Promis
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-      signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal
+      signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal,
+      redirect: 'error'
     })
     if (res.status === 204) return {}
     const json = (await res.json().catch(() => ({}))) as MintReply
@@ -223,7 +224,7 @@ async function getJson(path: string, lifetime?: AbortSignal): Promise<StatusRepl
   const ctrl = new AbortController()
   const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(`${API_BASE}${path}`, { signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal })
+    const res = await fetch(`${API_BASE}${path}`, { signal: lifetime ? AbortSignal.any([ctrl.signal, lifetime]) : ctrl.signal, redirect: 'error' })
     const json = (await res.json().catch(() => ({}))) as StatusReply
     if (!res.ok) return { error: json.error ?? 'network' }
     return { ...json, answered: true }
@@ -332,7 +333,8 @@ export function initLicense(onChange?: () => void, host: LicenseHost = {}): { di
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ entitlement: token }),
-        signal: AbortSignal.any([ctrl.signal, lifetime.signal])
+        signal: AbortSignal.any([ctrl.signal, lifetime.signal]),
+        redirect: 'error'
       })
       const json = (await res.json().catch(() => ({}))) as {
         key?: unknown

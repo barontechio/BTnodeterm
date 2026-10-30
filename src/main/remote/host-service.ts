@@ -1484,7 +1484,8 @@ export async function mintPairingToken(entitlement: string): Promise<PairTokenRe
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ entitlement }),
-      signal: ctrl.signal
+      signal: ctrl.signal,
+      redirect: 'error'
     })
   } catch {
     throw new Error('Could not reach the pairing server.')
