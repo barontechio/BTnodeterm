@@ -624,6 +624,9 @@ export const IPC = {
   sshFsExists: 'sshFs:exists',
   sshFsQuickOpen: 'sshFs:quick-open',
   sshProjectStatus: 'ssh-project:status',
+  sshProjectCapabilities: 'ssh-project:capabilities',
+  sshPromptConnect: 'ssh-project:prompt-connect',
+  sshPromptDisconnect: 'ssh-project:prompt-disconnect',
   /** main → renderer: an SSH project's identity file is passphrase-protected and the ssh-agent
    *  does not hold the key (or the last answer was wrong), so show a prompt.
    *  Payload: SshPassphraseRequest. */

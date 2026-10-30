@@ -18,6 +18,11 @@ import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/o
 import { SettingsStore } from '../core/settings-store'
 import { SettingsControl } from '../core/settings-control'
 import { registerServerCodexAccounts } from './codex-accounts'
+import { registerServerSshProjects, type ServerSshProjects } from './ssh-projects'
+import { ServerGitRequestScope } from './git-request-scope'
+import { SshFs } from '../core/ssh-fs'
+import { makeRemoteWorkspaceIO } from '../core/remote-workspace-io'
+import { sshHostKey } from '../shared/ssh'
 import { mirrorEntry } from '../core/agent-status-mirror'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
@@ -267,10 +272,29 @@ export async function startServer(
   // Core services — same construction + registration order as src/main/index.ts.
   const settingsStore = new SettingsStore()
   const ptyManager = new PtyManager()
-  const workspaceStore = new WorkspaceStore()
+  let sshProjects: ServerSshProjects | undefined
+  const workspaceSshFs = new SshFs((args, stdin) => sshProjects ? sshProjects.manager.sshRun(args, stdin) : Promise.resolve({ code: 1, stdout: '' }))
+  const remoteWorkspaceIO = makeRemoteWorkspaceIO((id) => sshProjects?.manager.refForProject(id) ?? null,
+    workspaceSshFs, (id) => workspaceStore.markUnmirrored(id))
+  const workspaceStore = new WorkspaceStore(config.sshProjects ? remoteWorkspaceIO : undefined)
 
   settingsStore.init()
-  const codexAccounts = registerServerCodexAccounts(platform)
+  sshProjects = registerServerSshProjects({ platform, enabled: config.sshProjects === true,
+    projectTarget: (id) => {
+      const info = workspaceStore.projectTargetInfo(id)
+      return info ? info.ssh ?? null : undefined
+    },
+    settings: () => settingsStore.get(), onIntegrationChange: (listener) => settingsStore.onChange(listener),
+    integrationReceipts: { get: (key) => integrations.receipts.get(key), set: (key, value) => integrations.receipts.set(key, value) },
+    onConnected: async (id) => {
+      const changed = await workspaceStore.refreshSshProject(id)
+      if (changed) outsideEditPublisher(() => canvasAuthority,
+        (project) => platform.broadcast(IPC.workspaceExternalChange, project),
+        (project) => platform.broadcast(IPC.workspaceServerChange, project))(changed)
+    } })
+  const gitRouting = new ServerGitRequestScope({ platform, workspace: workspaceStore,
+    manager: () => config.sshProjects ? sshProjects?.manager : undefined })
+  const codexAccounts = registerServerCodexAccounts(platform, () => config.sshProjects ? sshProjects?.manager : undefined)
   // The linked-account resolver's one source of truth on this shell. Registered as
   // soon as settings exist and BEFORE anything that resolves a config dir — the mirror settings
   // provider, `installHooksIntoLocalAccounts`, the transcript jail — because an unregistered
@@ -400,11 +424,22 @@ export async function startServer(
   registerWebPreviewIpc(platform, webPreviews)
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
+    gitRequestScope: gitRouting.run,
+    claudeAccountsRemote: () => {
+      const manager = config.sshProjects ? sshProjects?.manager : undefined
+      return manager ? {
+        add: (project, id) => manager.remoteAccountAdd(project, id),
+        readLogin: (project, id) => manager.remoteAccountReadLogin(project, id),
+        remove: (project, id) => manager.remoteAccountRemove(project, id),
+        copySession: (project, session, source, target) => manager.remoteClaudeSessionCopy(project, session, source, target)
+      } : undefined
+    },
     onSettingsChange: (cb) => settingsStore.onChange(cb),
     downloadTickets,
     localProjectCwd: (projectId: string) => workspaceStore.sideFilesFolderForProject(projectId),
     whiteboardLocation: (projectId: string) => workspaceStore.whiteboardLocationForProject(projectId)
   })
+  platform.handleWithSender(IPC.gitSetActiveRemote, (id, projectId: string | null) => gitRouting.setActive(id, projectId))
   // Project setup/archive runner — same construction as src/main/index.ts, and the SAME
   // `registerProjectSetupHandlers` trust boundary (project-setup-handlers.ts): it derives rootPath/
   // ssh/projectName from THIS process's own workspace index by projectId, never the renderer, and
@@ -442,9 +477,22 @@ export async function startServer(
   // gets no answer, the prompt expires, and the shared value stays unused: fail closed on the
   // grant, fail open on the spawn.
   // A node owned by an SSH project is never spawned on THIS machine (issue #1186). This shell has
-  // no SSH-project manager, so such a node cannot run anywhere here — refusing is the honest answer,
+  // remote manager may be disabled or disconnected; refuse until its transport is available,
   // the same one the desktop gives while that project's ControlMaster is down.
   ptyManager.setSshProjectCheck((projectId) => workspaceStore.sshProjectIds().includes(projectId))
+  ptyManager.setRemoteNodeOwner((nodeId) => {
+    const projectId = workspaceStore.sshProjectIdForNode(nodeId)
+    if (!projectId) return null
+    const server = workspaceStore.projectTargetInfo(projectId)?.ssh?.server
+    if (!server) return null
+    const ref = sshProjects?.manager.refForProject(projectId)
+    return { projectId, hostKey: sshHostKey(ref?.conn ?? server), remote: ref ? { conn: ref.conn, controlPath: ref.controlPath } : undefined }
+  })
+  ptyManager.setRelayNodeResolver({
+    placements: (nodeId) => workspaceStore.relayNodePlacements(nodeId),
+    refFor: (scopeId) => config.sshProjects ? sshProjects?.manager.spawnRefFor(scopeId) : undefined,
+    projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh
+  })
   ptyManager.setProjectSpawnOverrides(
     makeProjectSpawnOverrides({
       readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
@@ -458,7 +506,7 @@ export async function startServer(
     platform,
     userDataDir: config.dataDir,
     project: (projectId) => workspaceStore.githubProject(projectId),
-    detectRepository: (project) => gitService.originUrl(project.cwd ?? ''),
+    detectRepository: (project) => gitRouting.forProject(project.id, () => gitService.originUrl(project.ssh?.remoteCwd ?? project.cwd ?? '')),
     secret: new ServerGitHubSecretStore(config.dataDir),
     run: runGitHubCliCommand
   })
@@ -1043,6 +1091,8 @@ export async function startServer(
     workspaceStore.forgetClient(uiId)
     ownerConfirmations.forgetClient(uiId)
     codexAccounts.forgetClient(uiId)
+    gitRouting.forgetClient(uiId)
+    sshProjects?.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
@@ -1293,6 +1343,8 @@ export async function startServer(
         setReflectedListener(null)
         workspaceStore.setContentAuthority(null)
         await ptyManager.killAll()
+        await remoteWorkspaceIO.flush()
+        sshProjects?.close()
         // Same native hazard as the desktop app: a whisper transcribe still running when the
         // node env is torn down aborts the process. See SpeechService.shutdown.
         await speechService.shutdown()
@@ -1376,6 +1428,8 @@ export async function startServer(
       setReflectedListener(null)
       workspaceStore.setContentAuthority(null)
       await ptyManager.killAll()
+      await remoteWorkspaceIO.flush()
+      sshProjects?.close()
       // Same native hazard as the desktop app: a whisper transcribe still running when the node
       // env is torn down aborts the process. See SpeechService.shutdown.
       await speechService.shutdown()

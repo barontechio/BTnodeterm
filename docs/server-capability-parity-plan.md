@@ -79,11 +79,27 @@ core services consumed by Desktop. Server routing and streaming transfers still 
 separate PR 16 adapter and multi-client scope validation.
 
 A third independent upstream export, [SSH services #1322](https://github.com/eneskirca/nodeterm/pull/1322),
-is based directly on upstream/main and passes 24,166 tests (109 skipped), typecheck and both builds.
+is based directly on upstream/main and passes 24,168 tests (109 skipped), typecheck and both builds.
 The integrated SSH runner snapshot passes 24,379 tests (109 skipped) and both builds. A new optional
 Git request scope captures each caller's resolver through awaits, including an explicit local mode
 and an unavailable-remote refusal. The Server adapter still needs connection identity, project
 routing and transfer validation before SSH is enabled.
+
+The first PR 16 Server adapter now implements opt-in SSH inventory, lazy transport, owner-scoped
+passphrase delivery, status, remote filesystem access, workspace reconciliation and connection-scoped
+Git. Enable it with `NODETERM_SERVER_SSH=1` or `--ssh-projects`; keys, host config, file paths and
+account homes belong to the server user. No browser credential store or agent forwarding is added.
+Owner-only capability negotiation explains disabled/older hosts. Transfers and remote media are
+explicitly unavailable pending their bounded streaming endpoints; remote transcript/context/usage
+bindings and remaining SSH automation are still outstanding and must not fall back to local data.
+
+Both OpenSSH and native-SSH fixtures authenticate an encrypted temporary key over a real loopback
+SSH server, reject another owner tab's passphrase response, read/write quoted remote filenames and
+reconnect under a new connection generation. Queued SSH exec checks target and generation again
+before spawning; Git captures the caller's project through awaits. Remote workspace writes also
+compare the requested endpoint and folder at delayed dispatch, protecting Desktop too. An unused
+agent adapter cannot unlink or unpublish another agent. Explicit unavailable Claude/Codex remote
+contexts refuse; Codex login cancellation interrupts its wait and drops late results.
 
 Baseline inspected on 2026-10-29:
 

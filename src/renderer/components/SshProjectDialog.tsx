@@ -5,6 +5,7 @@ import { useSshServers } from '../state/sshServers'
 import { Button } from '@renderer/ui/Button'
 import { Input } from '@renderer/ui/Input'
 import type { SshServer } from '@shared/ssh'
+import { useSshHostStatus } from '../lib/useSshHostStatus'
 
 interface SshProjectDialogProps {
   /** Create the SSH project (Canvas commits the active canvas, adds + switches to it). */
@@ -58,6 +59,7 @@ function parentDir(p: string): string {
  * temporary master is torn down on create/cancel.
  */
 export function SshProjectDialog({ onCreate, onManage, onClose }: SshProjectDialogProps) {
+  const hostStatus = useSshHostStatus()
   const servers = useSshServers((s) => s.servers)
   const [serverFilter, setServerFilter] = useState('')
   const [step, setStep] = useState<Step>('pick')
@@ -200,7 +202,7 @@ export function SshProjectDialog({ onCreate, onManage, onClose }: SshProjectDial
             Connect over SSH
           </p>
           <p className="confirm__msg" style={{ flex: '0 0 auto', overflow: 'visible' }}>
-            Pick a saved server to host this project's terminals.
+            {hostStatus.message ?? "Pick a saved server to host this project's terminals."}
           </p>
           {servers.length > 0 && (
             <Input
@@ -241,6 +243,7 @@ export function SshProjectDialog({ onCreate, onManage, onClose }: SshProjectDial
                   key={s.id}
                   style={ROW_STYLE}
                   title={`${s.user}@${s.host}`}
+                  disabled={!hostStatus.available}
                   onClick={() => void connect(s)}
                 >
                   <span

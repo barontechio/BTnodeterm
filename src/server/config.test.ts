@@ -12,6 +12,12 @@ describe('resolveConfig', () => {
     expect(c.host).toBe('127.0.0.1')
     expect(c.dataDir).toBe(path.join(os.homedir(), '.nodeterm-server'))
     expect(c.insecureHttp).toBe(false)
+    expect(c.sshProjects).toBe(false)
+  })
+  it('requires an explicit host opt-in for SSH and lets argv override the environment', () => {
+    expect(resolveConfig({ NODETERM_SERVER_SSH: '1' }, []).sshProjects).toBe(true)
+    expect(resolveConfig({}, ['--ssh-projects']).sshProjects).toBe(true)
+    expect(resolveConfig({ NODETERM_SERVER_SSH: '1' }, ['--ssh-projects', 'false']).sshProjects).toBe(false)
   })
   it('env overrides defaults; argv overrides env', () => {
     const c = resolveConfig(

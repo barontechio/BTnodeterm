@@ -17546,14 +17546,22 @@ export function Canvas() {
   // so a single state slot cannot drop a concurrent request. The dismiss event closes a dialog
   // whose request expired main-side, so a late answer cannot land in a dead request.
   useEffect(() => {
-    return window.nodeTerminal.sshProject.onPassphraseRequest((e) =>
+    const api = window.nodeTerminal.sshProject
+    const offRequest = api.onPassphraseRequest((e) =>
       setSshPassphraseQueue((prev) => (prev.some((r) => r.requestId === e.requestId) ? prev : [...prev, e]))
     )
-  }, [])
-  useEffect(() => {
-    return window.nodeTerminal.sshProject.onPassphraseDismiss((e) => {
+    const offDismiss = api.onPassphraseDismiss((e) => {
       setSshPassphraseQueue((prev) => prev.filter((r) => r.requestId !== e.requestId))
     })
+    let disposed = false; let epoch: string | undefined
+    void api.connectPrompts?.().then((value) => {
+      if (disposed) void api.disconnectPrompts?.(value).catch(() => {})
+      else epoch = value
+    }).catch(() => {})
+    return () => {
+      disposed = true; offRequest(); offDismiss()
+      if (epoch) void api.disconnectPrompts?.(epoch).catch(() => {})
+    }
   }, [])
 
   // Create an SSH project from the dialog: commit the current canvas, then open-or-reuse the

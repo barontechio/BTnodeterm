@@ -1379,6 +1379,51 @@ export function buildTranscriptApi(
 }
 
 /** Server-owned account lifecycle; never install on a joined relay API. */
+export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 'sshProject' | 'sshFs'> {
+  let promptReady: Promise<string> | null = null
+  return {
+    ssh: {
+      list: () => client.request(IPC.sshList) as ReturnType<NodeTerminalApi['ssh']['list']>,
+      save: (server) => client.request(IPC.sshSave, server) as ReturnType<NodeTerminalApi['ssh']['save']>,
+      remove: (id) => client.request(IPC.sshDelete, id) as ReturnType<NodeTerminalApi['ssh']['remove']>,
+      importCandidates: () => client.request(IPC.sshImport) as ReturnType<NodeTerminalApi['ssh']['importCandidates']>
+    },
+    sshProject: {
+      capabilities: () => client.request(IPC.sshProjectCapabilities).catch((error) => {
+        if ((error as { code?: string }).code === E_NO_HANDLER) return null
+        throw error
+      }) as ReturnType<NonNullable<NodeTerminalApi['sshProject']['capabilities']>>,
+      connectPrompts: () => (promptReady = client.request(IPC.sshPromptConnect) as Promise<string>),
+      disconnectPrompts: (epoch) => client.request(IPC.sshPromptDisconnect, epoch) as Promise<void>,
+      connect: async (project, connection, cwd) => {
+        // Mount effects subscribe/register the prompt UI in the same turn as auto-connect.
+        await Promise.resolve()
+        if (promptReady) await promptReady
+        return client.request(IPC.sshConnectProject, project, connection, cwd) as ReturnType<NodeTerminalApi['sshProject']['connect']>
+      },
+      disconnect: (project) => client.request(IPC.sshDisconnectProject, project) as Promise<void>,
+      killSessions: (project, nodes, options) => client.request(IPC.sshKillSessions, project, nodes, options) as Promise<void>,
+      listDir: (project, directory) => client.request(IPC.sshListDir, project, directory) as ReturnType<NodeTerminalApi['sshProject']['listDir']>,
+      mkdir: (project, directory) => client.request(IPC.sshMkdir, project, directory) as Promise<boolean>,
+      uploadFile: (project, file, name) => client.request(IPC.sshUploadFile, project, file, name) as Promise<string | null>,
+      downloadFile: (project, file, directory) => client.request(IPC.sshDownloadFile, project, file, directory) as ReturnType<NodeTerminalApi['sshProject']['downloadFile']>,
+      onStatus: (listener) => client.subscribe(IPC.sshProjectStatus, listener as Listener),
+      submitPassphrase: (id, value) => client.request(IPC.sshPassphraseSubmit, id, value) as Promise<void>,
+      onPassphraseRequest: (listener) => client.subscribe(IPC.sshPassphraseRequest, listener as Listener),
+      onPassphraseDismiss: (listener) => client.subscribe(IPC.sshPassphraseDismiss, listener as Listener)
+    },
+    sshFs: {
+      list: (project, directory) => client.request(IPC.sshFsList, project, directory) as ReturnType<NodeTerminalApi['sshFs']['list']>,
+      read: (project, file) => client.request(IPC.sshFsRead, project, file) as Promise<string>,
+      readBinary: (project, file) => client.request(IPC.sshFsReadBinary, project, file) as Promise<string>,
+      write: (project, file, text) => client.request(IPC.sshFsWrite, project, file, text) as Promise<boolean>,
+      mkdir: (project, directory) => client.request(IPC.sshFsMkdir, project, directory) as Promise<boolean>,
+      exists: (project, file) => client.request(IPC.sshFsExists, project, file) as Promise<boolean>,
+      quickOpen: (project, directory) => client.request(IPC.sshFsQuickOpen, project, directory) as Promise<string[]>
+    }
+  }
+}
+
 export function buildCodexAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'codexAccounts'> {
   return { codexAccounts: {
     add: (ctx) => client.request(IPC.codexAccountsAdd, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['add']>,
@@ -1584,6 +1629,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildGitHubApi(client),
     ...buildClaudeAccountsApi(client),
     ...buildCodexAccountsApi(client),
+    ...buildSshApi(client),
     codex: buildCodexApi(client),
     // `claude` is assembled from two builders: `cliCaps` from the relay-shared one, and the
     // transcript reader from the Server-Edition-only one (which also supplies `chat`).

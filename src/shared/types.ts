@@ -2769,6 +2769,9 @@ export interface SshPassphraseRequest {
 }
 
 export interface SshProjectApi {
+  capabilities?(): Promise<{ enabled: boolean; filesystem: boolean; transfers: boolean; media: boolean; hostContext: 'server' } | null>
+  connectPrompts?(): Promise<string>
+  disconnectPrompts?(epoch: string): Promise<void>
   /** Open (or reuse) the ControlMaster for an SSH project; resolves once connected. */
   connect(
     projectId: string,

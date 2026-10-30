@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
   buildCodexAccountsApi,
+  buildSshApi,
   buildControlApi,
   buildMediaApi,
   buildWebPreviewApi,
@@ -35,6 +36,35 @@ function fakeClient() {
     }
   }
 }
+
+describe('Server SSH owner protocol', () => {
+  it('waits for prompt readiness and carries explicit project context on filesystem requests', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    let ready!: (value: string) => void
+    request.mockImplementationOnce(() => new Promise<string>((resolve) => { ready = resolve }))
+    const api = buildSshApi(c as never)
+    const registration = api.sshProject.connectPrompts!()
+    const connecting = api.sshProject.connect('remote', { user: 'u', host: 'h' }, '/project')
+    await Promise.resolve()
+    expect(c.calls.some((call) => call.method === IPC.sshConnectProject)).toBe(false)
+    ready('epoch'); await registration; await connecting
+    await api.sshFs.read('remote', '/project/file')
+    await api.sshProject.disconnectPrompts!('epoch')
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshConnectProject, args: ['remote', { user: 'u', host: 'h' }, '/project'] })
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshFsRead, args: ['remote', '/project/file'] })
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshPromptDisconnect, args: ['epoch'] })
+  })
+  it('negotiates only a missing capability handler and propagates transport failures', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request'); const api = buildSshApi(c as never)
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.sshProject.capabilities!()).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.sshProject.capabilities!()).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    api.sshProject.onPassphraseRequest(() => {}); api.sshProject.onPassphraseDismiss(() => {})
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseRequest, args: [] })
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseDismiss, args: [] })
+  })
+})
 
 describe('Server media protocol', () => {
   it('uses scoped references and renews/releases the opaque token without passing URL paths', async () => {

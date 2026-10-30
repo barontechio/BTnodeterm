@@ -58,6 +58,8 @@ export type ServerConfig = {
    * NODETERM_CANVAS_CONTROL discovery bit injected by HookServer.
    */
   canvasControl?: boolean
+  /** Opt-in server-host SSH context; credentials/config are this host's, never the viewer's. */
+  sshProjects?: boolean
   /**
    * Which nodes a canvas-control caller may read and act on (src/server/control-scope.ts):
    * `creator` (default) or `project`. Environment: NODETERM_SERVER_CONTROL_SCOPE; CLI:
@@ -225,6 +227,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     args['canvas-control'] !== undefined
       ? truthy(args['canvas-control'])
       : truthy(env.NODETERM_SERVER_CANVAS_CONTROL)
+  const sshProjects = args['ssh-projects'] !== undefined ? truthy(args['ssh-projects']) : truthy(env.NODETERM_SERVER_SSH)
   if (args['control-scope'] === true) {
     throw new Error('--control-scope needs a value: creator or project')
   }
@@ -312,6 +315,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     ...(previewOrigin !== undefined ? { previewOrigin } : {}),
     headless,
     canvasControl,
+    sshProjects,
     controlScope
   }
 }
