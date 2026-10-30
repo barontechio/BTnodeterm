@@ -666,21 +666,23 @@ export async function startServer(
   // rather than an unknown channel when canvas control is off.
   registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
+  const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
+    workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
+    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects })
   const {
     contextTail,
     geminiContextTail,
     codexContextTail,
     cursorContextTail,
-    antigravityContextTail
+    antigravityContextTail,
+    reconcileRouting: reconcileAgentTailRouting
   } = wireAgentStatus(platform, {
+    isRemoteNode: remoteTranscripts.isRemoteNode,
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })
   geminiTranscriptPathFor = (id) => geminiContextTail.pathFor(id)
   // Cursor NEEDS YOU, same seam as the desktop (core/agents/cursor-approval.ts).
   hookServer.setPaneReader((nodeId) => ptyManager.captureSession(nodeId))
-  const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
-    workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
-    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects })
   // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
   // Same call as the desktop's (hook-verified-parity.test.ts).
   wireClaudePaneOrigin({
@@ -716,9 +718,10 @@ export async function startServer(
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
   // it, so a browser agent node's meter filled only on its next turn, exactly the desktop bug
-  // issue #813 reported for SSH nodes. No remote leg here (see registerTranscriptIpc above): this
-  // process runs on the host whose transcripts it reads, so the local locators are complete.
+  // issue #813 reported for SSH nodes. Continuous remote meters remain unavailable; saved remote
+  // records cannot rehydrate from or replay a namesake on this host.
   registerContextEnsureIpc({
+    isRemoteNode: remoteTranscripts.isRemoteNode,
     tailFor: (agentId) => {
       switch (agentId) {
         case undefined:
@@ -929,6 +932,7 @@ export async function startServer(
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
   workspaceStore.onPersist = () => {
+    reconcileAgentTailRouting()
     workspaceWatcher.sync()
     contextLink.refresh()
     refreshNodeTokens()

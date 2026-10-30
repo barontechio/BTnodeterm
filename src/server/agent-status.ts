@@ -2,9 +2,8 @@
 // the hook-wiring block in `src/main/index.ts`, with the Electron seams swapped for the
 // headless server platform. Installs the hook server's normalized + raw listeners so agent
 // status badges, subagent live transcripts, and the context-window meter all reach the
-// browser over `platform.broadcast`. The SSH branch (remote tails / RemoteFile) is dropped —
-// the server has no SSH-project manager — so the raw listener falls straight through to the
-// local logic.
+// browser over `platform.broadcast`. Remote histories have a separate read-only adapter;
+// until remote continuous tails are installed, known remote raw hooks cannot touch local files.
 //
 // This module must import nothing from electron or `../main` (see no-electron.test.ts).
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
@@ -53,6 +52,7 @@ export interface HookLike {
 }
 
 export interface WireAgentStatusOptions {
+  isRemoteNode?(nodeId: string): boolean
   hooks?: HookLike
   subagentTail?: SubagentTail
   contextTail?: ContextTail
@@ -82,6 +82,7 @@ export function wireAgentStatus(
   codexContextTail: ContextTail
   cursorContextTail: ContextTail
   antigravityContextTail: ContextTail
+  reconcileRouting(): void
 } {
   const hooks = opts.hooks ?? hookServer
   // nodeId → the agent session id of whichever hook-capable CLI runs in that node (claude's, and
@@ -249,9 +250,9 @@ export function wireAgentStatus(
   const SUBAGENT_TOOLS = new Set(['Agent', 'Task'])
   // Hook server validates session-env capacity and caller identity once for both shells.
   hooks.setRawListener((agentId, nodeId, payload, _meta) => {
+    if (opts.isRemoteNode?.(nodeId)) { releaseNodeTails(nodeId); return }
     if (agentId === 'cursor') {
-      // Same shared step as the desktop (core/cursor-chat.ts `applyCursorRaw`). The server has no
-      // SSH projects, so nothing here is remote.
+      // Known remote nodes were refused above; this shared step only reads local Cursor data.
       applyCursorRaw(
         { tail: cursorContextTail, subagents: cursorSubagents, nodeSession: nodeContextSession, isRemote: () => false },
         nodeId,
@@ -365,9 +366,7 @@ export function wireAgentStatus(
     // jailed by the same `safeTranscriptPath` claude uses (widened to those two agents' transcript
     // roots), because a forged POST could otherwise aim a file read at an arbitrary local path.
     //
-    // The desktop's copy of this branch additionally skips REMOTE (SSH) nodes, whose transcript is
-    // on the host; the server has no SSH-project manager (see the module header), so every node it
-    // serves is local and there is nothing to skip.
+    // Known remote nodes were refused before any agent-specific local resolver above.
     if (agentId === 'gemini' || agentId === 'codex') {
       const p = payload as {
         session_id?: string
@@ -495,8 +494,7 @@ export function wireAgentStatus(
   })
 
   // Session end → tear down its tails and clear the maps (server parity with desktop
-  // `src/main/index.ts`'s local `ipcMain.on(IPC.ptyDestroy, …)` branch; the remote/SSH lines are
-  // dropped — the server has no SSH-project manager). Coexists with PtyManager's own listeners via
+  // `src/main/index.ts`'s local `ipcMain.on(IPC.ptyDestroy, …)` branch). Coexists with PtyManager's own listeners via
   // the multi-listener `on`: those kill the tmux session, these untrack the tails. Untracking a
   // non-tracked session/subagent is a no-op, so a repeat is harmless.
   //  - pty:destroy — the node was deleted;
@@ -538,6 +536,9 @@ export function wireAgentStatus(
     geminiContextTail,
     codexContextTail,
     cursorContextTail,
-    antigravityContextTail
+    antigravityContextTail,
+    reconcileRouting: () => {
+      for (const nodeId of nodeContextSession.keys()) if (opts.isRemoteNode?.(nodeId)) releaseNodeTails(nodeId)
+    }
   }
 }

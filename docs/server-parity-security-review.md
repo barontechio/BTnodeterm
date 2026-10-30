@@ -50,3 +50,12 @@ The relevant runtime disclosures include [DOMPurify](https://github.com/advisori
 and [Sharp/libvips](https://github.com/advisories/GHSA-wq5f-xc86-pv6w); the Vite patch covers its
 [launch-editor advisory](https://github.com/advisories/GHSA-587h-7wmj-h5pm). No major dependency
 migration or native ABI/toolchain upgrade is part of this patch.
+
+The title-read snapshot's CodeQL check 123870469990 reports new fingerprints for the same fixed
+license/pairing protocol flows (alerts 8–11); these were individually reviewed with the redirect
+protections above retained. Alert 42 is a loopback test sending its newly minted temporary node
+capability to its own in-process hook server, with no external authority or real secret. Each has
+an individual false-positive rationale. Alert 28 is a test-only pre-commit existence assertion
+followed by a post-commit inode observation; the fixture now inspects the empty parent directory
+before commit, separating those observations without weakening the production account service.
+The next CodeQL analysis must verify that test finding is gone; no query or check is disabled.

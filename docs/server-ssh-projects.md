@@ -37,6 +37,8 @@ bindings, remaining agent readers, setup/worktree automation and development-ser
 separate delivery gates in [the parity plan](server-capability-parity-plan.md). Read-only histories
 do not authorize remote terminal control. Remote services must use the current remote target or
 report unavailable; a matching local pathname is never evidence of remote data.
+Context rehydration and raw-hook tail setup also refuse known remote records before any local
+locator or replay. A node whose routing becomes remote releases its earlier local tails.
 
 Validation uses temporary HOME, data directories, tmux namespace and a loopback SSH server. Both
 OpenSSH and the native transport exercise encrypted-key prompts, wrong-tab rejection, quoted file
