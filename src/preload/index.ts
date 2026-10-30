@@ -133,6 +133,11 @@ const api: NodeTerminalApi = {
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
     },
+    onInputBlocked: (listener) => {
+      const handler = (_e: unknown, event: { nodeId: string }) => listener(event)
+      ipcRenderer.on(IPC.ptyInputBlocked, handler)
+      return () => ipcRenderer.removeListener(IPC.ptyInputBlocked, handler)
+    },
     onExit: (sessionId, listener) => {
       const channel = IPC.ptyExit(sessionId)
       const handler = (_e: unknown, code: number) => listener(code)

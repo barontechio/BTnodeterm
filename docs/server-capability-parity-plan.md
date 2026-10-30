@@ -127,9 +127,18 @@ transcript/context bindings remain the next integration step.
 The integrated security and dependency-patch snapshot passes 24,418 tests (109 skipped),
 typecheck and both builds, with zero npm audit advisories. The fork integration is tracked in
 [draft PR #2](https://github.com/barontechio/BTnodeterm/pull/2). Linux, Windows, CodeQL and
-dependency review passed before the patch-only dependency refresh; its next CI run verifies
-the refreshed lock. The review and per-alert decisions are recorded in
+dependency review also passed for the refreshed lock (`dd982171`). The review and per-alert decisions are recorded in
 [the security review](server-parity-security-review.md).
+
+Host node execution now has a bounded, owner-aware coordinator (`6249a946`) and a first
+PtyManager integration. Claims refuse pre-existing pane writes, queued/physical controller
+deliveries, creates and teardowns. Keyboard input receives an addressed, throttled refusal;
+headless/raw/background writes, semantic launch, keys, recycle and destruction cannot enter
+another action's node. Expired async continuations cannot create or write a different node.
+Physical controller delivery remains fenced after its caller's response deadline. The focused
+PTY/coordinator suite passes 724 tests (6 skipped), with typecheck. A fake session-host snapshot
+is now explicitly isolated even when a real bundle exists on disk. No new write/branch command
+is enabled by this foundation alone; their target/account/pane and consent adapters remain gates.
 
 Baseline inspected on 2026-10-29:
 

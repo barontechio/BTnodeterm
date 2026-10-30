@@ -427,6 +427,7 @@ export function buildRealApi(
     readSessionName: () => Promise.resolve(''),
     onData: (sessionId, listener) =>
       client.subscribe(IPC.ptyData(sessionId), listener as Listener),
+    onInputBlocked: (listener) => client.subscribe(IPC.ptyInputBlocked, listener as Listener),
     onExit: (sessionId, listener) =>
       client.subscribe(IPC.ptyExit(sessionId), listener as Listener),
     // Co-attach channels: ordinary JSON `ev` frames (only pty:data is binary), so the frame
