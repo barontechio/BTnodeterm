@@ -1762,3 +1762,11 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+
+**Message envelopes hold one pane-write slot.** Use `PtyManager.sendSettledEnvelope` for the
+Server paste/settle/Enter sequence. Capture and settlement awaits belong inside its queue slot;
+two public `sendText` calls around an unreserved wait permit another write to splice into the
+composer. The implementation lives in `core/settled-envelope.ts`, with a Server compatibility
+export, and uses private delivery inside the queue to avoid recursive deadlock. Preserve the
+existing successful-paste/uncertain-submit receipt semantics; never resend a possibly pasted body.
