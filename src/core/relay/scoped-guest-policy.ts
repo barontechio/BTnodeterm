@@ -507,6 +507,10 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
  */
 export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.canvasMutationRejected,
+  // Recovery facts and approval belong to the physical host owner, never the shared project.
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   // A whole-workspace write from a peer would replace the host's other projects.
   IPC.workspaceSave,
   // Moving a project's storage writes and deletes host files (issue #1145); host-only.

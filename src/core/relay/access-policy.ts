@@ -375,6 +375,10 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.projectSetupSubscribe,
   IPC.projectSetupUnsubscribe,
   IPC.worktreeMaterializeShared,
+  // Physical-owner recovery administration; HOST_ONLY also refuses editors/relay owners.
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   // Host settings, credentials and paths.
   // Agent-integration consent status (#744): host-only, never a viewer's.
   IPC.integrationsStatus,

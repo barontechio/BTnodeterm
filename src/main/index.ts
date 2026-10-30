@@ -2391,10 +2391,6 @@ app.whenReady().then(async () => {
   // listeners (setListener/setRawListener/setControlHandler) attach later, which the server
   // tolerates — early hook POSTs are simply dropped, never mis-routed.
   const hookStartupWarning = await hookServer.startForApp()
-  const worktreeRecovery = await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
-  worktreeRecoveryRuntime = worktreeRecovery
-  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
-  worktreeRecoveryOwners = registerWorktreeRecoveryIpc(corePlatform, () => worktreeRecoveryService)
   // The durable orchestration facts belong to the instance that owns the hook endpoint, exactly
   // like the request ledger (which `hookServer.start()` only loads when it wins the endpoint). A
   // second instance on the same userData that lost it must neither restore them — it would expire,
@@ -2402,6 +2398,10 @@ app.whenReady().then(async () => {
   if (hookStartupWarning) {
     for (const f of [deliveryQueueFile, stationOutcomesFile, stationHandoversFile]) f.standDown()
   }
+  const worktreeRecovery = await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
+  worktreeRecoveryRuntime = worktreeRecovery
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  worktreeRecoveryOwners = registerWorktreeRecoveryIpc(corePlatform, () => worktreeRecoveryService)
   // ---- Node identity (src/core/agents/node-auth-secret.ts) ------------------------------------
   // One secret does two jobs: it arms the hook server's per-node capability (closing the "shared
   // bearer can name any sibling node" hole) and it signs the codex thread → node records the hook

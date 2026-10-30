@@ -16,6 +16,10 @@ describe('physical owner worktree recovery RPC', () => {
       if (channel === IPC.worktreeRecoveryList) expect(answer).toBeNull()
       else expect(answer).toMatchObject({ ok: false })
     }
+    platform.clients.push(2); platform.isOwnerClient = (id) => id === 1
+    expect(await platform.handlers[IPC.worktreeRecoveryList](2)).toBeNull()
+    expect(await platform.handlers[IPC.worktreeRecoveryInspect](2, 'record')).toMatchObject({ ok: false })
+    expect(await platform.handlers[IPC.worktreeRecoveryKeep](2, 'record')).toMatchObject({ ok: false, outcome: 'refused' })
     for (const bad of ['../record', '', {}, null, 'x'.repeat(129)]) {
       expect(await platform.handlers[IPC.worktreeRecoveryInspect](1, bad)).toMatchObject({ ok: false })
       expect(await platform.handlers[IPC.worktreeRecoveryKeep](1, bad)).toMatchObject({ ok: false, outcome: 'refused' })
