@@ -6,6 +6,22 @@ This is an implementation proposal. Work proceeds by the acceptance gates below,
 
 ## Baseline and upstream delivery
 
+Current integration validation (2026-10-30): the frozen canvas execution reservation snapshot
+`391b5420` passes 24,603 tests (109 skipped), typecheck, Desktop production build and Server build.
+It includes clean Git removal primitives, the backend-start barrier, durable recovery storage,
+physical start admission, current context-link authorization/routing and canvas/store reservation
+seams. The confirmed removal/recovery transaction is still pending; these foundations do not enable
+directory deletion. The preceding pushed owner/agent branch snapshot `0c8c0dd0` passed Linux and
+Windows quality, Dependency review and CodeQL analysis/gate; this delivery requires fresh CI.
+
+Upstream delivery status was rechecked on 2026-10-30. PRs #1320–#1331 were closed by the fork owner
+with the explanation that changes will be resubmitted in planned order, one at a time; their export
+branches and local validations remain available. The active upstream proposals are
+[Server list #1332](https://github.com/eneskirca/nodeterm/pull/1332) and its dependent
+[project control scope #1333](https://github.com/eneskirca/nodeterm/pull/1333). Historical proposal
+references and CI statuses below describe their earlier snapshots, not current open or accepted
+PRs. Do not reopen or resubmit the old batch while this ordered delivery is in progress.
+
 Implementation status: capability discovery and the explicit Server CI build are committed in
 `dfc22a47`, the shared content writer in `2c9c7235`, and workspace-save concurrency in `814ac35b`.
 The geometry extraction (`926988b7`) passes the complete suite: 24,207 tests with 109 skipped.
