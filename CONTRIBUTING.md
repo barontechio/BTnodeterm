@@ -162,6 +162,10 @@ imports. Preserve existing host-key, integration-consent, pending-kill and accou
 SSH inventory edits use one FIFO and acknowledge only after owner-only atomic persistence;
 failed writes retain the previous cache. This extraction does not enable Server SSH projects.
 
+Checked remote reads prove a missing path with a private status. Permission, I/O, nonregular
+entry and SSH failures remain errors; an arbitrary nonzero `cat` exit must never cause a workspace
+reconciliation to create or replace a remote project/settings file.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not

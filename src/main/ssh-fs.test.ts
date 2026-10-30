@@ -141,9 +141,10 @@ describe('SshFs (injected runner)', () => {
   // For workspace reconciliation that difference is load-bearing: absent → push our cache up,
   // error → do NOTHING (a failed read is never evidence of absence). ssh itself exits 255 on any
   // connection/auth failure; a remote `cat` on a missing file exits 1.
-  it('readTextChecked: exit 0 → ok+content, remote non-zero → absent, ssh 255/throw → error', async () => {
+  it('readTextChecked: only checked absence is absent; failed reads and transports are errors', async () => {
     expect(await new SshFs(async () => ({ code: 0, stdout: 'hi' })).readTextChecked(ref, '/x')).toEqual({ status: 'ok', content: 'hi' })
-    expect(await new SshFs(async () => ({ code: 1, stdout: '' })).readTextChecked(ref, '/x')).toEqual({ status: 'absent' })
+    expect(await new SshFs(async () => ({ code: 66, stdout: '' })).readTextChecked(ref, '/x')).toEqual({ status: 'absent' })
+    expect(await new SshFs(async () => ({ code: 1, stdout: '' })).readTextChecked(ref, '/x')).toEqual({ status: 'error' })
     expect(await new SshFs(async () => ({ code: 255, stdout: '' })).readTextChecked(ref, '/x')).toEqual({ status: 'error' })
     expect(await new SshFs(async () => { throw new Error('spawn') }).readTextChecked(ref, '/x')).toEqual({ status: 'error' })
   })

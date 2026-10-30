@@ -33,6 +33,18 @@ export function sshListArgs(conn: SshConnection, cp: string, path: string): stri
 export function sshReadArgs(conn: SshConnection, cp: string, path: string): string[] {
   return childArgs(conn, cp, `cat ${quoteRemotePath(path)}`)
 }
+/** Only this private status proves absence; permission/I/O failures must never trigger a write. */
+export const SSH_READ_ABSENT = 66
+export function sshReadCheckedArgs(conn: SshConnection, cp: string, file: string): string[] {
+  return childArgs(conn, cp,
+    `nt_file=${quoteRemotePath(file)}; nt_check="$nt_file"; ` +
+    `while [ ! -e "$nt_check" ] && [ ! -L "$nt_check" ]; do ` +
+    `nt_parent="\${nt_check%/*}"; [ "$nt_parent" != "$nt_check" ] || nt_parent=.; [ -n "$nt_parent" ] || nt_parent=/; ` +
+    `if [ -d "$nt_parent" ]; then [ -x "$nt_parent" ] || exit 77; ` +
+    `if [ ! -e "$nt_check" ] && [ ! -L "$nt_check" ]; then exit ${SSH_READ_ABSENT}; fi; exit 77; fi; ` +
+    `[ "$nt_parent" != "$nt_check" ] || exit 77; nt_check="$nt_parent"; done; ` +
+    `[ -f "$nt_file" ] && [ -r "$nt_file" ] || exit 77; cat "$nt_file" || exit 77`)
+}
 export function sshReadBinaryArgs(conn: SshConnection, cp: string, path: string): string[] {
   return childArgs(conn, cp, `base64 ${quoteRemotePath(path)}`)
 }
@@ -162,8 +174,8 @@ export class SshFs {
 
   /**
    * Like readText, but keeps "the file is not there" distinguishable from "the read failed".
-   * ssh exits 255 on any connection/auth failure; a remote command's own non-zero status (cat on
-   * a missing/unreadable file) passes through as-is. Workspace reconciliation depends on this:
+   * A checked missing path returns SSH_READ_ABSENT; permission, I/O and transport errors refuse.
+   * Workspace reconciliation depends on this:
    * absent → push our cache up, error → do nothing (a failed read is never evidence of absence).
    */
   async readTextChecked(
@@ -171,9 +183,9 @@ export class SshFs {
     path: string
   ): Promise<{ status: 'ok'; content: string } | { status: 'absent' } | { status: 'error' }> {
     try {
-      const { code, stdout } = await this.run(sshReadArgs(ref.conn, ref.controlPath, path))
+      const { code, stdout } = await this.run(sshReadCheckedArgs(ref.conn, ref.controlPath, path))
       if (code === 0) return { status: 'ok', content: stdout }
-      return code === 255 ? { status: 'error' } : { status: 'absent' }
+      return code === SSH_READ_ABSENT ? { status: 'absent' } : { status: 'error' }
     } catch {
       return { status: 'error' }
     }

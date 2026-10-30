@@ -1,5 +1,10 @@
 # CLAUDE.md
 
+Checked remote reads prove a missing path with a private status. Permission, I/O, nonregular
+entry and SSH failures remain errors; an arbitrary nonzero `cat` exit must never cause a workspace
+reconciliation to create or replace a remote project/settings file.
+
+
 SSH project orchestration, remote hooks/freshness/tunnel repair, filesystem and atomic-write
 services live in core. The native adapter supplies transport/authentication/status runners and
 keeps Electron IPC, passphrase dialogs and media URLs in main. Compatibility exports preserve old
