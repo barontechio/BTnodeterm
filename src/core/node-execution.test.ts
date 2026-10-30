@@ -6,6 +6,44 @@ function deferred() { let resolve!: () => void; const promise = new Promise<void
 const options = { current: () => true }
 
 describe('host node execution ownership', () => {
+  it('claims a whole group atomically and owns each member from the same continuation', async () => {
+    const guard = new NodeExecutionCoordinator(); const hold = deferred(); const ids = ['a', 'b']
+    const work = guard.runMany(ids, 'worktree', options, async (permit) => {
+      expect(permit.nodeIds).toEqual(['a', 'b']); expect(Object.isFrozen(permit.nodeIds)).toBe(true)
+      guard.assertAllowed('a'); guard.assertAllowed('b'); await hold.promise
+      guard.assertAllowed('a'); guard.assertAllowed('b')
+    })
+    ids[1] = 'c'
+    expect(() => guard.assertAllowed('a')).toThrow('busy'); expect(() => guard.assertAllowed('b')).toThrow('busy')
+    guard.assertAllowed('c'); hold.resolve(); await work
+    guard.assertAllowed('a'); guard.assertAllowed('b')
+  })
+
+  it('does not claim any other member when one is busy or the group exceeds capacity', async () => {
+    const guard = new NodeExecutionCoordinator(undefined, 2); const hold = deferred()
+    const first = guard.run('b', 'write', options, () => hold.promise)
+    await expect(guard.runMany(['a', 'b'], 'worktree', options, () => {})).rejects.toThrow('busy')
+    expect(guard.isBusy('a')).toBe(false)
+    await expect(guard.runMany(['a', 'c'], 'worktree', options, () => {})).rejects.toThrow('capacity')
+    expect(guard.isBusy('a')).toBe(false); expect(guard.isBusy('c')).toBe(false)
+    for (const ids of [[], ['a', 'a'], ['a', '']])
+      await expect(guard.runMany(ids, 'worktree', options, () => {})).rejects.toThrow('invalid')
+    hold.resolve(); await first
+  })
+
+  it('retains every member after cancellation until the dispatched operation settles', async () => {
+    const guard = new NodeExecutionCoordinator(); const owners = new OwnerLifetimes(); const hold = deferred()
+    let late!: Promise<void>; const resume = deferred()
+    const work = guard.runMany(['a', 'b'], 'worktree', { ...options, owner: owners.get(1, () => true) }, async () => {
+      late = resume.promise.then(() => guard.assertAllowed('c')); await hold.promise
+    })
+    void work.catch(() => {}); owners.forget(1)
+    expect(guard.isBusy('a')).toBe(true); expect(guard.isBusy('b')).toBe(true)
+    hold.resolve(); await expect(work).rejects.toThrow('expired')
+    expect(guard.isBusy('a')).toBe(false); expect(guard.isBusy('b')).toBe(false)
+    resume.resolve(); await expect(late).rejects.toThrow('expired')
+  })
+
   it('excludes other callers while preserving concurrent work on another node', async () => {
     const guard = new NodeExecutionCoordinator(); const hold = deferred()
     const first = guard.run('a', 'branch', options, async () => { guard.assertAllowed('a'); await hold.promise; guard.assertAllowed('a') })

@@ -1906,3 +1906,9 @@ The optional Python 3/POSIX reader writes no helper files, opens directory-relat
 descriptors and rechecks named identities. Cap discovery, byte windows and concurrent reads.
 Only a verified clean miss is absence; unavailable roots/runtime/permissions remain unknown.
 Never fall back to another account or local history, or treat read permission as terminal control.
+
+Group terminal operations use `PtyManager.runNodeActions`, not nested single-node claims. Every
+member is claimed synchronously or none is; existing pane/control/create/teardown work on any
+member refuses the batch. Capacity counts nodes, cancellation retains all fences until the effect
+settles, and caller mutation cannot change the captured member set. This exclusion does not reserve
+a filesystem path or authorize removal: worktree removal still needs its own path/project guard.

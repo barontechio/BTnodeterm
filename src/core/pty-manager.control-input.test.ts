@@ -86,6 +86,7 @@ type Mgr = {
   controlInput(id: string, chunk: unknown, isCurrent?: () => boolean): Promise<boolean>
   nodeControlSupport(persistKey: string): string
   runNodeAction: import('./pty-manager').PtyManager['runNodeAction']
+  runNodeActions: import('./pty-manager').PtyManager['runNodeActions']
 }
 
 /** A manager with one registered session, built without `create` — these methods read only the
@@ -120,6 +121,18 @@ afterEach(() => {
 })
 
 describe('watcherInputRoute', () => {
+  it('reserves all group members against competing host actions and raw input', async () => {
+    const { mgr } = await manager({})
+    let release!: () => void
+    const group = mgr.runNodeActions([NODE, 'other'], 'worktree', { current: () => true },
+      () => new Promise<void>((resolve) => { release = resolve }))
+    await expect(mgr.runNodeAction('other', 'write', { current: () => true }, () => {})).rejects.toThrow('busy')
+    expect(await mgr.controlInput('sess-1', { kind: 'keys', data: 'x' })).toBe(false)
+    expect(calls).toEqual([])
+    release(); await group
+    expect(await mgr.controlInput('sess-1', { kind: 'keys', data: 'x' })).toBe(true)
+  })
+
   it('keeps a timed-out physical delivery fenced until its backend promise settles', async () => {
     vi.useFakeTimers()
     const { mgr } = await manager({})
@@ -128,6 +141,8 @@ describe('watcherInputRoute', () => {
     const input = mgr.controlInput('sess-1', { kind: 'keys', data: 'x' })
     // A not-yet-dispatched control chunk also reserves its place before the microtask runs.
     await expect(mgr.runNodeAction(NODE, 'branch', { current: () => true }, () => {})).rejects.toThrow('busy')
+    await expect(mgr.runNodeActions(['other', NODE], 'worktree', { current: () => true }, () => {})).rejects.toThrow('busy')
+    await expect(mgr.runNodeAction('other', 'write', { current: () => true }, () => 'free')).resolves.toBe('free')
     await vi.advanceTimersByTimeAsync(PANE_INPUT_DEADLINE_MS + 1)
     await expect(input).resolves.toBe(false)
     await expect(mgr.runNodeAction(NODE, 'account', { current: () => true }, () => {})).rejects.toThrow('busy')

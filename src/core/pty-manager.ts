@@ -6,7 +6,7 @@ import path from 'path'
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { platform } from './platform'
-import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit } from './node-execution'
+import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit, type NodeExecutionBatchPermit } from './node-execution'
 import { sendSettledEnvelope as deliverSettledEnvelope, type SettledEnvelopeOptions } from './settled-envelope'
 import * as pty from 'node-pty'
 import { IPC } from '../shared/ipc'
@@ -1193,14 +1193,24 @@ export class PtyManager {
   /** Host services acquire before inspecting/dispatching an action; never a callback RPC. */
   runNodeAction<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,
     work: (permit: NodeExecutionPermit) => Promise<T> | T): Promise<T> {
-    if (this.paneWrites.has(sessionName(nodeId)) || this.controlDeliveries.has(nodeId) ||
-      this.inflight.has(nodeId) || this.ending.has(nodeId) || this.confirmedRecycles.has(nodeId) ||
-      this.unknownEnds.has(nodeId)) return Promise.reject(new NodeExecutionError('busy'))
+    return this.runNodeActions([nodeId], kind, options, work)
+  }
+
+  /** Atomically reserve every affected node before a host worktree/account operation starts. */
+  runNodeActions<T>(nodes: readonly string[], kind: NodeExecutionKind, options: NodeExecutionOptions,
+    work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
+    const nodeIds = [...nodes]; const targets = new Set(nodeIds)
+    for (const nodeId of nodeIds) {
+      if (this.paneWrites.has(sessionName(nodeId)) || this.controlDeliveries.has(nodeId) ||
+        this.inflight.has(nodeId) || this.ending.has(nodeId) || this.confirmedRecycles.has(nodeId) ||
+        this.unknownEnds.has(nodeId)) return Promise.reject(new NodeExecutionError('busy'))
+    }
     for (const [sessionId, session] of this.sessions) {
-      if ((session.persistKey ?? session.nodeId ?? session.indexKey) === nodeId && this.controlInputChains.has(sessionId))
+      const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey
+      if (nodeId && targets.has(nodeId) && this.controlInputChains.has(sessionId))
         return Promise.reject(new NodeExecutionError('busy'))
     }
-    return this.nodeExecution.run(nodeId, kind, options, work)
+    return this.nodeExecution.runMany(nodeIds, kind, options, work)
   }
 
   private noticeBlockedInput(clientId: ClientId, nodeId: string): void {
