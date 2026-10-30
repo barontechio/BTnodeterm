@@ -1762,3 +1762,10 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+**Clean worktree removal for host services.** `GitService.worktreeRemoveClean` is an internal
+building block without generic IPC. It verifies the current local directory and expected linked
+branch, and invokes Git without `--force`. Dirty/untracked files and locked checkouts are preserved;
+an unmerged branch is kept. A failed reply can still report verified absence after deletion, so a
+domain adapter must recover its bindings explicitly. The caller still owns authorization, owner
+confirmation and directory/node reservations; the existing explicit dirty-removal UI is unchanged.

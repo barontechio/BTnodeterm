@@ -360,6 +360,38 @@ export class GitService {
     )
   }
 
+  /** Host domain entry, intentionally absent from generic Git IPC. No dirty-removal escape. */
+  async worktreeRemoveClean(repoPath: string, wtPath: string, expectedBranch: string,
+    deleteBranch: boolean): Promise<worktreeOps.WorktreeOpResult> {
+    if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return REMOTE_WORKTREE_REFUSAL()
+    try {
+      const root = await fs.promises.realpath(wtPath)
+      const stat = await fs.promises.lstat(wtPath)
+      // Do not let a renamed/replaced symlink turn a saved binding into another directory.
+      if (!stat.isDirectory() || stat.isSymbolicLink() || path.resolve(wtPath) !== root)
+        return { ok: false, message: 'The worktree path is redirected or is not a local directory.' }
+      const checkedGit: worktreeOps.GitExecutor = async (directory, args) => {
+        if (args[0] === 'worktree' && args[1] === 'remove') {
+          const fresh = await fs.promises.lstat(wtPath)
+          if (!fresh.isDirectory() || fresh.dev !== stat.dev || fresh.ino !== stat.ino || await fs.promises.realpath(wtPath) !== root)
+            return { ok: false, out: '', err: 'The worktree directory changed before removal.' }
+        }
+        if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return { ok: false, out: '', err: REMOTE_WORKTREE_REFUSAL().message }
+        return git(directory, args)
+      }
+      return await worktreeOps.worktreeRemoveClean(checkedGit, repoPath, wtPath, os.homedir(), expectedBranch, deleteBranch,
+        async (directory) => {
+          try { return (await fs.promises.stat(directory)).isDirectory() }
+          catch (error) {
+            if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
+            throw error
+          }
+        })
+    } catch (error) {
+      return { ok: false, message: `Clean worktree removal could not be verified: ${(error as NodeJS.ErrnoException).code ?? 'unavailable'}. Nothing was intentionally discarded.` }
+    }
+  }
+
   async status(cwd: string): Promise<GitStatus> {
     const empty: GitStatus = {
       hasRepo: false,
