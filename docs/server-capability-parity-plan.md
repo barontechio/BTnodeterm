@@ -6,12 +6,12 @@ This is an implementation proposal. Work proceeds by the acceptance gates below,
 
 ## Baseline and upstream delivery
 
-Current integration validation (2026-10-30): the frozen canvas execution reservation snapshot
-`391b5420` passes 24,603 tests (109 skipped), typecheck, Desktop production build and Server build.
+Current integration validation (2026-10-30): the frozen worktree canvas admission snapshot
+`8f28c042` passes 24,613 tests (109 skipped), typecheck, Desktop production build and Server build.
 It includes clean Git removal primitives, the backend-start barrier, durable recovery storage,
-physical start admission, current context-link authorization/routing and canvas/store reservation
-seams. The confirmed removal/recovery transaction is still pending; these foundations do not enable
-directory deletion. The preceding pushed owner/agent branch snapshot `0c8c0dd0` passed Linux and
+physical and canvas path admission, current context-link authorization/routing and canvas/store
+reservation seams. The confirmed removal/recovery transaction is still pending; these foundations
+do not enable directory deletion. The preceding pushed snapshot `b67ef8dc` passed Linux and
 Windows quality, Dependency review and CodeQL analysis/gate; this delivery requires fresh CI.
 
 Upstream delivery status was rechecked on 2026-10-30. PRs #1320–#1331 were closed by the fork owner
