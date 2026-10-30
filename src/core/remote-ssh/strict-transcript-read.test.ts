@@ -116,13 +116,25 @@ os.supports_dir_fd.add(replaced)`
   it('does not call a replaced account tree a clean miss', async () => {
     const f = fixture()
     const before = `import os
-original_list = os.listdir
+original_list = os.scandir
 def replaced(fd):
     names = original_list(fd)
     os.rename(${JSON.stringify(f.root)}, ${JSON.stringify(f.root + '.old')})
     os.mkdir(${JSON.stringify(f.root)})
     return names
-os.listdir = replaced`
+os.scandir = replaced
+os.supports_fd.add(replaced)`
     expect(await execute(instrument(f.q, before))).toEqual({ code: 67, stdout: '' })
+  })
+
+  it('bounds directory discovery before inspecting an unbounded account tree', async () => {
+    const f = fixture()
+    const before = `import os, contextlib, itertools, types
+@contextlib.contextmanager
+def many(fd):
+    yield (types.SimpleNamespace(name='entry') for unused in itertools.count())
+os.scandir = many
+os.supports_fd.add(many)`
+    expect(await execute(instrument(f.q, before))).toEqual({ code: 68, stdout: '' })
   })
 })

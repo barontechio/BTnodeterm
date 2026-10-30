@@ -3,6 +3,9 @@ import { CHAT_PAGE_MAX_BYTES } from '../../shared/chat-page'
 import { SESSION_ID_RE } from '../transcript-reader'
 import { isSafeAccountId } from '../claude-accounts-core'
 
+const ACCOUNT_ID_MAX = 128
+const DIRECTORY_LIMIT = 4096
+
 // Optional remote Python 3 helper. No installation or host files: one bounded, read-only exec.
 // Directory-relative opens keep every account/project component behind NOFOLLOW. The named
 // identities are checked again after the read; error output never includes paths or file data.
@@ -11,11 +14,11 @@ class Unsafe(Exception): pass
 def main():
     home, account, session, limit, before = sys.argv[1:]
     limit = int(limit); before = int(before)
-    if not all(hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK')) or os.open not in os.supports_dir_fd:
+    if not all(hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK')) or os.open not in os.supports_dir_fd or os.scandir not in os.supports_fd:
         return 69
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', session) or limit < 1 or limit > 5242880 or before < -1:
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', session) or limit < 1 or limit > ${CHAT_PAGE_MAX_BYTES} or before < -1:
         return 65
-    if account and not re.fullmatch(r'[A-Za-z0-9_-]{1,128}', account): return 65
+    if account and not re.fullmatch(r'[A-Za-z0-9_-]{1,${ACCOUNT_ID_MAX}}', account): return 65
     directory = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     @contextlib.contextmanager
     def opened(name, flags, parent=None):
@@ -40,7 +43,12 @@ def main():
         directories_current()
         leaf = session + '.jsonl'
         matches = []
-        for name in sorted(os.listdir(root)):
+        names = []
+        with os.scandir(root) as entries:
+            for entry in entries:
+                if len(names) >= ${DIRECTORY_LIMIT}: raise OSError()
+                names.append(entry.name)
+        for name in sorted(names):
             entry = os.stat(name, dir_fd=root, follow_symlinks=False)
             if stat.S_ISLNK(entry.st_mode): raise Unsafe()
             if not stat.S_ISDIR(entry.st_mode): continue
@@ -97,7 +105,7 @@ export interface StrictTranscriptRead {
 export function strictTranscriptReadCommand(query: StrictTranscriptRead): string {
   if (!query.home.startsWith('/') || /[\0\r\n]/.test(query.home) || query.home.length > 4096 ||
     !SESSION_ID_RE.test(query.sessionId) || query.sessionId.length > 256 ||
-    (query.accountId !== undefined && (!isSafeAccountId(query.accountId) || query.accountId.length > 128)) ||
+    (query.accountId !== undefined && (!isSafeAccountId(query.accountId) || query.accountId.length > ACCOUNT_ID_MAX)) ||
     (query.before !== null && (!Number.isSafeInteger(query.before) || query.before < 0)) ||
     !Number.isSafeInteger(query.maxBytes) || query.maxBytes < 1 || query.maxBytes > CHAT_PAGE_MAX_BYTES)
     throw new Error('ssh-transcript-invalid-query')
