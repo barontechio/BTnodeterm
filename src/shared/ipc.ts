@@ -3,6 +3,8 @@
 export const IPC = {
   ptyCreate: 'pty:create',
   ptyWrite: 'pty:write',
+  /** Addressed to the typing client when a host action currently owns this node. No input bytes. */
+  ptyInputBlocked: 'pty:input-blocked',
   ptyResize: 'pty:resize',
   ptyFlow: 'pty:flow',
   ptyKill: 'pty:kill',
@@ -123,6 +125,7 @@ export const IPC = {
   agentGatewayCredentialSave: 'agent:gateway-credential-save',
   agentGatewayCredentialClear: 'agent:gateway-credential-clear',
   transcriptSearch: 'transcript:search',
+  transcriptSearchScoped: 'transcript:search-scoped',
   appToggleMarkdown: 'app:toggle-markdown',
   appCloseNode: 'app:close-node',
   /** main → renderer: ⌘/Ctrl+0 ("actual size"). Intercepted in `before-input-event` because
@@ -313,6 +316,7 @@ export const IPC = {
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see
    *  src/shared/canvas-order.ts). Args (both directions): [projectId: string, CanvasMutation]. */
   canvasMut: 'canvas:mut',
+  canvasMutationRejected: 'canvas:mutation-rejected',
   /** Which projects this core's canvas authority governs (request → `string[]`): a client publishes
    *  its canvas ops for them even when nobody else is attached, because the authority writes only
    *  what it hears as ops (docs/hosted-team-relay.md). Server Edition only; the desktop answers none. */
@@ -351,6 +355,12 @@ export const IPC = {
   appCheckForUpdates: 'app:check-for-updates',
   appGetVersion: 'app:get-version',
   appUserDataDir: 'app:user-data-dir',
+  controlCapabilities: 'control:capabilities',
+  controlRunLaunch: 'control:run-launch',
+  controlBranchClaude: 'control:branch-claude',
+  worktreeRecoveryList: 'worktree:recovery:list',
+  worktreeRecoveryInspect: 'worktree:recovery:inspect',
+  worktreeRecoveryKeep: 'worktree:recovery:keep',
   appUpdatePolicy: 'app:update-policy',
   // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
   appUpdatePrepInspect: 'app:update-prep-inspect',
@@ -365,6 +375,7 @@ export const IPC = {
   /** renderer → main: the flush for that request id settled. */
   appFlushDone: 'app:flush-done',
   licenseActivate: 'license:activate',
+  licenseCapabilities: 'license:capabilities',
   licenseDeactivate: 'license:deactivate',
   licenseStatus: 'license:status',
   licenseChanged: 'license:changed',
@@ -621,6 +632,9 @@ export const IPC = {
   sshFsExists: 'sshFs:exists',
   sshFsQuickOpen: 'sshFs:quick-open',
   sshProjectStatus: 'ssh-project:status',
+  sshProjectCapabilities: 'ssh-project:capabilities',
+  sshPromptConnect: 'ssh-project:prompt-connect',
+  sshPromptDisconnect: 'ssh-project:prompt-disconnect',
   /** main → renderer: an SSH project's identity file is passphrase-protected and the ssh-agent
    *  does not hold the key (or the last answer was wrong), so show a prompt.
    *  Payload: SshPassphraseRequest. */
@@ -676,6 +690,19 @@ export const IPC = {
   shellOpenExternal: 'shell:open-external',
   commitGenerate: 'commit:generate',
   mediaAllow: 'media:allow',
+  mediaAllowScoped: 'media:allow-scoped',
+  mediaRenew: 'media:renew',
+  mediaRelease: 'media:release',
+  webPreviewAllow: 'web-preview:allow',
+  webPreviewRenew: 'web-preview:renew',
+  webPreviewRelease: 'web-preview:release',
+  ownerConfirmationConnect: 'owner-confirmation:connect',
+  ownerConfirmationDisconnect: 'owner-confirmation:disconnect',
+  ownerConfirmationDecide: 'owner-confirmation:decide',
+  ownerConfirmationRequest: 'owner-confirmation:request',
+  ownerConfirmationDismiss: 'owner-confirmation:dismiss',
+  settingsPatch: 'settings:patch',
+  settingsChanged: 'settings:changed',
   mediaWriteHtml: 'media:write-html',
   browserRegister: 'browser:register',
   browserUnregister: 'browser:unregister',

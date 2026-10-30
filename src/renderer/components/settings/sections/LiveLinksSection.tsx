@@ -100,13 +100,14 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
   const links = useWatchLinks((s) => s.links)
   const projects = useProjects((s) => s.projects)
   const serverEdition = isBrowserRuntime()
+  const serverLicenseEnabled = useEntitlement((s) => s.serverLicenseEnabled)
   const [now, setNow] = useState(() => Date.now())
   const [confirmStopAll, setConfirmStopAll] = useState(false)
   /** What the last Stop all reached (R62) — said for a success too: with no link listed on this
    *  machine, nothing else on this page changes. */
   const [stopAllResult, setStopAllResult] = useState<{ ok: boolean; text: string } | null>(null)
   const [stoppingAll, setStoppingAll] = useState(false)
-  const stopAllShown = showsStopAll({ serverEdition, entitled: premium, activeLinks: links.length })
+  const stopAllShown = showsStopAll({ serverEdition, serverLicenseEnabled, entitled: premium, activeLinks: links.length })
   useEffect(() => {
     if (!isActive) return
     setNow(Date.now())
@@ -144,8 +145,8 @@ export function LiveLinksSection({ isActive }: { isActive: boolean }): React.JSX
               ))}
             </div>
           </div>
-        ) : serverEdition ? (
-          // R43: no license layer in the Server Edition yet — say so, never offer an Upgrade.
+        ) : serverEdition && !serverLicenseEnabled ? (
+          // An unconfigured Server host cannot offer checkout or create a link.
           <p className="text-sm text-muted">{SERVER_EDITION_UNSUPPORTED}</p>
         ) : premium ? (
           <div className="space-y-1">

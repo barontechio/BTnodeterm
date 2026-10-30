@@ -592,3 +592,36 @@ describe('readChatTranscript — the phone path (remoteOnly) tells a clean miss 
     expect(res).toEqual({ messages: [], found: false, olderCursor: null, unmatchedResults: [] })
   })
 })
+
+describe('transcript host request policy', () => {
+  it('refuses an unsupported remote harness before any host reader runs', async () => {
+    const pathFor = vi.fn(() => undefined)
+    const remote = vi.fn(async () => null)
+    for (const agentId of ['claude', 'codex', 'grok', 'gemini', 'opencode']) {
+      expect(await readChatTranscript({ sessionId: SID, nodeId: 'remote', agentId, remoteOnly: true }, {}, {
+        remoteAgentSupported: () => false, pathFor, readRemotePage: remote, readRemoteCodexPage: remote,
+        readRemoteGrok: remote
+      })).toMatchObject({ found: false, unreadable: true, unreadableReason: 'remote-reader-unavailable' })
+    }
+    expect(pathFor).not.toHaveBeenCalled(); expect(remote).not.toHaveBeenCalled()
+  })
+
+  it('preserves an actionable SSH refusal in the paged response', async () => {
+    expect(await readChatTranscript({ sessionId: SID, nodeId: 'remote', remoteOnly: true }, {}, {
+      readRemotePage: async () => ({ ok: false, reason: 'remote-unsafe-transcript' })
+    })).toMatchObject({ found: false, unreadable: true, unreadableReason: 'remote-unsafe-transcript' })
+  })
+
+  it('binds all registered read channels to the sender only when the host provides a scope', async () => {
+    writeTranscript(lines(assistantLine('local')))
+    const senders: number[] = []
+    registerTranscriptIpc({ rpcScope: async <T>(id: number, work: () => Promise<T>): Promise<T> => {
+      senders.push(id); return work()
+    } })
+    const result = await f.handlers[IPC.chatReadTranscript](17, SID, CWD, undefined, 'local', 'claude', {}) as ChatTranscriptResult
+    expect(result.found).toBe(true)
+    expect(await f.handlers[IPC.claudeReadTranscript](18, SID, CWD, undefined, 'local')).not.toEqual([])
+    expect(await f.handlers[IPC.transcriptExists](19, SID, undefined, 'local')).toBe('present')
+    expect(senders).toEqual([17, 18, 19])
+  })
+})

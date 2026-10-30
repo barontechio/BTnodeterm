@@ -6,6 +6,8 @@ import path from 'path'
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { platform } from './platform'
+import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit, type NodeExecutionBatchPermit } from './node-execution'
+import { sendSettledEnvelope as deliverSettledEnvelope, type SettledEnvelopeOptions } from './settled-envelope'
 import * as pty from 'node-pty'
 import { IPC } from '../shared/ipc'
 import { safeSessionProgram } from '../shared/node-exec'
@@ -128,7 +130,7 @@ import {
   pasteBufferName,
   runPasteDelivery
 } from './tmux-naming'
-import { localTypedArgs, localTypedEnv, typeThenSubmitWhenSettled } from './typed-input'
+import { localTypedArgs, localTypedEnv, submitWithDispatchNotice, typeThenSubmitWhenSettled } from './typed-input'
 import { encodeSendKeysHex } from './tmux-control'
 import {
   ZELLIJ_NESTING_ENV,
@@ -1180,6 +1182,72 @@ const SEPARATE_SUBMIT_DELAY_MS = 150
 
 export class PtyManager {
   private sessions = new Map<string, Session>()
+  private readonly nodeExecution = new NodeExecutionCoordinator()
+  private readonly blockedInputNotices = new Map<string, number>()
+  /** Real control deliveries can outlive their caller's deadline; keep those nodes fenced. */
+  private readonly controlDeliveries = new Map<string, number>()
+  private backendStarts = 0
+  private backendStartsPaused = false
+  private worktreeRecoveryAdmission: ((directory: string) => void) | null = null
+
+  /** Host-local recovery facts, injected by the owning shell; never a renderer-supplied check. */
+  setWorktreeRecoveryAdmission(check: ((directory: string) => void) | null): void { this.worktreeRecoveryAdmission = check }
+
+  /** Host-only dispatch policy for pending recovery members. A node claim alone cannot waive it. */
+  setNodeExecutionAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null): void {
+    this.nodeExecution.setDispatchAdmission(check)
+  }
+
+  /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
+  nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
+
+  /** Host services acquire before inspecting/dispatching an action; never a callback RPC. */
+  runNodeAction<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,
+    work: (permit: NodeExecutionPermit) => Promise<T> | T): Promise<T> {
+    return this.runNodeActions([nodeId], kind, options, work)
+  }
+
+  /** Atomically reserve every affected node before a host worktree/account operation starts. */
+  runNodeActions<T>(nodes: readonly string[], kind: NodeExecutionKind, options: NodeExecutionOptions,
+    work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
+    const nodeIds = [...nodes]; const targets = new Set(nodeIds)
+    for (const nodeId of nodeIds) {
+      if (this.paneWrites.has(sessionName(nodeId)) || this.controlDeliveries.has(nodeId) ||
+        this.inflight.has(nodeId) || this.ending.has(nodeId) || this.confirmedRecycles.has(nodeId) ||
+        this.unknownEnds.has(nodeId)) return Promise.reject(new NodeExecutionError('busy'))
+    }
+    for (const [sessionId, session] of this.sessions) {
+      const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey
+      if (nodeId && targets.has(nodeId) && this.controlInputChains.has(sessionId))
+        return Promise.reject(new NodeExecutionError('busy'))
+    }
+    return this.nodeExecution.runMany(nodeIds, kind, options, work)
+  }
+
+  /** A destructive worktree transaction needs quiescent backend creation as well as its member
+   * claims: an in-flight spawn may not have resolved its actual cwd yet. Existing unrelated panes
+   * remain usable. This barrier grants no directory ownership, Git authority or canvas mutation.
+   * Keep the actual external operation awaited; cancellation cannot release it early.
+   */
+  async runWorktreeAction<T>(nodes: readonly string[], options: NodeExecutionOptions,
+    work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
+    if (this.backendStarts || this.backendStartsPaused) throw new NodeExecutionError('busy')
+    this.backendStartsPaused = true
+    try { return await this.runNodeActions(nodes, 'worktree', options, work) }
+    finally { this.backendStartsPaused = false }
+  }
+
+  private noticeBlockedInput(clientId: ClientId, nodeId: string, error?: unknown): void {
+    const key = `${clientId}:${nodeId}`
+    const now = Date.now()
+    const last = this.blockedInputNotices.get(key)
+    if (last !== undefined && now - last < 1000) return
+    this.blockedInputNotices.delete(key)
+    if (this.blockedInputNotices.size >= 128) this.blockedInputNotices.delete(this.blockedInputNotices.keys().next().value!)
+    this.blockedInputNotices.set(key, now)
+    const recovery = error instanceof Error && error.message.startsWith('worktree-recovery-required:')
+    this.send(clientId, IPC.ptyInputBlocked, { nodeId, ...(recovery ? { reason: 'worktree-recovery' } : {}) })
+  }
   /** persistKey -> the agent id its pane was created for (this app run). `sendText` asks it so an
    *  agent in SEPARATE_SUBMIT_AGENTS gets its Enter as a second write (see `sendText`). */
   private agentByKey = new Map<string, string>()
@@ -1779,6 +1847,11 @@ export class PtyManager {
    *    answer until that exists.
    */
   async backgroundWrite(persistKey: string, data: string): Promise<boolean> {
+    try { return await this.serializePaneWrite(persistKey, () => this.backgroundWriteNow(persistKey, data)) }
+    catch { return false }
+  }
+
+  private async backgroundWriteNow(persistKey: string, data: string): Promise<boolean> {
     // Nothing to type — and `encodeSendKeysHex` would build a `send-keys -H ` with no bytes after
     // it, which is a command line worth not sending.
     if (!data) return false
@@ -2328,6 +2401,12 @@ export class PtyManager {
    * answers `unsupported-shell` (nothing read, nothing typed) — see launch-intent-execute.ts.
    */
   async executeLaunch(persistKey: unknown, request: unknown): Promise<LaunchIntentExecutionResult> {
+    if (typeof persistKey !== 'string') return this.executeLaunchNow(persistKey, request)
+    try { return await this.serializePaneWrite(persistKey, () => this.executeLaunchNow(persistKey, request)) }
+    catch { return { ok: false, reason: 'delivery-failed', message: 'The terminal is busy or its launch is no longer current.' } }
+  }
+
+  private async executeLaunchNow(persistKey: unknown, request: unknown): Promise<LaunchIntentExecutionResult> {
     const live = typeof persistKey === 'string' ? this.liveSessionForNode(persistKey) : undefined
     const s = live?.[1]
     return executeLaunchIntent(
@@ -2342,7 +2421,10 @@ export class PtyManager {
           }
         : undefined,
       request,
-      this.launchIntentDeps()
+      { ...this.launchIntentDeps(), execute: (...args) => {
+        this.nodeExecution.assertAllowed(typeof persistKey === 'string' ? persistKey : '')
+        return this.launchIntentDeps().execute(...args)
+      } }
     )
   }
 
@@ -2571,6 +2653,7 @@ export class PtyManager {
    * must not light the team typing badge.
    */
   writeHeadless(persistKey: string, data: string): boolean {
+    try { this.nodeExecution.assertAllowed(persistKey) } catch { return false }
     const live = this.liveSessionForNode(persistKey)
     if (!live || !this.subscribes(HEADLESS_CLIENT, live[0])) return false
     live[1].proc.write(data)
@@ -2585,6 +2668,7 @@ export class PtyManager {
 
   private async create(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const key = options.persistKey
+    this.nodeExecution.assertAllowed(key ?? '')
     if (!key) return this.spawnNew(clientId, options)
     if (options.agentId) this.agentByKey.set(key, options.agentId)
     // SECURITY — the choke point for the node id. Every session spawn (local tmux, plain shell,
@@ -2912,6 +2996,13 @@ export class PtyManager {
 
   /** Spawn a brand-new session for this client (the non-co-attach path). */
   private async spawnNew(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
+    if (this.backendStartsPaused) throw new NodeExecutionError('busy')
+    this.backendStarts++
+    try { return await this.spawnNewInternal(clientId, options) }
+    finally { this.backendStarts-- }
+  }
+
+  private async spawnNewInternal(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const refused = this.spawnRefusal(options)
     if (refused) return { sessionId: '', fresh: false, unavailable: refused }
     // A tmux-backed session is "fresh" (cold start) when no live session exists to reattach to
@@ -4173,6 +4264,7 @@ export class PtyManager {
       const sshRemote = live?.sshRemote ?? owner?.remote
       for (let i = 0; i < keys.length; i++) {
         if (i > 0) await new Promise((r) => setTimeout(r, RELAY_KEY_GAP_MS))
+        this.nodeExecution.assertAllowed(persistKey)
         const key = keys[i]
         try {
           if (sshRemote) {
@@ -4300,6 +4392,9 @@ export class PtyManager {
      *  must join that session, never create a tmux one beside it. */
     zellijBackend?: boolean
   ): string {
+    this.nodeExecution.assertAllowed(options.persistKey ?? '')
+    if (this.backendStartsPaused) throw new NodeExecutionError('busy')
+    if (!options.sshRemote) this.worktreeRecoveryAdmission?.(options.cwd || os.homedir())
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
     //
     // node-pty's darwin spawn path LEAKS the pty it opened when `posix_spawn` fails:
@@ -5013,7 +5108,7 @@ export class PtyManager {
       //
       // The non-session-host branch above already resolves this correctly. Sharing that logic is
       // the fix; two places deciding "which shell" is what let them disagree.
-      proc = (watchHost
+      proc = this.nodeExecution.backend(() => (watchHost
         ? watchExistingSessionHostPty(sessionName(options.persistKey as string))
         : attachExistingHost
         ? attachExistingSessionHostPty(sessionName(options.persistKey as string))
@@ -5034,13 +5129,13 @@ export class PtyManager {
             // NOT the raw tmux history-limit: the host's headless xterm holds every line at full
             // width, and the renderer can never show more than its own cap. See shared/scrollback.
             xtermScrollback(settings.tmuxScrollback)
-          )) as unknown as pty.IPty
+          ))) as unknown as pty.IPty
     } else {
       // A tmux client must not pin the project dir as the shared server's cwd (#1131): the pane's
       // directory is the `-c` argument above, never the client's own cwd.
       const spawnCwd = useLocalTmux ? localTmuxClientCwd() : cwd
       try {
-        proc =
+        proc = this.nodeExecution.backend(() =>
           nativeSshArgv && useNativeSsh()
             ? // The remote terminal as a pty CHANNEL on the project's one native connection: no ssh
               // process (it could not multiplex on Windows). See remote-ssh/native/native-pty.ts.
@@ -5060,7 +5155,7 @@ export class PtyManager {
                 // Win32 only: node-pty's bundled ConPTY when present (see windows-conpty-dll.ts);
                 // `{}` on every other platform, so the options are byte-identical there.
                 ...windowsConptySpawnOptions()
-              })
+              }))
       } catch (err) {
         // node-pty surfaces the underlying failure as a bare "posix_spawnp failed." with no errno.
         // Two different field causes wear that same message, so BOTH are measured before anything is
@@ -5096,7 +5191,7 @@ export class PtyManager {
     const session: Session = {
       proc,
       nativeWindowsPane: process.platform === 'win32' && !persisted
-        ? new NativeWindowsPane(proc, { ...options, scrollback: xtermScrollback(settings.tmuxScrollback) })
+        ? this.nodeExecution.backend(() => new NativeWindowsPane(proc, { ...options, scrollback: xtermScrollback(settings.tmuxScrollback) }))
         : undefined,
       subscribers: spawnSub === null ? new Set<SubKey>() : new Set<SubKey>([spawnSub]),
       // A non-voting view (`sizeVote: false`) that got here — a hosted-relay viewer's warm tmux
@@ -5159,8 +5254,10 @@ export class PtyManager {
     // Both shared timers are armed by the first session that needs them: the scrollback snapshots
     // and the idle reap are both about tmux-backed sessions and nothing else.
     if (persisted) {
-      this.ensureSnapshotTimer()
-      this.ensureReapTimer()
+      this.nodeExecution.backend(() => {
+        this.ensureSnapshotTimer()
+        this.ensureReapTimer()
+      })
     }
     this.sessions.set(sessionId, session)
     // Index by node id even when the session is NOT tmux-persisted (`persisted` only governs
@@ -5183,73 +5280,76 @@ export class PtyManager {
     if (session.indexKey && !session.sessionHost && this.pendingRecycle.has(session.indexKey))
       this.fireRecycled(session.indexKey, true)
 
-    const hostPty = useSessionHost ? (proc as unknown as Partial<SessionHostPty>) : null
-    if (typeof hostPty?.onSize === 'function') {
-      hostPty.onSize((size) => {
-        if (this.sessions.get(sessionId) !== session) return
-        this.applyBackendSize(sessionId, session, size)
-      })
-    }
-
-    proc.onData((data) => {
-      // A session-host attach can fail after the shim has already delivered startup bytes. Once
-      // rollback removes this exact generation, late callbacks must not recreate its flush timer
-      // or leak bytes into a replacement that happens to reuse the same node id.
-      if (this.sessions.get(sessionId) !== session) return
-      session.daReplies.noteOutput(data, Date.now())
-      session.nativeWindowsPane?.recordOutput(data)
-      this.queueData(sessionId, session, data)
-    })
-
-    proc.onExit(({ exitCode }) => {
-      // The persistent host broadcasts exit before it answers killSession. The confirmed profile
-      // switch must await that acknowledgement before mutating the local index/subscribers, so the
-      // exact in-flight generation's early exit is consumed by the transaction instead of racing
-      // cleanup ahead of the response. Success cleans it below; rejection leaves it untouched.
-      const confirmedEnd = this.confirmedBackendEnds.get(sessionId)
-      if (confirmedEnd?.session === session) {
-        confirmedEnd.exitCode = exitCode
-        confirmedEnd.resolveExit?.()
-        return
+    // Registration may itself start driver timers; callbacks also explicitly leave request ALS.
+    this.nodeExecution.backend(() => {
+      const hostPty = useSessionHost ? (proc as unknown as Partial<SessionHostPty>) : null
+      if (typeof hostPty?.onSize === 'function') {
+        hostPty.onSize(this.nodeExecution.backendCallback((size: PtySize) => {
+          if (this.sessions.get(sessionId) !== session) return
+          this.applyBackendSize(sessionId, session, size)
+        }))
       }
-      this.handleSessionExit(sessionId, session, exitCode)
-    })
 
-    if (useSessionHost) {
-      ;(proc as unknown as SessionHostPty).onAttachError((error) => {
-        // Reconnect replay can be rejected after this generation was already returned to the
-        // renderer. Retire only the exact remembered generation; a late callback from an older
-        // shim must never take down its replacement.
+      proc.onData(this.nodeExecution.backendCallback((data: string) => {
+        // A session-host attach can fail after the shim has already delivered startup bytes. Once
+        // rollback removes this exact generation, late callbacks must not recreate its flush timer
+        // or leak bytes into a replacement that happens to reuse the same node id.
         if (this.sessions.get(sessionId) !== session) return
-        const safeReason = /^(?:no existing session|session '[A-Za-z0-9._-]+' is ending|unauthorized|no such session)/i.test(
-          error.message
-        )
-          ? error.message
-          : 'the persistent session host rejected the reattach'
-        this.queueData(
-          sessionId,
-          session,
-          `\r\n[nodeterm] Persistent terminal reattach failed: ${safeReason}\r\n`
-        )
-        this.handleSessionExit(sessionId, session, 1)
-      })
-    }
+        session.daReplies.noteOutput(data, Date.now())
+        session.nativeWindowsPane?.recordOutput(data)
+        this.queueData(sessionId, session, data)
+      }))
 
-    // Detached relay callers cannot await SessionHostPty.ready because their long-standing API
-    // returns a session id synchronously. They still must not retain a zombie Session: retire it
-    // and surface an ordinary non-zero exit to the sink if the asynchronous attach fails.
-    if (useSessionHost && sinks) {
-      void (proc as unknown as SessionHostPty).ready.catch(() => {
-        if (this.sessions.get(sessionId) !== session) return
-        this.discardFailedSpawn(sessionId, session)
-        try {
-          sinks.onExit(1)
-        } catch {
-          // A consumer callback cannot resurrect the already-retired provisional Session, and a
-          // throw here must not become an unhandled rejection from this deliberately detached task.
+      proc.onExit(this.nodeExecution.backendCallback(({ exitCode }: { exitCode: number }) => {
+        // The persistent host broadcasts exit before it answers killSession. The confirmed profile
+        // switch must await that acknowledgement before mutating the local index/subscribers, so the
+        // exact in-flight generation's early exit is consumed by the transaction instead of racing
+        // cleanup ahead of the response. Success cleans it below; rejection leaves it untouched.
+        const confirmedEnd = this.confirmedBackendEnds.get(sessionId)
+        if (confirmedEnd?.session === session) {
+          confirmedEnd.exitCode = exitCode
+          confirmedEnd.resolveExit?.()
+          return
         }
-      })
-    }
+        this.handleSessionExit(sessionId, session, exitCode)
+      }))
+
+      if (useSessionHost) {
+        ;(proc as unknown as SessionHostPty).onAttachError(this.nodeExecution.backendCallback((error: Error) => {
+          // Reconnect replay can be rejected after this generation was already returned to the
+          // renderer. Retire only the exact remembered generation; a late callback from an older
+          // shim must never take down its replacement.
+          if (this.sessions.get(sessionId) !== session) return
+          const safeReason = /^(?:no existing session|session '[A-Za-z0-9._-]+' is ending|unauthorized|no such session)/i.test(
+            error.message
+          )
+            ? error.message
+            : 'the persistent session host rejected the reattach'
+          this.queueData(
+            sessionId,
+            session,
+            `\r\n[nodeterm] Persistent terminal reattach failed: ${safeReason}\r\n`
+          )
+          this.handleSessionExit(sessionId, session, 1)
+        }))
+      }
+
+      // Detached relay callers cannot await SessionHostPty.ready because their long-standing API
+      // returns a session id synchronously. They still must not retain a zombie Session: retire it
+      // and surface an ordinary non-zero exit to the sink if the asynchronous attach fails.
+      if (useSessionHost && sinks) {
+        void (proc as unknown as SessionHostPty).ready.catch(this.nodeExecution.backendCallback(() => {
+          if (this.sessions.get(sessionId) !== session) return
+          this.discardFailedSpawn(sessionId, session)
+          try {
+            sinks.onExit(1)
+          } catch {
+            // A consumer callback cannot resurrect the already-retired provisional Session, and a
+            // throw here must not become an unhandled rejection from this deliberately detached task.
+          }
+        }))
+      }
+    })
 
     return sessionId
   }
@@ -5640,11 +5740,17 @@ export class PtyManager {
    */
   write(clientId: ClientId | null, sessionId: string, data: string): void {
     const session = this.sessions.get(sessionId)
-    if (!session) return this.backgroundWriteBySessionId(sessionId, data)
+    if (!session) return this.backgroundWriteBySessionId(clientId, sessionId, data)
     // Every viewer's xterm answers the tmux client's DA handshake; only one answer per question may
     // reach tmux, or the rest are typed into the pane (issue #1172, da-reply-gate.ts).
     data = session.daReplies.filterInput(data, Date.now())
     if (!data) return
+    const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey ?? ''
+    try { this.nodeExecution.assertAllowed(nodeId) } catch (error) {
+      if (clientId === null) throw error
+      this.noticeBlockedInput(clientId, nodeId, error)
+      return
+    }
     if (clientId !== null && session.nodeId && presenceHub.peerCount() > 1)
       presenceHub.noteTyping(clientId, session.nodeId)
     session.proc.write(data)
@@ -5666,9 +5772,14 @@ export class PtyManager {
    * report a delivery failure to on this path. No typing badge either — a released session is one
    * nobody is watching, so the badge would light up on a terminal that is not on anybody's screen.
    */
-  private backgroundWriteBySessionId(sessionId: string, data: string): void {
+  private backgroundWriteBySessionId(clientId: ClientId | null, sessionId: string, data: string): void {
     for (const [persistKey, rec] of this.released) {
       if (rec.sessionId !== sessionId) continue
+      try { this.nodeExecution.assertAllowed(persistKey) } catch (error) {
+        if (clientId === null) throw error
+        this.noticeBlockedInput(clientId, persistKey, error)
+        return
+      }
       void this.backgroundWrite(persistKey, data)
       return
     }
@@ -5793,6 +5904,7 @@ export class PtyManager {
    * be resumed (the leave path is what returns the owed resume).
    */
   dropClient(clientId: ClientId): void {
+    for (const key of this.blockedInputNotices.keys()) if (key.startsWith(`${clientId}:`)) this.blockedInputNotices.delete(key)
     // Snapshot the entries: kill() mutates `sessions` when a session falls to zero subscribers.
     for (const [sessionId, session] of [...this.sessions]) {
       // A vanished webContents takes ALL its views with it (canvas node + any modal), so kill each
@@ -6009,12 +6121,22 @@ export class PtyManager {
    * A chunk handed over while its sender controlled must not land after a stop or a demotion.
    */
   controlInput(sessionId: string, chunk: ControlInputChunk, isCurrent?: () => boolean): Promise<boolean> {
+    const session = this.sessions.get(sessionId)
+    const nodeId = session?.persistKey ?? session?.nodeId ?? session?.indexKey ?? ''
+    try { this.nodeExecution.assertAllowed(nodeId) } catch { return Promise.resolve(false) }
     const handedAt = Date.now()
     const prev = this.controlInputChains.get(sessionId) ?? Promise.resolve(true)
     const step = prev
       .then(() => {
         const left = PANE_INPUT_DEADLINE_MS - (Date.now() - handedAt)
-        return left <= 0 ? false : settleWithin(this.deliverControlInput(sessionId, chunk, isCurrent), left)
+        if (left <= 0) return false
+        this.controlDeliveries.set(nodeId, (this.controlDeliveries.get(nodeId) ?? 0) + 1)
+        const delivery = this.deliverControlInput(sessionId, chunk, isCurrent).finally(() => {
+          const remaining = (this.controlDeliveries.get(nodeId) ?? 1) - 1
+          if (remaining > 0) this.controlDeliveries.set(nodeId, remaining)
+          else this.controlDeliveries.delete(nodeId)
+        })
+        return settleWithin(delivery, left)
       })
       .catch(() => false)
     this.controlInputChains.set(sessionId, step)
@@ -6040,6 +6162,7 @@ export class PtyManager {
     const s = this.sessions.get(sessionId)
     const route = this.watcherInputRoute(sessionId)
     if (!s || route === 'none') return false
+    try { this.nodeExecution.assertAllowed(s.persistKey ?? s.nodeId ?? s.indexKey ?? '') } catch { return false }
     // An empty key chunk is refused on every route (the tmux builder would have no bytes to type);
     // a paste that sanitizes to nothing has nothing to do.
     if (keys && (c.data as string).length === 0) return false
@@ -6516,6 +6639,15 @@ export class PtyManager {
     return this.serializePaneWrite(persistKey, () => this.sendTextNow(persistKey, text, opts))
   }
 
+  /** Keep the entire paste/settle/submit operation in one queue slot, including capture awaits. */
+  async sendSettledEnvelope(persistKey: string, envelope: string, options?: SettledEnvelopeOptions): Promise<boolean> {
+    return this.serializePaneWrite(persistKey, () => deliverSettledEnvelope({
+      captureSession: (id) => this.captureSession(id),
+      // Already inside this pane's queue: taking sendText's public slot would deadlock.
+      sendText: (id, text, opts) => this.sendTextNow(id, text, opts)
+    }, persistKey, envelope, options))
+  }
+
   /** Per-pane write chain: see `serializePaneWrite`. */
   private paneWrites = new Map<string, Promise<unknown>>()
 
@@ -6529,9 +6661,11 @@ export class PtyManager {
    * it; a failed one does not poison the chain.
    */
   private serializePaneWrite<T>(persistKey: string, run: () => Promise<T>): Promise<T> {
+    try { this.nodeExecution.assertAllowed(persistKey) } catch (error) { return Promise.reject(error) }
     const key = sessionName(persistKey)
     const prev = this.paneWrites.get(key) ?? Promise.resolve()
-    const next = prev.then(run, run)
+    const dispatch = () => { this.nodeExecution.assertAllowed(persistKey); return run() }
+    const next = prev.then(dispatch, dispatch)
     const settled = next.then(
       () => undefined,
       () => undefined
@@ -6546,7 +6680,7 @@ export class PtyManager {
   private async sendTextNow(
     persistKey: string,
     text: string,
-    opts?: { enter?: boolean; typedFor?: AgentId }
+    opts?: { enter?: boolean; typedFor?: AgentId; onSubmitDispatched?: () => void }
   ): Promise<TextDeliveryResult> {
     const enter = opts?.enter ?? true
     const live = this.liveSessionForPersistKey(persistKey)
@@ -6554,7 +6688,7 @@ export class PtyManager {
     // paste — see core/typed-input.ts. Only a SUBMITTED prompt on a tmux backend; everything else
     // keeps the paste path below.
     if (opts?.typedFor !== undefined && enter) {
-      const typed = await this.sendTyped(persistKey, text, opts.typedFor)
+      const typed = await this.sendTyped(persistKey, text, opts.typedFor, opts.onSubmitDispatched)
       if (typed !== null) return typed
     }
     // An agent whose TUI ignores an Enter bundled into the same tmux invocation as a bracketed paste
@@ -6613,6 +6747,7 @@ export class PtyManager {
     enter: boolean,
     live: ReturnType<PtyManager['liveSessionForPersistKey']>
   ): Promise<TextDeliveryResult> {
+    this.nodeExecution.assertAllowed(persistKey)
     const target = sessionName(persistKey)
     // A direct (non-persistent) Windows PTY has no session-host entry and no tmux: it is typed
     // into through the pane itself. Routing it to the session host below failed every time.
@@ -6661,7 +6796,8 @@ export class PtyManager {
    * checked again right before the Enter, and a dialog that opened meanwhile gets no Enter — the
    * text stays in the composer and the caller hears `pasted-not-submitted`.
    */
-  private async sendTyped(persistKey: string, text: string, agentId: AgentId): Promise<TextDeliveryResult | null> {
+  private async sendTyped(persistKey: string, text: string, agentId: AgentId,
+    onSubmitDispatched?: () => void): Promise<TextDeliveryResult | null> {
     const target = sessionName(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
     if (live?.nativeWindowsPane || this.isZellij(persistKey, live)) return null
@@ -6684,6 +6820,7 @@ export class PtyManager {
     }
     const ok = async (run: () => Promise<unknown>): Promise<boolean> => {
       try {
+        this.nodeExecution.assertAllowed(persistKey)
         await run()
         return true
       } catch {
@@ -6703,7 +6840,7 @@ export class PtyManager {
           const screen = await this.captureSession(persistKey)
           return screen === '' || screenGate(screen) === null
         },
-        submit: () => ok(submit)
+        submit: () => ok(() => submitWithDispatchNotice(submit, onSubmitDispatched))
       })
     } catch {
       return 'pasted-not-submitted'
@@ -6758,6 +6895,11 @@ export class PtyManager {
    * `=nt-<id>:`), local or over the owning project's ControlMaster. Never rejects.
    */
   async sendPaneKeys(persistKey: string, data: string): Promise<PaneKeysResult> {
+    try { return await this.serializePaneWrite(persistKey, () => this.sendPaneKeysNow(persistKey, data)) }
+    catch { return { ok: false, reason: 'failed' } }
+  }
+
+  private async sendPaneKeysNow(persistKey: string, data: string): Promise<PaneKeysResult> {
     if (typeof persistKey !== 'string' || typeof data !== 'string' || data.length === 0) {
       return { ok: false, reason: 'failed' }
     }
@@ -6807,6 +6949,27 @@ export class PtyManager {
    * (`typesChatInput`) and re-checks for a dialog before its Enter, like a chat prompt.
    */
   async sendToEmptyPrompt(persistKey: string, text: string, agentId: string): Promise<EmptyPromptResult> {
+    return this.sendToEmptyPromptWith(persistKey, text, agentId)
+  }
+
+  /** First branch adapter: a live local POSIX tmux pane with measured typed submission only. */
+  canBranchClaude(persistKey: string): boolean {
+    try {
+      const live = this.liveSessionForPersistKey(persistKey)
+      return process.platform !== 'win32' && !!this.tmuxPath && !!live?.tmuxBacked &&
+        !live.sshRemote && !live.nativeWindowsPane && !live.sessionHost && !this.isZellij(persistKey, live) &&
+        this.paneRemoteRef(persistKey, live).kind === 'local'
+    } catch { return false }
+  }
+
+  /** Host-only fixed command/dispatch notice; never registered as a callback RPC. */
+  async branchClaudeInEmptyPrompt(persistKey: string, onSubmitDispatched: () => void): Promise<EmptyPromptResult> {
+    if (!this.canBranchClaude(persistKey)) return { sent: false, reason: 'unsupported' }
+    return this.sendToEmptyPromptWith(persistKey, '/branch', 'claude', onSubmitDispatched)
+  }
+
+  private async sendToEmptyPromptWith(persistKey: string, text: string, agentId: string,
+    onSubmitDispatched?: () => void): Promise<EmptyPromptResult> {
     if (!readsScreenDialogs(agentId)) return { sent: false, reason: 'unsupported' }
     return this.serializePaneWrite(persistKey, async (): Promise<EmptyPromptResult> => {
       const composer = readClaudeComposer(await this.captureStyledScreen(persistKey))
@@ -6814,7 +6977,7 @@ export class PtyManager {
       const delivered = await this.sendTextNow(
         persistKey,
         text,
-        typesChatInput(agentId) ? { typedFor: agentId } : undefined
+        typesChatInput(agentId) ? { typedFor: agentId, ...(onSubmitDispatched ? { onSubmitDispatched } : {}) } : undefined
       )
       if (delivered === true) return { sent: true }
       return { sent: false, reason: delivered === 'pasted-not-submitted' ? 'not-submitted' : 'failed' }
@@ -7009,6 +7172,11 @@ export class PtyManager {
    * the legacy shell-only guard for any caller that has no agent to assert.
    */
   async terminateForeground(persistKey: string, expectedAgentId?: string): Promise<boolean | 'unsupported'> {
+    try { return await this.serializePaneWrite(persistKey, () => this.terminateForegroundNow(persistKey, expectedAgentId)) }
+    catch { return false }
+  }
+
+  private async terminateForegroundNow(persistKey: string, expectedAgentId?: string): Promise<boolean | 'unsupported'> {
     if (typeof persistKey !== 'string' || !persistKey || persistKey.length > REF_MAX_LEN) return false
     const live = this.liveSessionForPersistKey(persistKey)
     // Refused on Zellij (ZELLIJ_BACKEND_GAPS): a signal aimed at a process group read off `ps`
@@ -7031,16 +7199,21 @@ export class PtyManager {
     // shell survives for the recycle that follows. Both legs REQUIRE the identity gate: the legacy
     // "not a shell" guard below has no Windows equivalent that could stand in for it.
     if (live?.nativeWindowsPane) {
+      this.nodeExecution.assertAllowed(persistKey)
       if (!owner) return false
       const pane = live.nativeWindowsPane
       const handle = { generation: '', exited: false, proc: { pid: live.proc.pid } }
       return terminatePaneOwner(
         () => (this.liveSessionForPersistKey(persistKey) === live ? handle : undefined),
         owner,
-        { probe: () => pane.owner(), terminate: (pid) => this.terminateProcessTree(pid) }
+        { probe: () => pane.owner(), terminate: (pid) => {
+          this.nodeExecution.assertAllowed(persistKey)
+          return this.terminateProcessTree(pid)
+        } }
       )
     }
     if (!live?.sshRemote && this.sessionHostOwns(persistKey, live)) {
+      this.nodeExecution.assertAllowed(persistKey)
       if (!owner) return false
       try {
         return await sessionHostTerminateOwner(sessionName(persistKey), owner)
@@ -7060,6 +7233,7 @@ export class PtyManager {
         )
         const pane = parsePaneProcess(stdout)
         if (!pane || isShellCommand(pane.command)) return false
+        this.nodeExecution.assertAllowed(persistKey)
         await runAsync(
           ssh,
           remoteTerminateForegroundArgs(sshRemote.conn, sshRemote.controlPath, pane.panePid)
@@ -7081,6 +7255,7 @@ export class PtyManager {
       const processTable = await runAsync('ps', ['-o', 'tpgid=', '-p', String(pane.panePid)])
       const processGroup = foregroundProcessGroup(pane, processTable.stdout)
       if (!processGroup) return false
+      this.nodeExecution.assertAllowed(persistKey)
       process.kill(-processGroup, 'SIGTERM')
       // Grace: give the harness a window to flush session state (transcript, --resume id) before
       // the caller recycles the session (tmux kill-session). Poll the group with signal 0 —
@@ -7247,6 +7422,7 @@ export class PtyManager {
     const sshRemote = this.sessionByPersistKey(persistKey)?.sshRemote
     const deliver = async (body: string, enter: boolean): Promise<boolean> => {
       try {
+        this.nodeExecution.assertAllowed(persistKey)
         if (sshRemote) {
           const ssh = findSsh()
           if (!ssh) return false
@@ -7413,6 +7589,7 @@ export class PtyManager {
     persistKey: string,
     target?: PtyRecycleTarget
   ): Promise<void> {
+    try { this.nodeExecution.assertAllowed(persistKey) } catch (error) { return Promise.reject(error) }
     if (typeof persistKey !== 'string' || !persistKey || persistKey.length > REF_MAX_LEN) {
       return Promise.reject(new Error('Refusing to restart terminal: invalid node id.'))
     }
@@ -7695,6 +7872,7 @@ export class PtyManager {
     /** Trusted replacement identity; present only after confirmed profile preflight. */
     replacementTarget?: PtyRecycleTarget
   ): Promise<void> {
+    try { this.nodeExecution.assertAllowed(persistKey) } catch (error) { return Promise.reject(error) }
     const current = this.ending.get(persistKey)
     if (current) {
       // Identical repeats share one acknowledgement only when the in-flight target scope covers
@@ -8042,6 +8220,8 @@ export class PtyManager {
    *  the quit path must hold `before-quit` briefly (see index.ts) or the process exits before
    *  they land and the last ≤15s of output is missing from a post-reboot cold restore. */
   killAll(): Promise<void> {
+    this.nodeExecution.dispose()
+    this.blockedInputNotices.clear()
     if (this.snapshotTimer) {
       clearInterval(this.snapshotTimer)
       this.snapshotTimer = null

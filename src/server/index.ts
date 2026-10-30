@@ -1,6 +1,9 @@
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
+import { ServerSessionNames } from './session-names'
+import { createServerRemoteTranscripts } from './remote-transcripts'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
 import { startTriggerService } from '../core/trigger-service'
 import path from 'path'
@@ -14,9 +17,21 @@ import { authBootMessages } from './auth-boot-messages'
 import type { ServerConfig } from './config'
 
 import { initPlatform } from '../core/platform'
+import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { SettingsStore } from '../core/settings-store'
+import { SettingsControl } from '../core/settings-control'
+import { registerServerLicense } from './license'
+import { registerServerCodexAccounts } from './codex-accounts'
+import { registerServerSshProjects, type ServerSshProjects } from './ssh-projects'
+import { ServerGitRequestScope } from './git-request-scope'
+import { SshFs } from '../core/ssh-fs'
+import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
+import { makeRemoteWorkspaceIO } from '../core/remote-workspace-io'
+import { sshHostKey } from '../shared/ssh'
+import { mirrorEntry } from '../core/agent-status-mirror'
 import { WorkspaceStore } from '../core/workspace-store'
 import { registerAgentEnvIpc } from '../core/agent-env-ipc'
+import { registerNamingIpc } from '../core/naming-ipc'
 import { PtyManager } from '../core/pty-manager'
 import { registerCoreHandlers } from './handlers'
 import { registerGitHubIntegration } from '../core/github/integration'
@@ -33,6 +48,9 @@ import {
   ModelGatewayCredentialService
 } from '../core/model-gateway-credentials'
 import { DownloadTickets } from '../core/download-tickets'
+import { registerServerMedia } from './media-ipc'
+import { WebPreviews } from '../core/web-previews'
+import { registerWebPreviewIpc } from './web-preview-ipc'
 import { registerBoardLogHandlers, type BoardLogRoute } from '../core/board-log-handlers'
 import { ProjectTrustStore } from '../core/project-trust-store'
 import { ProjectSetupService } from '../core/project-setup-service'
@@ -41,8 +59,15 @@ import {
   registerProjectSetupHandlers,
   type ProjectSetupHandlerDeps
 } from '../core/project-setup-handlers'
-import { registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { registerHostLaunchIpc } from '../core/host-launch-ipc'
+import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
+import { initWorktreeRecovery } from '../core/worktree-recovery'
+import { WorktreeRecoveryService } from '../core/worktree-recovery-service'
+import { registerWorktreeRecoveryIpc } from '../core/worktree-recovery-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
+import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { LogBuffer } from '../core/log-buffer'
@@ -52,7 +77,12 @@ import os from 'os'
 import { hookServer } from '../core/agents/hook-server'
 import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { serverEditionControlHandler } from './control-unsupported'
+import { registerControlCapabilities } from '../core/control-capabilities'
 import { initServerCanvasControl, serverCanvasShimPath, type ServerCanvasControl } from './canvas-control'
+import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
+import { registerBoardCommentDeliveryIpc } from '../core/agents/board-comment-ipc'
+import { ReportLedgerStore } from '../core/github/report-ledger'
+import { projectCapabilityGrantedFor } from '../shared/project-capability-consent'
 import { registerStationNoticeIpc } from '../core/agents/station-notice'
 import { registerStationOutcomeIpc } from '../core/station-outcome-store'
 import { registerStationHandoverIpc } from '../core/station-handover'
@@ -131,7 +161,7 @@ import { runResume } from '../core/relay/team-resume'
 import { launchHeadless } from '../core/headless-launch'
 import { HEADLESS_COLS, HEADLESS_ROWS, localNodePtyOptions } from '../shared/node-pty-options'
 import { assembleResumeCommand } from '../shared/agents/launch'
-import { gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
+import { capabilityAgentId, gatePermissionMode, type AgentId, type BuiltinAgentId } from '../shared/agents/config'
 import {
   createWatchLinkService,
   registerWatchLinkIpc,
@@ -230,6 +260,8 @@ export async function startServer(
     appVersion: readAppVersion()
   })
   initPlatform(platform)
+  const ownerConfirmations = new OwnerConfirmationBroker(platform)
+  registerOwnerConfirmationIpc(platform, ownerConfirmations)
 
   const auth = new Auth(config.dataDir)
   if (config.passwordSeed && !auth.isConfigured()) auth.setPassword(config.passwordSeed)
@@ -250,9 +282,29 @@ export async function startServer(
   // Core services — same construction + registration order as src/main/index.ts.
   const settingsStore = new SettingsStore()
   const ptyManager = new PtyManager()
-  const workspaceStore = new WorkspaceStore()
+  let sshProjects: ServerSshProjects | undefined
+  const workspaceSshFs = new SshFs((args, stdin) => sshProjects ? sshProjects.manager.sshRun(args, stdin) : Promise.resolve({ code: 1, stdout: '' }))
+  const remoteWorkspaceIO = makeRemoteWorkspaceIO((id) => sshProjects?.refForProject(id) ?? null,
+    workspaceSshFs, (id) => workspaceStore.markUnmirrored(id))
+  const workspaceStore = new WorkspaceStore(config.sshProjects ? remoteWorkspaceIO : undefined)
 
   settingsStore.init()
+  sshProjects = registerServerSshProjects({ platform, enabled: config.sshProjects === true,
+    projectTarget: (id) => {
+      const info = workspaceStore.projectTargetInfo(id)
+      return info ? info.ssh ?? null : undefined
+    },
+    settings: () => settingsStore.get(), onIntegrationChange: (listener) => settingsStore.onChange(listener),
+    integrationReceipts: { get: (key) => integrations.receipts.get(key), set: (key, value) => integrations.receipts.set(key, value) },
+    onConnected: async (id) => {
+      const changed = await workspaceStore.refreshSshProject(id)
+      if (changed) outsideEditPublisher(() => canvasAuthority,
+        (project) => platform.broadcast(IPC.workspaceExternalChange, project),
+        (project) => platform.broadcast(IPC.workspaceServerChange, project))(changed)
+    } })
+  const gitRouting = new ServerGitRequestScope({ platform, workspace: workspaceStore,
+    manager: () => config.sshProjects ? sshProjects?.manager : undefined })
+  const codexAccounts = registerServerCodexAccounts(platform, () => config.sshProjects ? sshProjects?.manager : undefined)
   // The linked-account resolver's one source of truth on this shell. Registered as
   // soon as settings exist and BEFORE anything that resolves a config dir — the mirror settings
   // provider, `installHooksIntoLocalAccounts`, the transcript jail — because an unregistered
@@ -355,12 +407,16 @@ export async function startServer(
   // tmux — the current screen — rather than replayed. See platform-server.ts dropOrDesync.
   platform.setResyncProvider((sid) => ptyManager.captureForResync(sid))
 
-  // Desktop's src/main/index.ts registers a few pty handlers outside PtyManager. Of those,
-  // ptyCapture delegates purely to core (ptyManager.captureSession), so it belongs here.
-  // The others (ptyGenerateName / ptyGenerateGroupName → commit-message.ts; ptyReadSessionName
-  // → transcript-reader.ts) depend on src/main-resident modules and are stubbed by the bridge
-  // in Task 8. readScrollback + sendText + paneCommand are already registered inside
-  // PtyManager.registerIpc().
+  // Desktop's src/main/index.ts registers a few pty handlers outside PtyManager. ptyCapture
+  // delegates purely to core (ptyManager.captureSession), so it belongs here; ✦ Name with AI is
+  // the shared core registration (naming-ipc.ts). The agent runs on THIS machine, under the
+  // node's managed Claude account when it has one. readScrollback + sendText + paneCommand are
+  // already registered inside PtyManager.registerIpc().
+  registerNamingIpc({
+    captureSession: (k) => ptyManager.captureSession(k),
+    sshRemoteForNode: (k) => ptyManager.sshRemoteForNode(k),
+    getSettings: () => settingsStore.get()
+  })
   platform.handle(IPC.ptyCapture, (persistKey: string, full?: boolean) =>
     ptyManager.captureSession(persistKey, full)
   )
@@ -372,25 +428,37 @@ export async function startServer(
   // between the RPC side (which mints) and the HTTP side (which redeems) — one instance, so a
   // ticket minted over the socket is redeemable by the GET that follows it.
   const downloadTickets = new DownloadTickets()
+  const mediaReferences = registerServerMedia(platform, workspaceStore)
+  const webPreviews = config.previewOrigin && config.publicOrigin ?
+    new WebPreviews(config.previewOrigin, config.publicOrigin, workspaceStore, platform.userDataDir) : undefined
+  registerWebPreviewIpc(platform, webPreviews)
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
+    gitRequestScope: gitRouting.run,
+    claudeAccountsRemote: () => {
+      const manager = config.sshProjects ? sshProjects?.manager : undefined
+      return manager ? {
+        add: (project, id) => manager.remoteAccountAdd(project, id),
+        readLogin: (project, id) => manager.remoteAccountReadLogin(project, id),
+        remove: (project, id) => manager.remoteAccountRemove(project, id),
+        copySession: (project, session, source, target) => manager.remoteClaudeSessionCopy(project, session, source, target)
+      } : undefined
+    },
     onSettingsChange: (cb) => settingsStore.onChange(cb),
     downloadTickets,
     localProjectCwd: (projectId: string) => workspaceStore.sideFilesFolderForProject(projectId),
     whiteboardLocation: (projectId: string) => workspaceStore.whiteboardLocationForProject(projectId)
   })
-  // Project setup/archive runner — same construction as src/main/index.ts, and the SAME
-  // `registerProjectSetupHandlers` trust boundary (project-setup-handlers.ts): it derives rootPath/
-  // ssh/projectName from THIS process's own workspace index by projectId, never the renderer, and
-  // re-validates `worktreePath` against the project's actual git worktrees. No ssh leg here at all
-  // (the Server Edition has no SSH projects, same reason board-log's router below never resolves
-  // one) — `projectTargetInfo` never populates `ssh` on this shell, so an ssh-shaped target simply
-  // never arises.
+  platform.handleWithSender(IPC.gitSetActiveRemote, (id, projectId: string | null) => gitRouting.setActive(id, projectId))
+  // Project setup/archive uses this host's saved target and existing per-location consent.
+  // The remote leg is explicit and connection-backed; no transport means no local fallback.
   const projectTrustStore = new ProjectTrustStore()
   const projectSetupService = new ProjectSetupService({
     trust: projectTrustStore,
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
-    runLocal: makeLocalSetupRunner()
+    runLocal: makeLocalSetupRunner(),
+    runSsh: config.sshProjects ? makeSshSetupRunner((endpoint) => sshProjects?.refForEndpoint(endpoint) ?? null) : undefined,
+    sendConsent: (channel, payload) => sendToOwners(platform, channel, payload)
   })
   const projectSetupDeps: ProjectSetupHandlerDeps = {
     projectTargetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
@@ -398,8 +466,7 @@ export async function startServer(
   }
   registerProjectSetupHandlers(platform, projectSetupService, projectSetupDeps)
   // `worktree:materialize-shared` — same sibling registrar and trust boundary as main/index.ts,
-  // over this process's own stores. The Server Edition has no SSH projects, so an ssh-shaped target
-  // never arises; the path validation and by-projectId list read are identical.
+  // over this process's own stores. Shared-path materialization retains its explicit local-only gate.
   registerWorktreeSharedPathsHandlers(platform, {
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
     targetInfo: projectSetupDeps.projectTargetInfo,
@@ -416,9 +483,22 @@ export async function startServer(
   // gets no answer, the prompt expires, and the shared value stays unused: fail closed on the
   // grant, fail open on the spawn.
   // A node owned by an SSH project is never spawned on THIS machine (issue #1186). This shell has
-  // no SSH-project manager, so such a node cannot run anywhere here — refusing is the honest answer,
+  // remote manager may be disabled or disconnected; refuse until its transport is available,
   // the same one the desktop gives while that project's ControlMaster is down.
   ptyManager.setSshProjectCheck((projectId) => workspaceStore.sshProjectIds().includes(projectId))
+  ptyManager.setRemoteNodeOwner((nodeId) => {
+    const projectId = workspaceStore.sshProjectIdForNode(nodeId)
+    if (!projectId) return null
+    const server = workspaceStore.projectTargetInfo(projectId)?.ssh?.server
+    if (!server) return null
+    const ref = sshProjects?.refForProject(projectId)
+    return { projectId, hostKey: sshHostKey(ref?.conn ?? server), remote: ref ? { conn: ref.conn, controlPath: ref.controlPath } : undefined }
+  })
+  ptyManager.setRelayNodeResolver({
+    placements: (nodeId) => workspaceStore.relayNodePlacements(nodeId),
+    refFor: (scopeId) => config.sshProjects ? sshProjects?.spawnRefFor(scopeId) : undefined,
+    projectIsRemote: (projectId) => !!workspaceStore.projectTargetInfo(projectId)?.ssh
+  })
   ptyManager.setProjectSpawnOverrides(
     makeProjectSpawnOverrides({
       readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
@@ -432,11 +512,12 @@ export async function startServer(
     platform,
     userDataDir: config.dataDir,
     project: (projectId) => workspaceStore.githubProject(projectId),
-    detectRepository: (project) => gitService.originUrl(project.cwd ?? ''),
+    detectRepository: (project) => gitRouting.forProject(project.id, () => gitService.originUrl(project.ssh?.remoteCwd ?? project.cwd ?? '')),
     secret: new ServerGitHubSecretStore(config.dataDir),
     run: runGitHubCliCommand
   })
   registerServerGitHubControl(platform, github.controller)
+  const stopTranscriptSearch = registerTranscriptSearchIpc(platform, () => settingsStore.get().claudeAccounts ?? [], { lazy: true })
   // A browser tab's board dispatch reports its queue here, for the `issues` control verb (display only).
   const boardDispatchReports = registerBoardDispatchReportIpc(platform)
 
@@ -464,11 +545,35 @@ export async function startServer(
 
   // Keep every agent node's session name fresh in the mirror — including nodes no canvas has
   // mounted (the phone lists them all; see core/session-name-sweep.ts).
-  startSessionNameSweep({
+  let geminiTranscriptPathFor: ((sessionId: string) => string | undefined) | undefined
+  const sessionNames = new ServerSessionNames({
+    owner: (id) => platform.isOwnerClient?.(id) === true,
+    target: (nodeId) => {
+      const projects = workspaceStore.projectIdsForNode(nodeId)
+      const node = workspaceStore.getNodeForHostAction(nodeId)
+      const entry = mirrorEntry(nodeId)
+      const project = projects.length === 1 ? workspaceStore.projectTargetInfo(projects[0]) : null
+      if (!project || !node?.agentId || node.kind !== 'terminal' || node.pendingLaunch || !entry?.sessionId || !entry.agentId ||
+        capabilityAgentId(node.agentId) !== capabilityAgentId(entry.agentId)) return undefined
+      const base = capabilityAgentId(node.agentId)
+      const account = node.accountId ? (base === 'claude' ? settingsStore.get().claudeAccounts :
+        base === 'codex' ? settingsStore.get().codexAccounts : []).find((candidate) => candidate.id === node.accountId) : undefined
+      return { projectId: projects[0], nodeId, sessionId: entry.sessionId, agentId: node.agentId, accountId: node.accountId,
+        accountConfigDir: account && 'configDir' in account && typeof account.configDir === 'string' ? account.configDir : undefined,
+        cwd: node.cwd, projectCwd: project.cwd,
+        remote: !!project.ssh || isRemoteSessionNode(node) || !!ptyManager.sshRemoteForNode(nodeId),
+        accountAvailable: !node.accountId || !!account && !account.pending && !account.host }
+    },
+    read: (sessionId, accountId, agentId) => readAgentSessionName(sessionId, accountId, agentId, {
+      geminiPathFor: (id) => geminiTranscriptPathFor?.(id)
+    })
+  })
+  sessionNames.register(platform)
+  const stopSessionNameSweep = startSessionNameSweep({
     entries: sessionNameSweepEntries,
     node: (nodeId) => {
       const n = workspaceStore.getNode(nodeId)
-      return n ? { accountId: n.accountId, titleAuto: n.titleAuto } : undefined
+      return n && sessionNames.available(nodeId) ? { accountId: n.accountId, titleAuto: n.titleAuto } : undefined
     },
     // The per-agent router (core/agent-session-name.ts), same as the desktop's sweep and its
     // ptyReadSessionName handler: a grok node's name is in its session metadata, and resolving it
@@ -476,10 +581,7 @@ export async function startServer(
     // Gemini's leg needs the transcript path its context tail tracks; that tail is created by
     // `wireAgentStatus` below, so it is dereferenced lazily — the sweep's first pass is 5s after
     // boot, long after wiring.
-    resolve: (sessionId, accountId, agentId) =>
-      readAgentSessionName(sessionId, accountId, agentId, {
-        geminiPathFor: (id) => geminiContextTail.pathFor(id)
-      }),
+    resolve: (sessionId, accountId, agentId, nodeId) => sessionNames.read(sessionId, accountId, agentId, nodeId),
     publish: setNodeSessionName
     // No `supports`: core's `supportsTitleRead` (TITLE_READ_CAPABLE) is the rule, and duplicating
     // it here is how the two shells drift — see the note in core/session-name-sweep.ts.
@@ -552,6 +654,19 @@ export async function startServer(
   // Set after the initial workspace load when the opt-in flag is on. The status listener is wired
   // now so the runtime, once present, consumes the exact same normalized stream as the UI/mirror.
   let canvasControl: ServerCanvasControl | null = null
+  const branchOwners = registerConversationBranchIpc(platform, (id, owner, at) => canvasControl
+    ? canvasControl.branchFromOwner(id, owner, at)
+    : Promise.resolve({ ok: false, error: 'Enable Server canvas control to branch a conversation.' }))
+  registerHostLaunchIpc(platform, (id, command) => canvasControl ? canvasControl.runFromOwner(id, command) :
+    Promise.resolve({ ok: false, started: false, error: 'Enable Server canvas control to run this host-owned launch.' }))
+  registerBoardCommentDeliveryIpc(platform, {
+    eligibleOwner: (senderId) => platform.isOwnerClient?.(senderId) === true,
+    deliver: (raw) => canvasControl ? canvasControl.deliverBoardComment(raw) : Promise.resolve({
+      ok: false, error: 'Board comment delivery requires enabled Server canvas control.',
+      result: { kind: 'notPermitted', reason: 'control-disabled' }
+    })
+  })
+  registerControlCapabilities('server', () => canvasControl !== null)
   // Station-failure notices: registered whether or not canvas control comes up, so a browser tab's
   // `list` answers "none" rather than an unknown channel. Only the canvas-control runtime has a
   // creator ledger, so only it has stations to report.
@@ -560,15 +675,21 @@ export async function startServer(
   // rather than an unknown channel when canvas control is off.
   registerStationOutcomeIpc(platform, () => canvasControl?.stationOutcomes ?? null)
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
+  const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
+    workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
+    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects })
   const {
     contextTail,
     geminiContextTail,
     codexContextTail,
     cursorContextTail,
-    antigravityContextTail
+    antigravityContextTail,
+    reconcileRouting: reconcileAgentTailRouting
   } = wireAgentStatus(platform, {
+    isRemoteNode: remoteTranscripts.isRemoteNode,
     onEvent: (event) => canvasControl?.onAgentEvent(event)
   })
+  geminiTranscriptPathFor = (id) => geminiContextTail.pathFor(id)
   // Cursor NEEDS YOU, same seam as the desktop (core/agents/cursor-approval.ts).
   hookServer.setPaneReader((nodeId) => ptyManager.captureSession(nodeId))
   // Which claude may speak for a node (#1112, #1153): the pane tty from THIS shell's PtyManager.
@@ -576,17 +697,21 @@ export async function startServer(
   wireClaudePaneOrigin({
     hooks: hookServer,
     paneOwner: (nodeId) => ptyManager.paneOwner(nodeId),
-    // No SSH-project manager here: such a node's pane is on another machine, never readable.
-    cannotRead: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId),
+    // Read-only history support does not grant remote terminal/control identity proof.
+    cannotRead: remoteTranscripts.isRemoteNode,
     on: (channel, cb) => platform.on(channel, cb),
     destroyChannel: IPC.ptyDestroy,
     recycleChannel: IPC.ptyRecycle
   })
-  // The ⌘M chat view + the find-bar's transcript index. Registered HERE rather than with the rest
-  // of the handlers because the hook-fed path authority is the tail created just above. No remote
-  // leg: the Server Edition runs ON the host whose transcripts it reads, so local resolution is
-  // the complete answer (an SSH-project node is a desktop-only concept here).
+  // Same core readers for both shells. SSH reads use an owner-bound target and strict remote
+  // descriptors; an unavailable remote must never fall through to this host's transcript tree.
   registerTranscriptIpc({
+    rpcScope: remoteTranscripts.rpcScope,
+    isRemoteNode: remoteTranscripts.isRemoteNode,
+    remoteAgentSupported: remoteTranscripts.supported,
+    readRemote: (q) => remoteTranscripts.reader.read(q),
+    readRemotePage: (q, page) => remoteTranscripts.reader.readPage(q, page),
+    remoteExists: (q) => remoteTranscripts.reader.exists(q),
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).
     codexPathFor: (sessionId) => codexContextTail.pathFor(sessionId)
@@ -595,16 +720,17 @@ export async function startServer(
   // host whose command and skill folders a node's agent reads. An SSH-project node in this store is
   // still someone ELSE's machine: named remote here, it answers built-ins + `partial`, never this
   // server's own ~/.claude.
-  registerChatCatalogIpc({ isRemoteNode: (nodeId) => !!workspaceStore.sshProjectIdForNode(nodeId) })
+  registerChatCatalogIpc({ isRemoteNode: remoteTranscripts.isRemoteNode })
   // "Open recent": the SERVER host's agent histories — the machine the browser's sessions run on.
   registerRecentConversationsIpc()
   // The context meter's mount-time rehydration, registered beside the read channels and for the
   // same reason: the tails it feeds are the ones created just above. Until this landed the Server
   // Edition had NO handler for `context:ensure` at all — the browser cast it and nothing received
   // it, so a browser agent node's meter filled only on its next turn, exactly the desktop bug
-  // issue #813 reported for SSH nodes. No remote leg here (see registerTranscriptIpc above): this
-  // process runs on the host whose transcripts it reads, so the local locators are complete.
+  // issue #813 reported for SSH nodes. Continuous remote meters remain unavailable; saved remote
+  // records cannot rehydrate from or replay a namesake on this host.
   registerContextEnsureIpc({
+    isRemoteNode: remoteTranscripts.isRemoteNode,
     tailFor: (agentId) => {
       switch (agentId) {
         case undefined:
@@ -752,6 +878,9 @@ export async function startServer(
   registerIntegrationIpc(integrations)
   const hookStartupWarning = await hookServer.startForApp()
   if (hookStartupWarning) console.error('[nodeterm-server]', hookStartupWarning)
+  const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null, workspaceStore)
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  const worktreeRecoveryOwners = registerWorktreeRecoveryIpc(platform, () => worktreeRecoveryService)
   // Safe default and rollback path. The opt-in runtime replaces this handler only after its
   // workspace-backed services are ready; a failed initialization therefore degrades to the same
   // named permanent refusal rather than a half-wired execution surface.
@@ -794,6 +923,7 @@ export async function startServer(
   // src/server/context-link.ts.
   const contextLink = initServerContextLink({
     ptyManager,
+    isRemoteNode: (id) => isRemoteWorkspaceNode(workspaceStore, ptyManager, id),
     canvases: () => workspaceStore.persistedCanvases()
   })
   // A governed project's outside edit goes to the canvas authority, which publishes the difference
@@ -810,10 +940,12 @@ export async function startServer(
   // here because the onPersist closure runs at the boot load just below (a later `const` would be a
   // TDZ throw inside that load, which it would then report as a failed load).
   let watchLinks: WatchLinkService | null = null
+  let licenseClient: ReturnType<typeof registerServerLicense> | undefined
   // Every load()/save() is a canvas change as far as links are concerned: a browser drawing a
   // bridge edge reaches us as the workspace save it triggers. It also refreshes the local-ref
   // watcher set, so projects added or removed while the server runs get the same hand-edit path.
   workspaceStore.onPersist = () => {
+    reconcileAgentTailRouting()
     workspaceWatcher.sync()
     contextLink.refresh()
     refreshNodeTokens()
@@ -829,11 +961,32 @@ export async function startServer(
 
   if (config.canvasControl === true) {
     try {
+      const reportLedger = new ReportLedgerStore(config.dataDir)
+      const settingsControl = new SettingsControl({ workspace: workspaceStore, settings: settingsStore,
+        confirmations: ownerConfirmations, runtime: (id) => ({ agentId: mirrorEntry(id)?.agentId, sessionId: mirrorEntry(id)?.sessionId }),
+        publish: (project) => platform.broadcast(IPC.workspaceServerChange, project), stopped: () => canvasControl === null })
       canvasControl = await initServerCanvasControl({
+        controlScope: config.controlScope ?? 'creator',
         workspaceStore,
         ptyManager,
         settings: () => settingsStore.get(),
+        settingsControl: (id, args, verified) => settingsControl.run(id, args, verified),
+        confirmations: ownerConfirmations,
         boardLog,
+        projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
+        requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
+        worktrees: makeWorktreeControlBackend(workspaceStore, gitService, projectSetupService,
+          (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id)),
+        webPreviews,
+        reportIssue: {
+          contextForProject: async (id) => {
+            const context = await github.controller.contextForProject(id)
+            return { repository: context.repository, client: context.client }
+          },
+          granted: (id) => projectCapabilityGrantedFor(workspaceStore.capabilityProjectFor(id), 'agentIssueReporting', settingsStore.get()),
+          loadLedger: (id) => reportLedger.load(id), saveLedger: (id, ledger) => reportLedger.save(id, ledger),
+          env: { version: platform.appVersion, os: process.platform, edition: 'server' }
+        },
         // `open-agent --issue #N` means the repository this project's board syncs with — the same
         // answer the issue lane gets from the GitHub host controller.
         issueRepository: (projectId) =>
@@ -867,6 +1020,13 @@ export async function startServer(
           `capability gates decide which agent may ask, not what may be asked for. Unset ` +
           `NODETERM_SERVER_CANVAS_CONTROL / drop --canvas-control to turn it off.`
       )
+      if (config.controlScope === 'project') {
+        console.log(
+          `⚠️  Canvas control scope: PROJECT. An agent may list, change, message and close ANY node ` +
+            `of its own project, not only the nodes it opened (a busy agent closes only with ` +
+            `--force yes). Unset NODETERM_SERVER_CONTROL_SCOPE / drop --control-scope for the default.`
+        )
+      }
     }
   }
 
@@ -976,6 +1136,17 @@ export async function startServer(
   // the two lists cannot drift: its pty subscriptions (a leaked one can strand a session it paused)
   // and its GitHub issue subscriptions.
   const dropUiClient = (uiId: number): void => {
+    workspaceStore.forgetClient(uiId)
+    ownerConfirmations.forgetClient(uiId)
+    branchOwners.forget(uiId)
+    worktreeRecoveryOwners.forget(uiId)
+    codexAccounts.forgetClient(uiId)
+    licenseClient?.forgetClient(uiId)
+    gitRouting.forgetClient(uiId)
+    sshProjects?.forgetClient(uiId)
+    remoteTranscripts.forgetClient(uiId)
+    mediaReferences.forgetClient(uiId)
+    webPreviews?.forgetClient(uiId)
     ptyManager.dropClient(uiId)
     github.service.dropClient(uiId)
   }
@@ -1103,6 +1274,8 @@ export async function startServer(
   }).catch((err: unknown) => {
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
+    stopSessionNameSweep()
+    remoteTranscripts.dispose()
     return { close: async (): Promise<void> => {} }
   })
   if (otherServerHere) {
@@ -1146,20 +1319,18 @@ export async function startServer(
     authority.sharedChanged()
   }
 
-  // Live links (docs/live-links.md): the SAME core service the desktop registers, over the real seams.
-  // This edition has no license layer yet (`initLicense` is desktop-only), so the service is registered
-  // UNSUPPORTED with no entitlement (controller ruling R43): create answers `unsupported` — the browser
-  // shows "Live links need a Pro license on this server — not available in the Server Edition yet",
-  // never an Upgrade button — list answers [], and nothing is loaded, hosted or revoked. A server
-  // license layer (a named follow-up) changes `entitlement` and drops `unsupported`, nothing else.
-  // Headless, no keychain: the links file is a 0600 file in the data dir (spec D8). The workspace
-  // index was read above, so there is no load to wait for.
-  const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, () => undefined))
+  // The same entitlement verifier as Desktop, bound to this server's installation. An explicit
+  // opt-in avoids license API polling on terminal-only hosts; the owner receives its capabilities.
+  licenseClient = registerServerLicense({ platform, enabled: config.licenseEnabled === true && !otherServerHere,
+    onChanged: () => { watchLinks?.onEntitlementChanged() } })
+  // Live Links use the existing service and owner-only RPC. A second process on this data
+  // directory owns neither entitlement mutations nor link hosting.
+  const watchRemote = (nodeId: string): WatchRemote => watchRemoteFor(nodeId, watchRemoteRecords(workspaceStore, (projectId) => sshProjects?.refForProject(projectId)))
   watchLinks = createWatchLinkService({
     api: createWatchLinkApi({ apiBase: API_BASE }),
     relayUrl: RELAY_URL,
     store: new WatchLinkStore({ file: path.join(config.dataDir, 'watch-links.json') }),
-    entitlement: () => null,
+    entitlement: () => config.licenseEnabled && !otherServerHere ? getStoredEntitlement() : null,
     relayAllowed: () => true,
     nodeState: (nodeId) => workspaceNodeState(workspaceStore, nodeId),
     clients: {
@@ -1178,7 +1349,7 @@ export async function startServer(
     // host's tmux would run there, never in this core's Zellij.
     controlSupport: (nodeId) => (watchRemote(nodeId).requireRemote ? 'ok' : ptyManager.nodeControlSupport(nodeId)),
     emit: (channel, ...args) => sendToOwners(platform, channel, ...args),
-    unsupported: true
+    unsupported: config.licenseEnabled !== true || otherServerHere
   })
   registerWatchLinkIpc(platform, watchLinks)
   // Two servers on one data dir would host (and revoke) each other's links.
@@ -1195,6 +1366,14 @@ export async function startServer(
     return {
       port: 0, // nothing bound
       async close() {
+        stopSessionNameSweep()
+        remoteTranscripts.dispose()
+        mediaReferences.dispose()
+        ownerConfirmations.dispose()
+        branchOwners.dispose()
+        worktreeRecoveryOwners.dispose()
+        codexAccounts.dispose()
+        webPreviews?.dispose()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
@@ -1205,11 +1384,14 @@ export async function startServer(
         // Stop the live-link hosts while the pty layer is still up (their viewers leave cleanly),
         // bounded: the links file's last write must not hold the close on a stalled disk.
         await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
+        await licenseClient?.dispose()
         // Detach PTY clients — tmux sessions keep running (Phase 1 contract).
         sessionReaper.stop()
         pressure.stop()
         ptyPressure.stop()
         canvasControl?.stop()
+        await worktreeRecovery?.idle()
+        await stopTranscriptSearch()
         workspaceWatcher.dispose()
         await contextLink.stop()
         // Every save already queued lands while the authority still governs (see the serving close).
@@ -1219,6 +1401,8 @@ export async function startServer(
         setReflectedListener(null)
         workspaceStore.setContentAuthority(null)
         await ptyManager.killAll()
+        await remoteWorkspaceIO.flush()
+        sshProjects?.close()
         // Same native hazard as the desktop app: a whisper transcribe still running when the
         // node env is torn down aborts the process. See SpeechService.shutdown.
         await speechService.shutdown()
@@ -1237,12 +1421,15 @@ export async function startServer(
       rendererDir: config.rendererDir,
       trustProxy: config.trustProxy,
       publicOrigin: config.publicOrigin,
-      downloadTickets
+      downloadTickets,
+      mediaReferences,
+      webPreviews
     })
   )
   // A closed browser tab is the NORMAL way to leave the Server Edition and sends no `pty:kill`,
   // so the WS close hook is what unsubscribes that client from the sessions it was watching.
   const wsServer = attachWsServer(server, {
+    previewOrigin: config.previewOrigin,
     platform,
     auth,
     onClientGone: dropUiClient,
@@ -1264,6 +1451,14 @@ export async function startServer(
   return {
     port,
     async close() {
+      stopSessionNameSweep()
+      remoteTranscripts.dispose()
+      mediaReferences.dispose()
+      ownerConfirmations.dispose()
+      branchOwners.dispose()
+      worktreeRecoveryOwners.dispose()
+      codexAccounts.dispose()
+      webPreviews?.dispose()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()
@@ -1273,6 +1468,7 @@ export async function startServer(
       hosted.stop()
       // Stop the live-link hosts while the pty layer is still up (see the headless close() above).
       await shutdownWithin(watchLinks, WATCH_LINKS_STOP_MS)
+      await licenseClient?.dispose()
       // End the browser WebSockets next, BEFORE the canvas authority stops (N3). Once it has stopped
       // and been detached, a save from a still-attached tab is written un-overlaid, over its final
       // flush. Ending the sockets stops new saves; the `idle()` below lets the ones already queued
@@ -1285,6 +1481,8 @@ export async function startServer(
       pressure.stop()
       ptyPressure.stop()
       canvasControl?.stop()
+      await worktreeRecovery?.idle()
+      await stopTranscriptSearch()
       workspaceWatcher.dispose()
       await contextLink.stop()
       // Every save already queued lands while the authority still governs, then it writes what it owes.
@@ -1294,6 +1492,8 @@ export async function startServer(
       setReflectedListener(null)
       workspaceStore.setContentAuthority(null)
       await ptyManager.killAll()
+      await remoteWorkspaceIO.flush()
+      sshProjects?.close()
       // Same native hazard as the desktop app: a whisper transcribe still running when the node
       // env is torn down aborts the process. See SpeechService.shutdown.
       await speechService.shutdown()

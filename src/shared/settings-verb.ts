@@ -18,8 +18,8 @@
  *  3. EVERY CHANGE ASKS THE HUMAN. This file only PLANS a change (`planSettingsSet`); the desktop
  *     dispatch raises the confirm dialog, and `settings` is deliberately outside
  *     `CONFIRM_WAIVABLE_VERBS` (@shared/control-confirm), so no standing waiver — app-run, project,
- *     always or bypass — can answer for the user. The Server Edition has no human to ask, so it
- *     refuses `--set` by name (src/server/control-unsupported.ts).
+ *     always or bypass — can answer for the user. Both shells use the owner confirmation broker for
+ *     local changes; an absent owner UI refuses without performing the change.
  *
  * THE CLI SHAPE uses flags only — `settings`, `settings --get <key>`, `settings --set <key> --value
  * <v> [--project <id>]` — never a positional sub-action. The sh shim maps a bare positional only for

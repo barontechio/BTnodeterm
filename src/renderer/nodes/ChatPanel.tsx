@@ -14,7 +14,7 @@ import {
   screenBlockedSentence,
   type ScreenBlock
 } from '../lib/chatSendGate'
-import type { ChatMessage } from '@shared/types'
+import type { ChatMessage, ChatTranscriptResult } from '@shared/types'
 import { chatPaneRefusal, chatPaneRefusalToast } from '../lib/chatPaneGate'
 import { chatAgentLabel, isNearBottom, shouldFollowOnLoad, toolCardTitle } from '../lib/chatPanel'
 import { useSettings } from '../state/settings'
@@ -134,7 +134,8 @@ interface ChatPanelProps {
  * initial `[]` because nothing caught the rejection, and a failed resolution was indistinguishable
  * from a session nobody has spoken to. They need different words — and two of them are retryable.
  */
-type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'ambiguous' | 'exportError' | 'error'
+type LoadState = 'loading' | 'ok' | 'missing' | 'unsupported' | 'remoteUnsupported' | 'remoteRuntime' | 'remoteUnsafe' | 'remoteUnavailable' | 'remotePermission' | 'ambiguous' | 'exportError' | 'error'
+const requiresHostChange = (state: LoadState): boolean => state === 'remoteRuntime' || state === 'remoteUnsafe' || state === 'remoteUnavailable' || state === 'remotePermission'
 
 /**
  * An `unreadable` read of a LOCAL-ONLY reader's node (`CHAT_LOCAL_ONLY` — agents with no remote
@@ -158,6 +159,18 @@ const remoteReaderUnsupported = (agentId: string | undefined): boolean => !!agen
 const opencodeUnreadable = (agentId: string | undefined): boolean =>
   !!agentId && capabilityAgentId(agentId) === 'opencode'
 
+function failedReadState(result: Pick<ChatTranscriptResult, 'unreadable' | 'unreadableReason'>, agentId?: string): LoadState {
+  if (!result.unreadable) return 'missing'
+  switch (result.unreadableReason) {
+    case 'remote-runtime-unavailable': return 'remoteRuntime'
+    case 'remote-unsafe-transcript': return 'remoteUnsafe'
+    case 'remote-reader-unavailable': return 'remoteUnavailable'
+    case 'remote-reader-permission-required': return 'remotePermission'
+  }
+  if (remoteReaderUnsupported(agentId)) return 'remoteUnsupported'
+  return opencodeUnreadable(agentId) ? 'exportError' : 'error'
+}
+
 const isUnsupported = (e: unknown): boolean =>
   !!e && typeof e === 'object' && (e as { code?: string }).code === E_UNSUPPORTED
 
@@ -168,6 +181,10 @@ const isUnsupported = (e: unknown): boolean =>
  *  fix — a remote grok node included, whose host is read by `core/remote-grok-chat.ts`;
  *  `remoteUnsupported` is a remote node whose agent has no remote reader, which it never can. */
 const EMPTY_TEXT: Record<LoadState, { title: string; detail?: string }> = {
+  remoteRuntime: { title: 'SSH transcript reads need Python 3 on the agent’s host.', detail: 'Install Python 3 with POSIX filesystem support on that host, then reload this conversation.' },
+  remoteUnsafe: { title: 'This SSH transcript directory could not be read safely.', detail: 'Resolve linked or ambiguous transcript files on the agent’s host, then reload this conversation.' },
+  remoteUnavailable: { title: 'This host does not provide SSH transcript reads for {agent}.', detail: 'Check this host’s enabled SSH features and supported agents.' },
+  remotePermission: { title: 'SSH transcripts require access from the host owner.', detail: 'Open this conversation through an authenticated owner connection.' },
   loading: { title: 'Loading conversation…' },
   ok: { title: 'No conversation yet.' },
   missing: {
@@ -446,15 +463,7 @@ export function ChatPanel({
           setThread(emptyThread(identity))
           // A read that FAILED (the host did not answer, a remote node with no reachable master)
           // is not "no transcript": it gets the error copy, and ↻ is the way out.
-          setLoadState(
-            !res.unreadable
-              ? 'missing'
-              : remoteReaderUnsupported(agentId)
-                ? 'remoteUnsupported'
-                : opencodeUnreadable(agentId)
-                  ? 'exportError'
-                  : 'error'
-          )
+          setLoadState(failedReadState(res, agentId))
           setHeldRead({ identity, pendingId: heldAtStart })
           settleHeldReload(heldAtStart)
           return
@@ -598,7 +607,7 @@ export function ChatPanel({
   attemptLiveRef.current = () => {
     if (!livePendingRef.current) return
     // This surface cannot read transcripts at all (relay tab): every live read would be refused.
-    if (loadStateRef.current === 'unsupported' || loadStateRef.current === 'remoteUnsupported') {
+    if (loadStateRef.current === 'unsupported' || loadStateRef.current === 'remoteUnsupported' || requiresHostChange(loadStateRef.current)) {
       livePendingRef.current = false
       return
     }
@@ -1004,7 +1013,7 @@ export function ChatPanel({
             {EMPTY_TEXT[loadState].detail && (
               <div className="term-chat__empty-detail">{EMPTY_TEXT[loadState].detail}</div>
             )}
-            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && loadState !== 'ambiguous' && loadState !== 'ok' && (
+            {loadState !== 'unsupported' && loadState !== 'remoteUnsupported' && !requiresHostChange(loadState) && loadState !== 'ambiguous' && loadState !== 'ok' && (
               <button className="term-chat__retry" onClick={() => load()}>
                 Retry
               </button>

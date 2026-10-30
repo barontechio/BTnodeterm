@@ -26,7 +26,7 @@ vi.mock('../../nodes/BrowserSurface', () => ({ BrowserSurface: () => null }))
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
-const R43 = 'Live links need a Pro license on this server — not available in the Server Edition yet'
+const R43 = 'Live links require licensing to be enabled in this server’s host configuration.'
 const RELAY = 'Live links are created on the machine that runs this terminal.'
 const LIMIT = 'Stop a live link first — 5 can be active at once.'
 

@@ -4,6 +4,7 @@
 // git() helper so callers are transport-agnostic. A module-level resolver registry lets both
 // git-service.ts and commit-message.ts route the same way without threading a ref through every op.
 import { execFile } from 'child_process'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { promisify } from 'util'
 import { childArgs } from './control-master'
 import { nativeExecFileAsync, resolveSshProgram, useNativeSsh } from './native/native-runtime'
@@ -54,10 +55,16 @@ export async function runRemoteGit(
   }
 }
 
-let resolver: ((cwd: string) => GitRemoteRef | undefined) | null = null
+export type GitRemoteResolver = (cwd: string) => GitRemoteRef | undefined
+const requestResolver = new AsyncLocalStorage<GitRemoteResolver>()
+/** Capture a request's destination before its first await. Explicit local scopes hide global state. */
+export function withGitRemoteResolver<T>(resolve: GitRemoteResolver, operation: () => T): T {
+  return requestResolver.run(resolve, operation)
+}
+let resolver: GitRemoteResolver | null = null
 export function setGitRemoteResolver(fn: ((cwd: string) => GitRemoteRef | undefined) | null): void {
   resolver = fn
 }
 export function resolveGitRemote(cwd: string): GitRemoteRef | undefined {
-  return resolver ? resolver(cwd) : undefined
+  return (requestResolver.getStore() ?? resolver)?.(cwd)
 }

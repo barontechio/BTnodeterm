@@ -279,3 +279,30 @@ export async function worktreeRemove(
   const branchNote = await deleteWorktreeBranch(git, repoPath, branch, deleteBranch)
   return { ok: true, message: `Worktree removed.${branchNote}` }
 }
+
+/** Host automation's conservative removal. It cannot discard dirty files, prune an absent
+ * checkout or infer a changed branch. Domain ownership/confirmation and directory/node claims
+ * remain the caller's responsibility. The existing explicit dirty-removal UI keeps its contract.
+ */
+export async function worktreeRemoveClean(
+  git: GitExecutor, repoPath: string, wtPath: string, homeDir: string,
+  expectedBranch: string, deleteBranch: boolean, pathExists: PathExists = alwaysExists
+): Promise<WorktreeOpResult> {
+  if (!wtPath || wtPath.startsWith('-') || !isValidGitRef(expectedBranch) ||
+    isDangerousWorktreeRemovalPath(wtPath, repoPath, homeDir))
+    return { ok: false, message: 'Refusing unsafe worktree removal.' }
+  const listed = await listWorktrees(git, repoPath, pathExists)
+  if (!listed.ok) return UNREADABLE(repoPath)
+  const hits = listed.entries.filter((entry) => worktreePathKey(entry.path) === worktreePathKey(wtPath))
+  const entry = hits.length === 1 ? hits[0] : undefined
+  if (!entry || entry === listed.entries[0] || entry.isBare || entry.prunable || entry.branch !== expectedBranch)
+    return { ok: false, message: 'The linked checkout or branch changed, is missing, or is the primary checkout. Nothing was removed.' }
+  // Git performs its own current dirty/lock checks. A separate status probe cannot authorize
+  // --force: files may change between that probe and removal.
+  const removed = await git(repoPath, ['worktree', 'remove', '--', wtPath])
+  if (!removed.ok) return { ok: false,
+    ...(!(await pathExists(wtPath)) ? { worktreeGone: true } : {}),
+    message: removed.err || 'Git refused clean worktree removal; inspect its status and lock.' }
+  const branchNote = await deleteWorktreeBranch(git, repoPath, expectedBranch, deleteBranch)
+  return { ok: true, worktreeGone: true, message: `Worktree removed.${branchNote}` }
+}

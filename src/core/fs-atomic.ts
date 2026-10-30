@@ -373,7 +373,7 @@ export function tempNameFor(target: string, opts: TempNameOptions = {}): string 
 export async function writeFileAtomic(
   target: string,
   data: string,
-  opts: { mode?: number } = {}
+  opts: { mode?: number; flush?: boolean } = {}
 ): Promise<void> {
   const tmp = tempNameFor(target)
   try {
@@ -387,4 +387,19 @@ export async function writeFileAtomic(
     await fs.rm(tmp, { force: true }).catch(() => {})
     throw e
   }
+}
+
+/** A write-ahead record must reach the filesystem before its external effect may start.
+ * Flush the file before publication and acknowledge the parent directory after rename.
+ * Unsupported directory flushes refuse before publishing. A later flush failure is an uncertain
+ * publication: the new file can already exist, so callers must stop and reload before proceeding.
+ * This strengthens acknowledgement only; it is not an inter-process lock or an effect permit.
+ */
+export async function writeFileDurableAtomic(target: string, data: string, opts: { mode?: number } = {}): Promise<void> {
+  const directory = await fs.open(path.dirname(target), 'r')
+  try {
+    await directory.sync()
+    await writeFileAtomic(target, data, { ...opts, flush: true })
+    await directory.sync()
+  } finally { await directory.close() }
 }

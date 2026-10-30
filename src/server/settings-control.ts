@@ -1,15 +1,7 @@
 /**
- * The Server Edition's `settings` verb (@shared/settings-verb): reads work, changes are refused by
- * name.
- *
- * WHY `--set` IS REFUSED HERE. On the desktop every change is a dialog, and the user's click is the
- * consent. This edition's canvas control is HEADLESS — its admission is verified node identity plus
- * process-local creator ownership (`HeadlessNodeFactory`), and nothing on the path ever asks a
- * person. The operator's opt-in (`NODETERM_SERVER_CANVAS_CONTROL=1`, #537) decides that agents may
- * drive the canvas at all; it is not a statement about any particular setting, and treating it as
- * standing consent to grant capabilities would be exactly the waiver `settings` refuses on the
- * desktop. So a change is refused with a permanent, named reason, and the agent is told to ask the
- * user to change it in Settings.
+ * Read adapter and explicit refusal for shells without a settings confirmation backend.
+ * Production changes route through core/settings-control.ts, outside command/workspace queues.
+ * Operator opt-in and creator scope never stand in for individual owner consent.
  *
  * `--get` answers from the same stores the delivery gate reads — the capability view is
  * `workspaceStore.capabilityProjectFor`, i.e. the file flag plus this machine's recorded answer — so
@@ -31,9 +23,8 @@ import { CONTROL_UNSUPPORTED_ERROR } from './control-unsupported'
 import type { ServerControlReply } from './headless-node-factory'
 
 export const SETTINGS_SET_UNSUPPORTED_MESSAGE =
-  `${CONTROL_UNSUPPORTED_ERROR}: changing settings from the canvas CLI needs a person to confirm ` +
-  'it, and nodeterm Server Edition has no confirmation dialog for canvas control. Ask the user to ' +
-  'change it in Settings. This is permanent on this host — do not retry.'
+  `${CONTROL_UNSUPPORTED_ERROR}: this host has no settings confirmation backend. ` +
+  'Ask the user to change it in Settings; do not retry.'
 
 export interface ServerSettingsControlDeps {
   persistedCanvases(): Array<{ id: string; nodes: ReadonlyArray<{ id: string }> }>

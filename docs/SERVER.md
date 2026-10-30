@@ -1,4 +1,4 @@
-# nodeterm Server Edition (Phase 2)
+# nodeterm Server Edition
 
 Run nodeterm's canvas in a browser, backed by a headless Node server on your own
 machine or box. The server serves the **same** built renderer the desktop app uses
@@ -7,8 +7,126 @@ shim (`src/renderer/bridge/`) stands in for the Electron preload, so the React U
 unchanged. It boots the same Electron-free core services (`src/core/`) through a
 `ServerPlatform`, so terminals get the same tmux session continuity as the desktop app.
 
-> **Phase 2 scope: terminals only.** This is a real, usable terminal canvas over the
-> network, but it is deliberately narrow — see [Limitations](#phase-2-limitations).
+Server Edition includes terminals, files, editor/diff, Git, agent status and transcripts,
+speech, triggers, run configuration, Claude accounts and optional canvas automation. The phase
+sections below record how those features arrived; Phase 2's terminal-only restrictions are
+historical. [The capability implementation plan](server-capability-parity-plan.md) tracks the
+remaining Desktop parity work.
+
+### Discover canvas automation support
+
+An agent can run `nodeterm.sh capabilities` through its normal authenticated control endpoint.
+The response names this edition, whether canvas control is enabled and the implementation status
+of each verb, including partial support such as local owner-confirmed `settings`. Discovery works even with
+Server canvas control disabled; it requires verified node identity and does not grant permission
+to execute an action. A browser can read the same report through `nodeTerminal.control.capabilities()`.
+Older hosts do not expose this optional API; a browser bridge returns `null` when support is unknown.
+
+Enabled Server control also supports `ungroup`, `move`, `resize`, `place`, `arrange` and `align`
+without an attached browser. They use Desktop's shared geometry planner over persisted dimensions,
+retain the caller's project and respect creator/project scope for every affected frame and descendant.
+They preserve non-geometry metadata and never activate a tab. After an uncertain save, inspect
+`nodeterm.sh list --geometry on` before repeating a relative move.
+
+`board` reads the caller's columns and scope-visible cards; `assign --node <id> --column <id|title>`
+moves the caller's own card or another permitted card. `--before <id>` positions it before a
+visible card, and `--column ungrouped` removes its assignment. The first assignment materializes
+the normal default board. These commands preserve provider lanes and metadata and do not launch work.
+
+`open-claude` uses the same launch path and limits as `open-agent --agent claude`. `show-image --path`
+creates a persistent editor preview for an existing local image. Relative paths resolve from the
+source session's absolute cwd (or its project cwd); remote sources are refused until their filesystem
+adapter is available. Image bytes use the existing authenticated file-preview API.
+
+Conversation search uses the shared local Claude index, including configured local managed/linked
+accounts. The Server starts its index on the owner's first search and stops it on shutdown. Results
+are bounded; account and exact cwd filters use a separate additive RPC channel, so an older host
+refuses a scoped request instead of ignoring its scope. Removed, pending and remote accounts do not
+contribute results. Search and naming are owner APIs; relay peers cannot use the global search.
+
+With canvas control enabled, a comment the owner posts in this host's board can deliver its mentions
+to agent sessions. Delivery uses the existing messaging capability grant, runtime pane ownership,
+queue, receipts and deduplication. Relay comments and comments loaded from history remain display-only.
+An interrupted RPC shows an uncertain delivery outcome; check the session before sending again.
+
+`report-issue` uses the shared GitHub reporting service, disabled until the owner grants issue
+reporting for that project. It targets only the caller's unambiguous project repository and retains
+redaction, preview, fingerprint deduplication and rate limits. `--dry-run` composes the preview without
+publishing. Concurrent reports for one project receive a busy result instead of a queued publication.
+
+`spawn-team --team '<json>'` and `verify --node <id>` run without an open browser. Local Claude,
+Codex and Gemini backends share Desktop's team/review planners. The host validates all roles,
+saves the complete group, members and dependency edges, then starts sessions. Reviews wait for
+verified target completion; synthesis waits for real reviewer turns. Saved holds after a restart
+require owner recovery through Run now. A removed account or missing prompt file also holds work.
+Run now is serialized with automatic delivery and refuses a stale command. If a reply is lost,
+inspect the session before retrying; the browser does not fall back to sending terminal input.
+
+`open-worktree --branch <name> [--base <ref|station>] [--group <id>]` creates a local checkout and
+binds a frame after shared paths and the trust-gated setup have completed successfully. Its path
+and base defaults use the same project settings as Desktop. If setup or binding fails, the reply
+retains the successful Git result for recovery; it never deletes that checkout to hide the failure.
+`open-agent` and `open-terminal --group <id>` inherit a verified frame checkout and use the shared
+frame placement. `close-worktree --group <id>` unbinds a present checkout and keeps files and
+sessions. Missing or unreadable checkouts require recovery first. Directory removal remains
+unavailable until owner confirmation is wired.
+
+`show-video --path <file>` also accepts audio and creates the existing media player node. Local
+playback uses authenticated HTTP streaming, including repeated Range requests for seeking, rather
+than base64 over the terminal socket. A browser obtains an opaque, expiring reference for the
+saved node; mounted players renew it and release it on unmount. Closing the connection revokes its
+references. Reopening/reloading obtains a new one. Every request checks the current project/node
+access and pinned file identity; removed nodes and replaced or redirected files are refused.
+Only recognized media formats are served. Playback depends on the viewer's available codecs.
+Relay peers and SSH media remain unavailable on this path.
+
+`show-web --url <external-http(s)-url>` creates a browser preview with an external-open fallback.
+The iframe respects the site's embedding policy and keeps an opaque sandbox origin. Host
+`localhost` URLs require the development preview gateway; they are not opened against the viewer's
+own machine. `--file <local-html>` and `--html <markup>` require the optional isolation setup below.
+
+### Optional static HTML previews
+
+Set `NODETERM_PUBLIC_ORIGIN=https://term.example.com` and
+`NODETERM_PREVIEW_ORIGIN=https://preview.example.com` (or `--preview-origin`). The preview hostname
+must differ; ports alone do not separate cookies. Route both HTTPS hosts to the same Server
+listener, preserving the **preview Host header**. The preview virtual host serves only opaque
+`/web-preview?ref=…` references; it exposes no application, login or application WebSocket routes.
+The application origin never serves those snapshots. No extra listener or browser worker starts.
+
+Local previews display self-contained static HTML, inline CSS and embedded data assets, up to
+1 MiB. Scripts, forms, automatic refresh and network resource loads are disabled. In particular,
+resource CSP alone cannot make script-enabled HTML offline: a script can navigate its own frame.
+The sandbox therefore retains its script/automatic-feature restrictions; see the
+[HTML sandbox and refresh rules](https://html.spec.whatwg.org/multipage/semantics.html#attr-meta-http-equiv-refresh).
+Interactive application execution belongs to the optional isolated browser work, not this surface.
+Native Desktop previews retain their existing adapter.
+
+Owner references expire, renew while mounted and revoke on disconnect or node removal. Snapshots
+are immutable and bounded in memory. Generated HTML uses owner-only content-addressed files;
+referenced files survive restart, and unused staging files age out on the next write. Existing
+browser HTML modals that do not have a saved web-node scope remain unsupported by this API.
+
+### Owner confirmation service
+
+Desktop and Server now share the host-side confirmation broker and the owner dialog adapter.
+An action must capture its exact normalized arguments, target/session and policy before asking.
+Approval produces a single-use permit and rechecks that state immediately before execution.
+An absent owner UI, expired request, lost connection or failed proof read cannot approve an action.
+Two owner tabs can answer only once; relay peers cannot subscribe or approve. Requests never take
+keyboard focus or accept an incidental Enter. Settings changes use this broker; `write` and
+worktree removal remain unavailable until their command adapters are connected.
+
+`settings --set <key> --value <value>` can change only the existing allowlist: canvas grid/default
+dimensions and the caller local project's agent messaging switch. Every change needs individual
+owner confirmation. No owner UI means no change; a waiver or canvas-control opt-in is insufficient.
+The host checks source account/session and the approved old value again before the queued write.
+Concurrent unrelated edits survive. Forbidden keys and other projects remain refused.
+
+Modern owner clients save settings as explicit field patches and receive host changes after
+durable persistence. Concurrent changes to other fields are preserved. Pending local edits stay
+visible during synchronization, and a lost acknowledgement never triggers a full-snapshot save.
+Older hosts negotiate the existing full-save behavior only when the patch RPC is absent.
 
 ## Quickstart
 
@@ -74,6 +192,7 @@ Precedence: **CLI flag > environment variable > default.**
 | `--trust-proxy-nets <list>` | `NODETERM_TRUST_PROXY_NETS` | `127.0.0.0/8, ::1/128` | Comma-separated IPs/CIDRs (IPv4+IPv6) whose requests may use the trust header. Only meaningful with the header set. |
 | — | `NODETERM_TRUST_PROXY_SECRET` | — | Shared secret your proxy sends as `X-Nodeterm-Proxy-Secret` (at least 32 printable characters). **Required** when the trusted nets include loopback. Environment only: a command-line flag is refused, because argv is readable by every local user. |
 | `--public-origin <url>` | `NODETERM_PUBLIC_ORIGIN` | — | The https origin you open in the browser, e.g. `https://term.example.com`. Forces the `Secure` cookie flag, sends HSTS, and lets that `Origin` pass the same-origin checks when the proxy rewrites `Host`. See [TLS](#tls-reverse-proxy). |
+| `--preview-origin <url>` | `NODETERM_PREVIEW_ORIGIN` | — | Optional distinct HTTPS hostname for scoped static HTML previews. Requires `NODETERM_PUBLIC_ORIGIN`; preserve its Host header through the proxy. |
 
 Binding a **non-loopback** host (anything other than `127.0.0.1` / `localhost` /
 `::1`) **without** `--insecure-http` is refused at startup — plain HTTP on a public
@@ -473,6 +592,9 @@ Two intentional departures from `docs/superpowers/specs/2026-07-10-server-editio
 
 ## Phase 2 limitations
 
+These describe the original Phase 2 release. The later phase sections document the implemented
+file, Git, agent and flow-control features; they are not current terminal-only restrictions.
+
 - **Terminal-only.** Terminal nodes work (spawn, I/O, resize, tmux continuity). The
   git panel, source control, Monaco editor/diff nodes, SDK chat node, agent-status
   badges/hooks, and the folder picker are **not** wired into the server bridge yet —
@@ -581,6 +703,13 @@ that path to the system-default `~/.claude/projects` or a managed account dir
 
 ### Context Link
 
+Remote classification includes saved, disconnected and ambiguously placed SSH records. Without
+an authorized remote reader/capture adapter, those records cannot search local transcripts or
+capture a local unmounted terminal. The current Server adapter refuses remote context reads;
+owner chat/history support does not grant agent context-link access. Each asynchronous linked
+read rechecks its edge, session/account metadata, hook path and local/remote classification before
+returning bytes. A revoked or changed target discards the result; title-only edits retain access.
+
 Context Link works in the Server Edition. The feature itself lives entirely in core
 (`src/core/context-link.ts`) and writes everything under `dataDir`; what it needs from a
 shell is the **link map** — who is linked to whom.
@@ -631,9 +760,9 @@ Consequences worth knowing:
   (agent tails self-cleared only on `SessionEnd`, so a node closed *without* one left an
   idle file-tail); the server now untracks agent tails on node close, at desktop parity.
   See [Phase 3c](#phase-3c-follow-up-hardening).
-- **SSH-remote agent tails are N/A** — the server has no SSH-project manager, so the
-  SSH branch of the desktop hook-wiring block is dropped (the raw listener falls straight
-  through to the local logic).
+- **SSH-remote agent tails were deferred in Phase 3b.** The opt-in SSH adapter now provides
+  project connections, filesystem/setup services and owner-only Claude history reads. Continuous
+  context/usage/subagent tails remain pending. Remote records never use this server's local histories.
 
 ## Phase 3c: follow-up hardening
 
@@ -659,6 +788,19 @@ directory**.
 
 ### Opt-in canvas control and creator ownership
 
+The owning core loads `worktree-removals.json` before enabling launches. Normally it is absent and
+no file is created. If an interrupted removal is recorded, new physical starts inside that path
+are refused before falling back to home, including dangling aliases. Corrupt/unreadable recovery
+state refuses new starts until inspected; existing live panes without known pending membership
+remain usable. Known prepared/removed members also refuse input and execution until recovery.
+Owner browsers show **Worktree recovery** when attention is needed. Inspect the branch and directory,
+then **Keep existing checkout** can release a prepared record only while Git and the original
+canonical directory identity still match. This keeps files, branch and sessions; it never replays
+removal. Missing/changed checkout recovery and confirmed agent deletion are not enabled yet. A lost
+durable publication acknowledgement preserves quarantine; restart the host to reconstruct those
+facts before changing them. The UI refreshes status only and never repeats a possibly completed
+action. Relay viewers have no recovery administration.
+
 Server canvas control is disabled by default. Set `NODETERM_SERVER_CANVAS_CONTROL=1` (or pass
 `--canvas-control`) to install the Server-local shim and enable its `/control/*` implementation.
 Every enabled request requires verified node identity. **Enabling it lets an agent session run
@@ -673,6 +815,59 @@ or close only a node it opened during the current Server process run. Link, grou
 sticky updates, dependency targets, message delivery, and close validate their complete target set
 before any write or PTY kill; an unowned member refuses the whole operation. Queued messages repeat
 the creator check at flush time in addition to the existing verified and per-project switch gates.
+
+`write --node <id> --text <text>` supports an existing local Claude pane with verified idle state,
+a proven foreground process and an empty composer. It obeys the configured creator/project scope
+and requires an attached owner UI to approve the exact target and text for each request. SSH and
+other agent backends refuse this adapter. Host node exclusion blocks competing input and teardown;
+saved account/session or physical-pane replacement invalidates approval. A draft stays untouched.
+An uncertain delivery is reported explicitly and must not be resent: inspect the terminal. Both
+submitted and uncertain input retain the existing pending-work hold until recovery or a completed
+new turn, covering the interval before a new hook arrives. Text is limited to 64 KiB.
+
+`branch --node <id>` supports a different, verified idle local Claude node on a live POSIX tmux
+pane. It uses the same creator/project policy and requires individual owner approval of the exact
+account/folder/session. The original transcript must be readable in that account. One host claim
+spans composer inspection, fixed `/branch` input and verification of fresh output plus the matching
+new runtime session. An old `/resume` line is insufficient. Draft refusals preserve input; possible
+or unconfirmed input is never automatically repeated.
+
+After a confirmed branch, the selected pane stays on its new session. The host reserves a new node
+before publishing/persisting it, then resumes the original with its saved account, folder, model and
+trusted project launcher. A failed launch keeps its exact command for manual recovery; the reply
+distinguishes a confirmed branch with an incomplete copy from an uncertain branch command. The
+continuation rechecks owner lifetime and the physical generation before typing. SSH, Windows,
+session-host and Zellij branch delivery remain unavailable.
+
+The UI branch action uses the same host transaction on Desktop and Server, with the new original
+node placed beside its source or at the menu's validated canvas position. A direct authenticated-owner click requires no additional agent
+confirmation and creates no agent creator grant. Owner reload/disconnect invalidates the operation;
+dispatched work retains its fence until settled. The UI saves current canvas edits first and never
+falls back to raw `/branch` input on an older host or a lost reply. Relay tabs cannot invoke these
+owner actions on either the host or the viewer's local desktop. Desktop CLI branching uses the
+confirmed agent entry and the same local POSIX tmux/account/session restrictions.
+
+Mounted agent nodes now read their session titles through the owner WebSocket API, using the same
+per-agent reader as the host sweep. Requests carry the node id so equal conversation ids on
+different accounts/hosts cannot choose a reader by caller-supplied metadata. A remote, missing,
+pending-launch or replaced target returns no adopted title, preserving the node's existing title.
+SSH title reads remain pending; this path never falls through to the server's local histories.
+Title freshness also binds a linked account's directory, so re-linking the same account id cannot
+publish a title read from its previous folder.
+
+**Wider reach: `--control-scope project`.** `NODETERM_SERVER_CONTROL_SCOPE=project` (or
+`--control-scope project`; default `creator`, an unknown value fails the boot) lets an agent act on
+every node that is only in its OWN project, whoever opened it and whether or not the server
+restarted since: `list` shows them all, and link, group, rename, color, sticky, run, message
+delivery and close accept them. It is an operator setting only — never settings.json and never the
+`settings` verb, so an agent cannot widen its own reach. Because nobody confirms a close on this
+edition, two rules stay: an agent never closes its own node, and a node it did not open whose agent
+is working or waiting on a person (NEEDS YOU) closes only with `close --force yes`. A node id held
+by two projects (one committed canvas opened from two folders) is refused, since its session
+belongs to both. What it does not widen: automatic input (an `--after` release, held launches at
+boot) still needs creator proof, and a message still needs the target pane's owner proven by a
+fresh spawn in this run (`unproven-target-owner` otherwise). In a project shared with a hosted team,
+`project` scope reaches teammates' nodes too. Boot prints a warning when it is on.
 
 The creator ledger is memory-only and is never reconstructed from a project file, title, hook
 record, or tmux session name. After a service restart it is empty, and boot performs no canvas-node
@@ -746,36 +941,53 @@ way to create (issue #313).
   (the folder picker browses the server's disk), but it is worth saying out loud here, because the
   dir a person is linking is usually one they created by hand and think of as "mine".
 
+### ✦ Name with AI
+
+The two naming channels (`pty:generate-name`, `pty:generate-group-name`) are ONE core
+registration shared with the desktop (`core/naming-ipc.ts`). The bridge used to answer both with a
+hard-coded "not available in the server edition yet", a stub left from when the naming module was
+main-resident. The agent (Settings → Commit messages) runs on the **server**, as the server user,
+under the node's managed Claude account when it has a usable one and the server's `~/.claude`
+otherwise. It must be installed and signed in there. Relay peers: Editor-only on a hosted team,
+refused to a project-scoped guest (the request names a host account).
+
 ### Managed Codex accounts (S6)
 
-The Server Edition **arms the Codex record-signing secret** but does **not** host the
-account-management IPC — that surface is desktop-driven over SSH.
+The Server Edition registers the same managed account service as Desktop
+(`core/codex-account-service.ts`). The browser can create a private host account, open its supported
+host login flow, wait for a real credential, read display identity, remove an account and perform
+the existing prepare/commit/finish/rollback conversation exposure. Credentials and account homes
+remain on the server. The login terminal starts only after settings persistence, including retries.
 
-- **Arms the record secret (Decision 1).** At boot `armServerNodeIdentity`
-  (`src/server/node-identity-arm.ts`) loads the raw node-auth secret and calls
-  `setCodexThreadIdentityAuthSecret(...)` with it, so a managed Codex account's thread→node→account
-  ownership records can **sign and verify on a headless host**. Headless Linux has no OS keychain, so
-  the secret is 32 **raw bytes** at `node-auth-key.bin`, mode `0600` — the same both-shells channel the
-  desktop seals via `safeStorage`. When the managed runtime and launcher are available, headless
-  canvas-control launches route through `nodeterm-codex` and claim that signed node identity; an
-  unavailable capability still degrades to the bare `codex` command.
-- **Does NOT host the account-management verbs.** `initCodexAccounts` registers its IPC over Electron's
-  `ipcMain` with WebContents-owner authorization, which the headless bridge does not provide, so
-  `startServer` never calls it. This is **not** a silent gap: managed Codex logins **on an SSH host**
-  are driven by the **desktop** over SSH (the remote account-add / device-login / import legs + the
-  relay) — the host runs the relay + import, not its own copy of the account IPC.
-- **Fail-closed, both ways.** With no secret armed (unwritable key file), the record layer throws
-  rather than writing anything unsigned, and Codex nodes keep working bare. A machine with **no** managed
-  accounts is byte-for-byte the pre-S6 layout (a bare-root record per thread).
-- **A browser-only deployment therefore cannot manage Codex accounts** — the case issue #313 is
-  about. Managed **Claude** accounts moved into core (above); Codex did not follow, and the reason
-  is not effort: its switch verbs (`switchThread` / `commitSwitch` / `finishSwitch` /
-  `rollbackSwitch`) authorize the owning window by Electron **WebContents id**, which has no
-  meaning over a WS connection where every browser tab is an equally anonymous socket. Hosting
-  them headless needs a connection-identity redesign first, not a handler port. Until then the
-  `codexAccounts` namespace stays an `E_UNSUPPORTED` stub in the bridge and the Settings section
-  says so by name rather than failing silently — an unhandled rejection there previously stopped
-  the spinner and showed nothing.
+Switch reservations belong to one authenticated connection lifetime. Another owner tab cannot
+commit them; disconnect, logout, timeout and shutdown release them. Removal refuses accounts pinned
+by a live switch. Owner-only RPCs refuse relay peers. The browser uses real requests; an older host
+without these channels refuses them rather than inventing a local or system identity.
+
+`armServerNodeIdentity` continues to arm the signed thread/node/account records with the existing
+0600 host secret. Daemon, runtime and platform capability checks remain unchanged; this extraction
+does not prove that a particular installed Codex CLI supports its app-server. Windows retains the
+existing explicit app-server refusal and auth-file identity path. Real authenticated CLI/account
+switches on supported platforms still need device verification beyond filesystem/RPC fixtures.
+
+Server account administration currently supports local host accounts. An SSH context without an
+extracted SSH service refuses writes and returns an unknown identity for reads; it never falls back
+to this server's account. Desktop's SSH lifecycle retains its existing adapter.
+
+### Shared SSH implementation status
+
+The project manager, remote hook installation/freshness, filesystem operations, atomic writes and
+host inventory now live in core and are consumed by Desktop. Native prompts, credentials/agent
+lifetime, IPC and local media URLs remain shell adapters. This extraction alone does not enable
+Server SSH projects by itself. The first owner adapter is now available through
+`NODETERM_SERVER_SSH=1` / `--ssh-projects`, disabled by default; see
+[Server SSH projects](server-ssh-projects.md). Connected Claude projects now support owner-only
+chat/history reads with a strict Python 3/POSIX helper on the remote host. The helper selects the
+saved node/account namespace, bounds discovery and byte windows, and rejects unsafe or stale targets
+without a local/account fallback. Missing runtimes and unsafe trees have actionable panel messages.
+Transfers, remote media, remaining harness readers and continuous context/usage bindings remain
+explicitly unavailable. Read-only history support does not grant remote terminal-control proof.
+Saved SSH inventory changes acknowledge only after durable owner-only persistence.
 
 ## Manual browser smoke checklist
 

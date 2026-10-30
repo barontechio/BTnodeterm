@@ -42,6 +42,26 @@ afterEach(async () => {
 })
 
 describe('an armed node survives an app restart on this machine', () => {
+  it('provides an isolated host action snapshot with local exec, keeping shared routing unchanged', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ cwd: projRoot, nodes: [{ ...armedNode, shell: '/bin/sh' }] })]))
+    expect(store.getNodeResolved(armedNode.id)?.pendingLaunch).toBeUndefined()
+    const owned = store.getNodeForHostAction(armedNode.id)!
+    expect(owned.pendingLaunch).toEqual(launch); expect(owned.shell).toBe('/bin/sh')
+    owned.pendingLaunch!.command = 'changed snapshot'
+    expect(store.getNodeForHostAction(armedNode.id)?.pendingLaunch).toEqual(launch)
+    expect(await projectFile()).not.toContain('pendingLaunch')
+    await store.save(ws([project({ cwd: projRoot, nodes: [{ ...armedNode, pendingLaunch: undefined }] })]))
+    expect(store.getNodeForHostAction(armedNode.id)?.pendingLaunch).toBeUndefined()
+  })
+
+  it('refuses a host snapshot for an id shared by multiple projects', async () => {
+    const store = new WorkspaceStore()
+    await store.save(ws([project({ id: 'one' }), project({ id: 'two' })]))
+    expect(store.getNodeForHostAction(armedNode.id)).toBeUndefined()
+    expect(store.getNodeResolved(armedNode.id)).toBeDefined()
+  })
+
   it('folder project: project.json carries no launch; a FRESH store loads it back', async () => {
     await new WorkspaceStore().save(ws([project({ cwd: projRoot })]))
     const file = await projectFile()
@@ -94,6 +114,7 @@ describe('a project.json that carries pendingLaunch is ignored', () => {
     const store = new WorkspaceStore()
     const loaded = await store.load()
     expect(loaded.projects[0].nodes[0].pendingLaunch).toBeUndefined()
+    expect(store.getNodeForHostAction('term-1')?.pendingLaunch).toBeUndefined()
     // …and the next save neither blesses it into the local index nor writes it back to the file.
     await store.save(loaded)
     const index = JSON.parse(await fs.readFile(path.join(userData, 'workspace.json'), 'utf-8'))

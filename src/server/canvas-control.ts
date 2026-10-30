@@ -1,9 +1,15 @@
 import fs from 'node:fs'
+import { ConfirmedNodeWrite } from '../core/confirmed-node-write'
+import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
+import { transcriptPresence } from '../core/transcript-reader'
+import type { OwnerConfirmationBroker } from '../core/owner-confirmation'
+import type { ControlScope } from './control-scope'
 import path from 'node:path'
 
 import {
   createDeliveryQueue,
   deliverFromControl,
+  deliverBoardCommentFromUi,
   deliverStationNotice,
   messagingEnabledVia,
   onMessagingAgentEvent,
@@ -48,7 +54,15 @@ import {
 } from './control-unsupported'
 import { HeadlessNodeFactory } from './headless-node-factory'
 import { sendSettledEnvelope } from './settled-envelope'
+import { contextLinkShimPath } from '../core/context-link'
+import type { ProjectLaunchInfo } from '../shared/project-settings'
+import type { HostLaunchReply } from '../shared/headless-launch'
+import type { WorktreeControlBackend } from '../core/worktree-control'
+import type { WebPreviews } from '../core/web-previews'
+import type { AgentMessageReply } from '../shared/agents/agent-messaging'
 import { serverSettingsControl } from './settings-control'
+import { reportIssueFromControl } from '../core/github/control-report-issue'
+import type { ReportIssueDeps } from '../core/github/report-issue-service'
 import {
   answerGitHubRead,
   resolveGitHubReadProject,
@@ -56,9 +70,13 @@ import {
 } from '../core/github/control-read'
 
 export interface ServerCanvasControlDeps {
+  /** Which nodes a caller may read and act on (control-scope.ts). Absent = `creator`. */
+  controlScope?: ControlScope
   workspaceStore: WorkspaceStore
   ptyManager: PtyManager
   settings(): Settings
+  settingsControl?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<import('./headless-node-factory').ServerControlReply>
+  confirmations?: Pick<OwnerConfirmationBroker, 'request'>
   boardLog: BoardLogHandlers
   cliCaps?: () => Promise<ClaudeCliCaps>
   /** grok's own `--session-id` probe; defaults to the real one. See HeadlessNodeFactoryDeps. */
@@ -73,6 +91,11 @@ export interface ServerCanvasControlDeps {
   /** The GitHub service's cache reads behind `issues` / `prs` (core/github/control-read.ts).
    *  Absent = those verbs answer that the GitHub lane is unavailable here. */
   githubRead?: Pick<GitHubReadDeps, 'snapshot' | 'dispatch'>
+  reportIssue?: ReportIssueDeps
+  projectLaunchInfo?(projectId: string): Promise<ProjectLaunchInfo | null>
+  requestAgentsTrust?(projectId: string): unknown
+  worktrees?: WorktreeControlBackend
+  webPreviews?: Pick<WebPreviews, 'readHtml' | 'writeHtml'>
   /**
    * Does this process own the hook endpoint (`hookServer.startForApp()` returned no warning)? The
    * durable orchestration facts (queue, station reports, hand-over holds) belong to the owning
@@ -83,6 +106,10 @@ export interface ServerCanvasControlDeps {
 }
 
 export interface ServerCanvasControl {
+  branchFromOwner(nodeId: string, owner: import('../core/owner-lifetimes').AccountOwner,
+    at?: import('../shared/conversation-branch').ConversationBranchPosition): Promise<import('../shared/conversation-branch').ConversationBranchReply>
+  runFromOwner(nodeId: string, command: string): Promise<HostLaunchReply>
+  deliverBoardComment(raw: unknown): Promise<AgentMessageReply>
   handler: ReturnType<typeof createServerEditionControlHandler>
   onAgentEvent(event: NormalizedAgentEvent): void
   /** Station-failure notices for the stations agents opened during THIS server run. */
@@ -182,6 +209,7 @@ export async function initServerCanvasControl(
   stationOutcomes.loadFromDisk()
   stationHandovers.loadFromDisk()
   const factory = new HeadlessNodeFactory({
+    controlScope: deps.controlScope ?? 'creator',
     workspaceStore: deps.workspaceStore,
     ptyManager: deps.ptyManager,
     settings: deps.settings,
@@ -195,9 +223,20 @@ export async function initServerCanvasControl(
     codexSharedIdentity:
       deps.codexSharedIdentity ?? (() => codexIdentityCaps().then((caps) => caps.shared)),
     stateOf: nodeState,
+    stateVerified: (id) => {
+      const entry = mirrorEntry(id)
+      return entry?.stateVerified === true && !entry.restored && !entry.idleInferred && !!entry.sessionId
+    },
+    sessionOf: (id) => mirrorEntry(id)?.sessionId,
+    contextShimPath: contextLinkShimPath,
+    projectLaunchInfo: deps.projectLaunchInfo,
+    requestAgentsTrust: deps.requestAgentsTrust,
+    worktrees: deps.worktrees,
+    webPreviews: deps.webPreviews,
     agentIdOf: (nodeId) => mirrorEntry(nodeId)?.agentId,
     outcomeOf: (nodeId) => stationOutcomes.get(nodeId),
     handedOver: (nodeId) => stationHandovers.isHandedOver(nodeId),
+    handoverOf: (nodeId) => stationHandovers.list().find((r) => r.nodeId === nodeId),
     // NOT `workspaceExternalChange`. That channel means "somebody else wrote this file" and the
     // renderer answers it with `decideExternalChange`, which compares the whole project shell —
     // and `ropes` is part of it, so every headless spawn (one appended `ctrl-…` rope) read as a
@@ -216,6 +255,29 @@ export async function initServerCanvasControl(
 
   factoryRef = factory
 
+  const nodeActionDeps = deps.confirmations ? {
+    workspace: deps.workspaceStore, pty: deps.ptyManager, confirmations: deps.confirmations,
+    settings: deps.settings, scope: () => factory.controlScope,
+    ownsSpawn: (source, target) => factory.ownsSpawn(source, target),
+    handedOver: (id) => stationHandovers.isHandedOver(id),
+    onInputDispatched: (id, at) => {
+      stationHandovers.markHandedOver(id, at)
+      stationOutcomes.withdrawBefore(id, at)
+    },
+    stopped: () => stopped,
+    runtime: (id) => {
+      const entry = mirrorEntry(id)
+      return { agentId: entry?.agentId, sessionId: entry?.sessionId, state: entry?.state,
+        verified: entry?.stateVerified === true && !entry.restored && !entry.idleInferred }
+    }
+  } satisfies ConstructorParameters<typeof ConfirmedNodeWrite>[0] : undefined
+  const nodeWrites = nodeActionDeps ? new ConfirmedNodeWrite(nodeActionDeps) : undefined
+  const nodeBranches = nodeActionDeps ? new ConfirmedNodeBranch({ ...nodeActionDeps,
+    originalAvailable: async (id, accountId) => await transcriptPresence(id, accountId) === 'present',
+    resumeOriginal: (...args) => factory.resumeClaudeOriginal(...args),
+    resumeOriginalFromOwner: (...args) => factory.resumeClaudeOriginalFromOwner(...args)
+  }) : undefined
+
   const messaging: AgentMessagingDeps = {
     ...ptyPaneProbeDeps(deps.ptyManager),
     // Server delivery has no renderer/xterm echo stream. Capture the headless pane instead and
@@ -226,7 +288,8 @@ export async function initServerCanvasControl(
     hasLiveSession: (nodeId) => deps.ptyManager.sessionExists(nodeId),
     mirrorEntry,
     projects: () => deps.workspaceStore.persistedCanvases(),
-    isRemoteNode: () => false,
+    isRemoteNode: (id) => !!deps.ptyManager.sshRemoteForNode?.(id) || !!deps.workspaceStore.sshProjectIdForNode?.(id),
+    ownerBoardComments: true,
     messagingEnabled: messagingEnabledVia(
       (projectId) => deps.workspaceStore.capabilityProjectFor(projectId),
       // The SAME machine default the desktop reads — this shell's own settings.json.
@@ -234,8 +297,16 @@ export async function initServerCanvasControl(
     ),
     paneOwnerProject,
     heldLaunch: (projectId, nodeId) => deps.workspaceStore.heldLaunch(projectId, nodeId),
-    callerOwnsTarget: (sourceNodeId, targetNodeId) =>
-      factory.ownsSpawn(sourceNodeId, targetNodeId),
+    // The control scope (control-scope.ts): the caller's own spawns, or — under `project` — any
+    // node that, like the caller, is in exactly one project, the same one. Re-asked at flush, so a
+    // message queued before a node moved projects is refused then, not delivered.
+    callerOwnsTarget: (sourceNodeId, targetNodeId) => {
+      if (factory.ownsSpawn(sourceNodeId, targetNodeId)) return true
+      if (factory.controlScope !== 'project') return false
+      const src = deps.workspaceStore.projectIdsForNode(sourceNodeId)
+      const dst = deps.workspaceStore.projectIdsForNode(targetNodeId)
+      return src.length === 1 && dst.length === 1 && src[0] === dst[0]
+    },
     customAgents: () => deps.settings().customAgents,
     appendBoardLog: (projectId, entry) => deps.boardLog.append(projectId, entry),
     // A `send` / `reply` hands a station new work when it REACHES the pane (queued ⇒ "work pending"
@@ -280,6 +351,19 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    write: nodeWrites ? (nodeId, args, verified) => nodeWrites.run(nodeId, args, verified) : undefined,
+    branch: nodeBranches ? (nodeId, args, verified) => nodeBranches.run(nodeId, args, verified) : undefined,
+    orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),
+    worktree: (verb, nodeId, args, verified) => factory.worktree(verb, nodeId, args, verified),
+    reportIssue: (nodeId, args, verified) => deps.reportIssue ? reportIssueFromControl({ nodeId, args, verified }, {
+      projectIdsForNode: (id) => deps.workspaceStore.projectIdsForNode(id), service: deps.reportIssue
+    }) : Promise.resolve({ ok: false, error: 'report-unavailable: issue reporting is not configured on this host. Do not retry.' }),
+    showImage: (sourceNodeId, args, verified) => factory.showImage(sourceNodeId, args, verified),
+    showVideo: (sourceNodeId, args, verified) => factory.showVideo(sourceNodeId, args, verified),
+    showWeb: (sourceNodeId, args, verified) => factory.showWeb(sourceNodeId, args, verified),
+    board: (sourceNodeId, args) => factory.board(sourceNodeId, args),
+    assign: (sourceNodeId, args) => factory.assign(sourceNodeId, args),
+    geometry: (verb, sourceNodeId, args) => factory.geometry(verb, sourceNodeId, args),
     openProject: (sourceNodeId, args, verified) =>
       factory.openProject(sourceNodeId, args, verified),
     openTerminal: (sourceNodeId, args, verified) =>
@@ -292,6 +376,7 @@ export async function initServerCanvasControl(
     color: (sourceNodeId, args) => factory.color(sourceNodeId, args),
     sticky: (sourceNodeId, args) => factory.sticky(sourceNodeId, args),
     run: (sourceNodeId, args, verified) => factory.run(sourceNodeId, args, verified),
+    list: (sourceNodeId, args) => factory.list(sourceNodeId, args),
     // A station's report about ITSELF (core/station-outcome-store.ts, the same handler the desktop
     // runs). A report can release an armed dependent, so the factory re-evaluates its arms.
     reportOutcome: (sourceNodeId, args, verified) =>
@@ -330,8 +415,10 @@ export async function initServerCanvasControl(
         now: () => Date.now()
       })
     },
-    settings: async (sourceNodeId, args) =>
-      serverSettingsControl(
+    settings: async (sourceNodeId, args, verified) =>
+      args.set !== undefined && deps.settingsControl
+        ? deps.settingsControl(sourceNodeId, args, verified)
+        : serverSettingsControl(
         {
           persistedCanvases: () => deps.workspaceStore.persistedCanvases(),
           capabilityProjectFor: (id) => deps.workspaceStore.capabilityProjectFor(id),
@@ -351,6 +438,7 @@ export async function initServerCanvasControl(
   await factory.start()
 
   const baseHandler = createServerEditionControlHandler(actions)
+  let stopped = false
   return {
     // New work typed into a station by `run` withdraws its older outcome report — the "new task"
     // rule in core/station-outcome-store.ts, applied on the answer. (`send` / `reply` go through
@@ -376,7 +464,14 @@ export async function initServerCanvasControl(
     stationNotices,
     stationOutcomes,
     stationHandovers,
+    runFromOwner: (id, command) => factory.runFromOwner(id, command),
+    branchFromOwner: (id, owner, at) => nodeBranches ? nodeBranches.runFromOwner(id, owner, at) :
+      Promise.resolve({ ok: false, error: 'Owner branching is unavailable on this host.' }),
+    deliverBoardComment: (raw) => stopped ? Promise.resolve({ ok: false,
+      error: 'Board comment delivery is stopped.', result: { kind: 'notPermitted', reason: 'control-disabled' }
+    }) : deliverBoardCommentFromUi(raw, messaging),
     stop: () => {
+      stopped = true
       factory.stop()
       queue.resetForTests()
       stationNotices.stop()

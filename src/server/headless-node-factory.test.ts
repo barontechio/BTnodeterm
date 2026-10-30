@@ -1,3 +1,4 @@
+import { FakeHeadlessPty as FakePty } from '../core/test-headless-pty'
 import fs from 'node:fs'
 import { StationHandoverTracker } from '../core/station-handover'
 import os from 'node:os'
@@ -16,6 +17,7 @@ import type { AgentState } from '../shared/agents/normalize'
 import { MAX_LAUNCH_LINE_BYTES } from '../shared/canonical-line'
 import { RUN_NOW_AFTER_REFUSAL } from '../shared/control-verbs'
 import { RUN_NOW_AFTER_SUCCESS_REFUSAL, type StationOutcomeRecord } from '../shared/station-outcome'
+import { resolveProjectSettings } from '../shared/project-settings'
 import {
   DEFAULT_SETTINGS,
   type CanvasMutation,
@@ -37,86 +39,6 @@ import {
 } from './headless-node-factory'
 import { STICKY_NODE_MIN_SIZE, STICKY_NODE_SIZE } from '../shared/default-node-size'
 
-class FakePty implements HeadlessPty {
-  readonly creates: PtyCreateOptions[] = []
-  readonly sends: Array<{ nodeId: string; text: string }> = []
-  readonly destroys: Array<{
-    clientId: number | null
-    nodeId: string
-    everySocket: boolean | undefined
-    wasLive: boolean
-  }> = []
-  readonly live = new Set<string>()
-  readonly alreadyDead = new Set<string>()
-  readonly released: string[] = []
-  private readonly taps = new Map<string, Set<(c: string) => void>>()
-  private readonly lines = new Map<string, string>()
-
-  persistentSpawnAvailable(): boolean {
-    return true
-  }
-
-  onOutput(key: string, cb: (c: string) => void): () => void {
-    let set = this.taps.get(key)
-    if (!set) this.taps.set(key, (set = new Set()))
-    set.add(cb)
-    return () => set!.delete(cb)
-  }
-
-  // An interactive shell: echoes what it is typed; Enter submits the line (recorded in `sends`,
-  // so every pre-existing `pty.sends` assertion keeps its meaning); Ctrl-U / Esc clear it.
-  writeHeadless(key: string, data: string): boolean {
-    if (!this.live.has(key)) return false
-    if (data === '\r') {
-      this.sends.push({ nodeId: key, text: this.lines.get(key) ?? '' })
-      this.lines.set(key, '')
-      return true
-    }
-    if (data === '\x15' || data === '\x1b') {
-      this.lines.set(key, '')
-      return true
-    }
-    this.lines.set(key, (this.lines.get(key) ?? '') + data)
-    for (const cb of [...(this.taps.get(key) ?? [])]) cb(data)
-    return true
-  }
-
-  releaseHeadless(key: string): void {
-    this.released.push(key)
-  }
-
-  async createHeadless(options: PtyCreateOptions): Promise<PtyCreateResult> {
-    this.creates.push(options)
-    if (options.persistKey) this.live.add(options.persistKey)
-    return { sessionId: `pty-${options.persistKey}`, fresh: true, persistent: true }
-  }
-
-  async paneCommand(): Promise<string | null> { return 'bash' }
-
-  async sessionExists(persistKey: string): Promise<boolean> {
-    return this.live.has(persistKey)
-  }
-
-  async sendText(nodeId: string, text: string): Promise<boolean> {
-    this.sends.push({ nodeId, text })
-    return true
-  }
-
-  async destroySession(
-    clientId: number | null,
-    nodeId: string,
-    opts?: { everySocket?: boolean }
-  ): Promise<void> {
-    const wasLive = this.live.delete(nodeId)
-    this.destroys.push({ clientId, nodeId, everySocket: opts?.everySocket, wasLive })
-    this.alreadyDead.add(nodeId)
-  }
-
-  killOutOfBand(nodeId: string): void {
-    this.live.delete(nodeId)
-    this.alreadyDead.add(nodeId)
-  }
-}
 
 const terminal = (
   id: string,
@@ -177,6 +99,8 @@ describe('HeadlessNodeFactory', () => {
   let outcomes: Record<string, StationOutcomeRecord>
   /** Stations with unfinished handed-over work (core/station-handover.ts), as the tracker answers. */
   let handedOver: Set<string>
+  /** The deps the factory below was built with, so a test can rebuild it under another control scope. */
+  let factoryDeps: ConstructorParameters<typeof HeadlessNodeFactory>[0]
 
   /** Per-test settings on top of the defaults; reset before each test. */
   let settingsOverride: Partial<Settings> = {}
@@ -234,7 +158,7 @@ describe('HeadlessNodeFactory', () => {
       ]
     }
     await store.save(initial)
-    factory = new HeadlessNodeFactory({
+    factoryDeps = {
       workspaceStore: store,
       ptyManager: pty,
       settings,
@@ -267,13 +191,133 @@ describe('HeadlessNodeFactory', () => {
         else if (m.op === 'remove') removed.push(m.id)
       },
       publishProject: (project) => publishedProjects.push(structuredClone(project))
-    })
+    }
+    factory = new HeadlessNodeFactory(factoryDeps)
   })
 
   afterEach(() => {
     factory.stop()
     resetPlatformForTests()
     fs.rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  describe('host-only original conversation resume', () => {
+    const originalId = 'c231df2f-74df-43a0-807d-d389a36d16ba'
+    const target = async () => {
+      const opened = await factory.openAgent('term-source', { agent: 'claude' }, true)
+      expect(opened.ok).toBe(true)
+      return (opened.result as { id: string }).id
+    }
+
+    it('persists and resumes the exact original with the target account, cwd and model', async () => {
+      const targetId = await target(); const cwd = path.join(projectDir, 'subdir'); fs.mkdirSync(cwd)
+      fs.mkdirSync(path.join(dataDir, 'claude-accounts/branch-account'), { recursive: true })
+      settingsOverride.claudeAccounts = [{ id: 'branch-account', label: 'Branch', createdAt: 1 }]
+      await store.updateWorkspace((workspace) => {
+        Object.assign(workspace.projects[0].nodes.find((node) => node.id === targetId)!,
+          { accountId: 'branch-account', cwd, agentModel: 'model-x', title: 'Target' })
+        return workspace
+      })
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok, JSON.stringify(reply)).toBe(true)
+      const id = (reply.result as { id: string }).id
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === id)).toMatchObject({
+        agentId: 'claude', accountId: 'branch-account', agentSessionId: originalId, cwd, agentModel: 'model-x', title: 'Target (original)' })
+      expect(pty.creates.find((created) => created.persistKey === id)?.accountId).toBe('branch-account')
+      expect(pty.sends.find((send) => send.nodeId === id)?.text).toContain(`--resume ${originalId}`)
+      expect(pty.sends.find((send) => send.nodeId === id)?.text).toContain("--model 'model-x'")
+      expect(factory.ownsSpawn('term-source', id)).toBe(true)
+    })
+
+    it('rechecks target presence in the save queue after asynchronous capability work', async () => {
+      const targetId = await target(); const count = pty.creates.length; const caps = await factoryDeps.cliCaps()
+      vi.spyOn(factoryDeps, 'cliCaps').mockImplementationOnce(async () => {
+        await store.updateWorkspace((workspace) => {
+          workspace.projects[0].nodes = workspace.projects[0].nodes.filter((node) => node.id !== targetId)
+          return workspace
+        })
+        return caps
+      })
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok).toBe(false); expect(pty.creates).toHaveLength(count)
+      expect((await store.load()).projects[0].nodes.some((node) => node.title.endsWith('(original)'))).toBe(false)
+    })
+
+    it('retains a durable launch without typing when its owner leaves during PTY creation', async () => {
+      const targetId = await target(); let current = true; const sent = pty.sends.length
+      pty.beforeCreate = async () => { current = false }
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => current)
+      expect(reply.ok).toBe(false)
+      const id = (reply.result as { id: string }).id
+      expect(pty.sends).toHaveLength(sent)
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === id)?.pendingLaunch).toMatchObject({
+        command: expect.stringContaining(`--resume ${originalId}`), executor: 'server', manualOnly: true })
+    })
+
+    it('owns the new node before publishing it and through the delivery outcome publication', async () => {
+      const targetId = await target(); const observed: Array<Promise<string>> = []
+      const publish = factoryDeps.publishProject
+      factoryDeps.publishProject = (project) => {
+        publish?.(project)
+        const copy = project.nodes.find((node) => node.title.endsWith('(original)'))
+        if (copy) observed.push(pty.runNodeAction(copy.id, 'write', { current: () => true }, () => 'acquired')
+          .catch((error: Error) => error.message))
+      }
+      factory = new HeadlessNodeFactory(factoryDeps)
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok, JSON.stringify(reply)).toBe(true)
+      expect(observed.length).toBeGreaterThanOrEqual(2)
+      expect(await Promise.all(observed)).toEqual(observed.map(() => 'node-execution-busy'))
+    })
+
+    it('refuses changed copy routing during creation and retains its recovery node', async () => {
+      const targetId = await target(); const sent = pty.sends.length
+      pty.beforeCreate = async (options) => {
+        await store.updateWorkspace((workspace) => {
+          workspace.projects[0].nodes.find((node) => node.id === options.persistKey)!.cwd = dataDir
+          return workspace
+        })
+      }
+      const reply = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(reply.ok).toBe(false); expect(pty.sends).toHaveLength(sent)
+      expect((await store.load()).projects[0].nodes.find((node) => node.id === (reply.result as { id: string }).id)?.pendingLaunch)
+        .toMatchObject({ manualOnly: true })
+    })
+
+    it('refuses an already represented original conversation and an unavailable target account', async () => {
+      const targetId = await target(); const created = pty.creates.length
+      await store.updateWorkspace((workspace) => {
+        workspace.projects[0].nodes[0].agentSessionId = originalId
+        return workspace
+      })
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('already has another node') })
+      await store.updateWorkspace((workspace) => {
+        delete workspace.projects[0].nodes[0].agentSessionId
+        workspace.projects[0].nodes.find((node) => node.id === targetId)!.accountId = 'missing'
+        return workspace
+      })
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('account is unavailable') })
+      expect(pty.creates).toHaveLength(created)
+    })
+
+    it('requires host trust before resuming through the original project wrapper', async () => {
+      const targetId = await target()
+      const info = { resolved: resolveProjectSettings(undefined, {
+        agents: { defaultAgentId: 'claude', launchCmd: 'project-claude --safe' } }),
+      trusted: { agents: false, shell: false } }
+      factoryDeps.projectLaunchInfo = async () => info
+      const request = factoryDeps.requestAgentsTrust = vi.fn()
+      expect(await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)).toMatchObject({ ok: false,
+        error: expect.stringContaining('requires owner trust') })
+      expect(request).toHaveBeenCalledWith('project-1')
+      info.trusted.agents = true
+      const resumed = await factory.resumeClaudeOriginal('term-source', targetId, originalId, () => true)
+      expect(resumed.ok, JSON.stringify(resumed)).toBe(true)
+      expect(pty.sends.find((send) => send.nodeId === (resumed.result as { id: string }).id)?.text)
+        .toContain(`project-claude --safe --resume ${originalId}`)
+    })
   })
 
   it('creates a terminal PTY, persists both workspace index and project file, and publishes it', async () => {
@@ -406,6 +450,137 @@ describe('HeadlessNodeFactory', () => {
 
     const reloaded = await store.load({ sideline: false })
     expect(reloaded.projects).toHaveLength(1)
+  })
+
+  it('list answers the desktop rows for the caller and the nodes it spawned, nothing else', async () => {
+    states['term-source'] = 'working'
+    states['term-upstream'] = 'done'
+    states['term-owned'] = 'blocked'
+    outcomes['term-upstream'] = { nodeId: 'term-upstream', outcome: 'succeeded', note: 'shipped', at: 1 }
+    const reply = await factory.list('term-source', {})
+    expect(reply.ok).toBe(true)
+    const rows = reply.result as Array<{ id: string; launchState?: string; outcome?: string }>
+    expect(rows.map((r) => r.id)).toEqual(['term-source', 'term-upstream', 'term-owned'])
+    expect(rows.find((r) => r.id === 'term-upstream')).toMatchObject({ launchState: 'idle', outcome: 'succeeded' })
+    expect(reply.message).toContain('term-source [terminal] Director — WORKING')
+    expect(reply.message).toContain('term-owned [terminal] Owned — NEEDS YOU')
+    expect(reply.message).toContain('REPORTED SUCCESS ("shipped")')
+
+    // A caller that spawned nothing sees only its own row; geometry rides the text form on request.
+    const own = await factory.list('term-upstream', { geometry: 'on' })
+    expect((own.result as Array<{ id: string }>).map((r) => r.id)).toEqual(['term-upstream'])
+    expect(own.message).toMatch(/term-upstream \[terminal\] Upstream @ -?\d+,-?\d+ \d+×\d+/)
+  })
+
+  it('list refuses another project, an unknown flag and a caller that is on no canvas', async () => {
+    await expect(factory.list('term-source', { project: 'other' })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('list-project-refused')
+    })
+    await expect(factory.list('term-source', { nodes: 'x' })).resolves.toMatchObject({
+      ok: false,
+      error: expect.stringContaining('--nodes is not supported')
+    })
+    await expect(factory.list('ghost', {})).resolves.toMatchObject({ ok: false })
+  })
+
+  describe('control scope "project" (control-scope.ts)', () => {
+    // term-upstream and term-owned were spawned by term-source; term-upstream spawned nothing.
+    const useProjectScope = (): void => {
+      factory.stop() // clears the creator ledger: put the fixture's two records back
+      ownership.record('term-upstream', { sourceNodeId: 'term-source', projectId: 'project-1' })
+      ownership.record('term-owned', { sourceNodeId: 'term-source', projectId: 'project-1' })
+      factory = new HeadlessNodeFactory({ ...factoryDeps, controlScope: 'project' })
+    }
+
+    it('lists every node of the caller project, whoever opened it', async () => {
+      useProjectScope()
+      const reply = await factory.list('term-upstream', {})
+      expect((reply.result as Array<{ id: string }>).map((r) => r.id)).toEqual([
+        'term-source',
+        'term-upstream',
+        'term-owned'
+      ])
+    })
+
+    it('lets a caller rename and color nodes it did not open, in its own project', async () => {
+      await expect(factory.rename('term-upstream', { node: 'term-source', title: 'X' })).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('rename-not-owner') })
+      useProjectScope()
+      const r = await factory.rename('term-upstream', { node: 'term-source', title: 'Lead' })
+      expect(r, JSON.stringify(r)).toMatchObject({ ok: true })
+      const c = await factory.color('term-upstream', { node: 'term-owned', color: 'blue' })
+      expect(c, JSON.stringify(c)).toMatchObject({ ok: true })
+      const nodes = (await store.load({ sideline: false })).projects[0].nodes
+      expect(nodes.find((n) => n.id === 'term-source')?.title).toBe('Lead')
+    })
+
+    it('closes a node the caller did not open; never itself', async () => {
+      useProjectScope()
+      await expect(factory.close('term-upstream', { node: 'term-upstream' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('close-self-refused') })
+      await expect(factory.close('term-upstream', { node: 'term-owned' }, true)).resolves
+        .toMatchObject({ ok: true })
+      expect(pty.destroys.map((d) => d.nodeId)).toEqual(['term-owned'])
+      const nodes = (await store.load({ sideline: false })).projects[0].nodes
+      expect(nodes.some((n) => n.id === 'term-owned')).toBe(false)
+    })
+
+    it('refuses a busy node the caller did not open unless --force yes', async () => {
+      useProjectScope()
+      for (const state of ['working', 'waiting', 'blocked'] as const) {
+        states['term-source'] = state
+        await expect(factory.close('term-upstream', { node: 'term-source' }, true)).resolves
+          .toMatchObject({ ok: false, error: expect.stringContaining('close-busy') })
+      }
+      expect(pty.destroys).toEqual([])
+      await expect(factory.close('term-upstream', { node: 'term-source', force: 'maybe' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('--force takes yes or no') })
+      await expect(factory.close('term-upstream', { node: 'term-source', force: 'yes' }, true)).resolves
+        .toMatchObject({ ok: true })
+      expect(pty.destroys.map((d) => d.nodeId)).toEqual(['term-source'])
+    })
+
+    it('a busy node the caller DID open closes as before, without --force', async () => {
+      useProjectScope()
+      states['term-owned'] = 'working'
+      const r = await factory.close('term-source', { node: 'term-owned' }, true)
+      expect(r, JSON.stringify(r)).toMatchObject({ ok: true })
+    })
+
+    it('keeps --force an unknown flag under the default creator scope', async () => {
+      await expect(factory.close('term-source', { node: 'term-owned', force: 'yes' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('--force is not supported') })
+    })
+
+    it('refuses a node id that another project also holds (its session belongs to both)', async () => {
+      const ws = await store.load({ sideline: false })
+      const otherDir = path.join(dataDir, 'other')
+      fs.mkdirSync(otherDir, { recursive: true })
+      ws.projects.push({
+        ...ws.projects[0],
+        id: 'project-2',
+        name: 'Other',
+        cwd: otherDir,
+        nodes: [terminal('term-source', 'Copy')]
+      })
+      await store.save(ws)
+      useProjectScope()
+      // term-source is now in two projects: neither renaming nor closing it is in scope.
+      await expect(factory.close('term-upstream', { node: 'term-source', force: 'yes' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('close-not-owner') })
+      expect(pty.destroys).toEqual([])
+    })
+
+    it('runs a node it did not open (the ownership gate passes; nothing is queued here)', async () => {
+      await expect(factory.run('term-upstream', { node: 'term-source' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('run-not-owner') })
+      useProjectScope()
+      await expect(factory.run('term-upstream', { node: 'term-source' }, true)).resolves
+        .toMatchObject({ ok: false, error: expect.stringContaining('run-nothing-queued') })
+      await expect(factory.run('term-upstream', { node: 'term-source', project: 'elsewhere' }, true)).resolves
+        .toMatchObject({ ok: false, error: 'run: no node with id term-source' })
+    })
   })
 
   it('lets a verified caller close its own spawn, killing the pane before persisted edge removal and fanout', async () => {
@@ -1165,7 +1340,7 @@ describe('HeadlessNodeFactory', () => {
   })
 
   it('saves manual recovery intent before sending, including a successful send whose clearing save fails', async () => {
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const typeInto = pty.writeHeadless.bind(pty)
     // The headless write is synchronous, so the durable read starts at the first typed byte and is
     // awaited afterwards. Nothing reaches the disk in between: the next save is the one failed here.
@@ -1701,7 +1876,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --run-now with --after on open-terminal before anything is created, saved or sent (#925)', async () => {
     states['term-upstream'] = 'working'
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const reply = await factory.openTerminal(
       'term-source',
       { cwd: projectDir, cmd: 'printf hi', after: 'term-upstream', 'run-now': '' },
@@ -1717,7 +1892,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --run-now with --after on open-agent in the same words (#925)', async () => {
     states['term-upstream'] = 'working'
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const reply = await factory.openAgent(
       'term-source',
       { agent: 'claude', prompt: 'brief', after: 'term-upstream', 'run-now': '1' },
@@ -1731,7 +1906,7 @@ describe('HeadlessNodeFactory', () => {
 
   it('refuses --after-pr by name: the Server Edition keeps no pull request watch', async () => {
     // A silent drop would open the node and start it at once — before the PR the caller named.
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     for (const reply of [
       await factory.openAgent('term-source', { agent: 'claude', prompt: 'brief', 'after-pr': '7:merged' }, true),
       await factory.openTerminal('term-source', { cwd: projectDir, cmd: 'make', 'after-pr': '7:merged' }, true)
@@ -2092,31 +2267,6 @@ describe('HeadlessNodeFactory — casts every content change before it saves', (
   })
 })
 
-describe('HeadlessNodeFactory — one load and one save, both through the cast helper (source)', () => {
-  const src = fs.readFileSync(path.join(__dirname, 'headless-node-factory.ts'), 'utf8').replace(/\r\n/g, '\n')
-  it('every verb loads through loadForEdit and saves through castAndSave', () => {
-    // A second `workspaceStore.save(` is a save site that casts nothing: on a governed project the
-    // authority's overlay would drop whatever it changed.
-    expect(src.match(/workspaceStore\.save\(/g)?.length).toBe(1)
-    expect(src.match(/workspaceStore\.load\(/g)?.length).toBe(1)
-    const saveAt = src.indexOf('workspaceStore.save(')
-    const helper = src.lastIndexOf('private async castAndSave(', saveAt)
-    expect(helper).toBeGreaterThan(0)
-    expect(src.slice(helper, saveAt)).toContain('diffContent(')
-    // The one read is the read-only view; every edit copies it (loadForEdit).
-    const readAt = src.indexOf('workspaceStore.load(')
-    expect(src.lastIndexOf('private readWorkspace(', readAt)).toBeGreaterThan(0)
-  })
-
-  it('browsers are sent the PERSISTED project, re-read after the save, never a verb\'s copy', () => {
-    const calls = [...src.matchAll(/this\.deps\.publishProject/g)].map((m) => m.index ?? -1)
-    const helper = src.indexOf('private async publishPersisted(')
-    const end = src.indexOf('\n  }\n', helper)
-    expect(helper).toBeGreaterThan(0)
-    for (const at of calls) expect(at > helper && at < end, `publishProject outside publishPersisted at ${at}`).toBe(true)
-    expect(src.slice(helper, end)).toContain('await this.readWorkspace()')
-  })
-})
 
 // A launch can take seconds. A verb's SECOND save (after it) must never write back the copy it
 // loaded before the launch: that copy predates whatever a teammate did meanwhile, and a whole-node
@@ -2356,7 +2506,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
   it('once canvas control stopped, a verb still mid-launch neither casts nor saves (and says so)', async () => {
     const factory = new HeadlessNodeFactory(deps())
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     let castAtStop = -1
     let savesAtStop = -1
     const create = pty.createHeadless.bind(pty)
@@ -2376,7 +2526,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
 
   it('a verb that stops before its FIRST save writes nothing either', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     let factory: HeadlessNodeFactory | null = null
     factory = new HeadlessNodeFactory({
       ...deps(),
@@ -2643,7 +2793,7 @@ describe('HeadlessNodeFactory — a second phase re-reads before it writes (fix 
 
   it('refreshArmed with nothing ready deep-copies nothing and saves nothing', async () => {
     const factory = new HeadlessNodeFactory(deps())
-    const save = vi.spyOn(store, 'save')
+    const save = vi.spyOn(store, 'updateWorkspace')
     const clone = vi.spyOn(globalThis, 'structuredClone')
     // Armed, but its dependency is not done: nothing changes.
     await factory.refreshArmed({ nodeId: 'term-dep', state: 'working' })

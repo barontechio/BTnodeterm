@@ -102,6 +102,21 @@ describe('setupRunKey', () => {
 })
 
 describe('ProjectSetupService — local-sourced scripts', () => {
+  it('waits for host preparation and reports a failed script as incomplete', async () => {
+    for (const exitCode of [0, 1]) {
+      let finish!: (result: { exitCode: number }) => void
+      const svc = new ProjectSetupService({ trust: new ProjectTrustStore(),
+        readSettings: async () => snapshot(null, { setup: { setupScript: 'build' } }),
+        runLocal: () => new Promise((resolve) => { finish = resolve }) })
+      let settled = false
+      const waiting = svc.runAndWait(target(), 'setup').then((ok) => { settled = true; return ok })
+      await vi.waitFor(() => expect(finish).toBeDefined())
+      expect(settled).toBe(false)
+      finish({ exitCode })
+      expect(await waiting).toBe(exitCode === 0)
+    }
+  })
+
   it('mints a FRESH runId per launch, while the runKey (the single-flight key) stays deterministic', async () => {
     const { runner } = recorder()
     const svc = new ProjectSetupService({

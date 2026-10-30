@@ -11,6 +11,9 @@ export interface GroupWorktree {
   createdByApp: boolean
 }
 
+/** Empty worktree frame, large enough for one terminal and its margins. */
+export const WORKTREE_GROUP_SIZE = { width: 760, height: 540 }
+
 /** One entry's outcome from materializing a project's `sharedPaths` into a worktree
  *  (core/worktree-shared-paths.ts). Lives here in `shared` so the renderer's `WorktreeApi` type can
  *  name it without importing core; core's module re-exports it for its own callers/tests. */

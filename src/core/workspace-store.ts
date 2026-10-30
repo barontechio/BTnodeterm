@@ -33,7 +33,7 @@ import {
 } from '../shared/project-settings'
 import { readProjectCapabilities, type ProjectCapability } from '../shared/project-capabilities'
 import type { CapabilityAckMap } from './project-capability-consent'
-import { carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
+import { applyLocalNodeExec, carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
 import { collisionSeed, derivedProjectId, freshProjectId } from '../shared/project-id'
 import {
   pruneLayoutViewports,
@@ -49,6 +49,7 @@ import { clampProjectName, folderName } from '../shared/project-name'
 import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
 import { codedError } from './relay/admin-error'
 import { createLaunchClaimLedger } from './launch-claim-ledger'
+import { mergeWorkspaceSave, sameWorkspaceSave } from '../shared/workspace-save-merge'
 
 /** What `WorkspaceStore.adoptFolder` did: the project now holding the folder, and whether this call
  *  added it (`created: false` = an existing project already held the same real directory). */
@@ -65,6 +66,8 @@ export interface AdoptFolderResult {
  * loads still carry everything else, so both are passed through it.
  */
 export interface ContentAuthorityHooks {
+  /** Optional for older adapters; the authority owns these projects' content operations. */
+  governs?(projectId: string): boolean
   /** Rewrite governed projects' content fields just before a save is split and written. */
   overlaySave(ws: Workspace): Promise<Workspace>
   /** Rewrite governed projects' content fields in a load result. */
@@ -142,7 +145,7 @@ const contentHash = (content: string): string => createHash('sha256').update(con
  * migrated entry answers with its own `localExec`; an entry still owed the one-time migration also
  * hoists what its file carried from before the trust boundary (@shared/node-exec).
  */
-function localExecOverlay(e: IndexEntryV3, f: ProjectFileV1): LocalNodeExecMap | undefined {
+function localExecOverlay(e: IndexEntryV3, f: Pick<ProjectFileV1, 'nodes'>): LocalNodeExecMap | undefined {
   if (e.execMigrated) return e.localExec
   const hoisted = hoistLegacyNodeExec(f.nodes)
   return hoisted ? { ...hoisted, ...e.localExec } : e.localExec
@@ -251,6 +254,15 @@ export async function writeAtomic(filePath: string, content: string): Promise<vo
   await writeFileAtomic(filePath, content)
 }
 
+/** Host-local execution exclusion. No browser payload can supply or disable this policy. */
+export interface WorkspaceExecutionAdmission {
+  active(): boolean
+  assertWorkspace(workspace: Workspace): void
+  assertProject(project: Project): void
+  assertStorageChange(projectId: string): void
+  assertCurrent(): void
+}
+
 /**
  * Whether `real` (already a real path) is the filesystem root, the real home directory, or a folder
  * that contains it. A shared folder is readable by every teammate, Viewers included, and a home
@@ -357,6 +369,17 @@ export class WorkspaceStore {
   private index: WorkspaceIndexV3 | null = null
   /** Optional hook fired after every load()/save() — the watcher re-syncs its watch set (Task 5). */
   onPersist?: () => void
+  private executionAdmission: WorkspaceExecutionAdmission | null = null
+  setExecutionAdmission(admission: WorkspaceExecutionAdmission | null): void { this.executionAdmission = admission }
+
+  private admitProjectFile(entry: IndexEntryV3, candidate: ProjectFileV1 | string): void {
+    if (!this.executionAdmission?.active()) return
+    const file = typeof candidate === 'string' ? JSON.parse(candidate) as ProjectFileV1 : candidate
+    const project = fileToProject(file, { id: entry.id, cwd: entry.cwd, ssh: entry.ssh,
+      closed: entry.closed, handedOffTo: entry.handedOffTo,
+      localExec: localExecOverlay(entry, file) })
+    this.executionAdmission.assertProject(isFolderDataRef(entry) ? { ...project, storeInAppData: true } : project)
+  }
   /**
    * Some load in THIS run found no readable workspace.json — missing (deleted, a first run, a crash
    * between the corrupt-file set-aside and the next write), unreadable, unparsable, or parsable but no
@@ -413,20 +436,22 @@ export class WorkspaceStore {
 
   registerIpc(): void {
     platform().handleWithSender(IPC.workspaceLoad, async (senderId: number) => {
-      const workspace = await this.load()
-      // The renderer now holds these, so from here on its saves speak for them. Only the ids this
-      // load actually returned: an adoption that landed while the load was in flight stays pending.
-      // And only for a client that CAN save: a relay peer or a hosted-team guest reaches this same
-      // handler but is refused `workspace:save`, so its load proves nothing about the owner's tabs,
-      // and clearing on it let the first teammate to join hand a stale owner tab the right to drop
-      // the shared project. A platform that cannot tell (a test double) counts every caller.
-      if (platform().isOwnerClient?.(senderId) !== false) {
-        for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
-      }
-      return workspace
+      const run = this.saveChain.then(async () => {
+        const workspace = await this.load()
+        // Only a client's returned projects become its baseline. A relay peer cannot save,
+        // so its load must not give a stale owner tab permission to drop an adopted project.
+        if (platform().isOwnerClient?.(senderId) !== false) {
+          for (const p of workspace.projects) this.pendingAdoptions.delete(p.id)
+          this.clientBaselines.set(senderId, { workspace: structuredClone(workspace) })
+        }
+        return workspace
+      })
+      this.saveChain = run.catch(() => {})
+      return run
     })
-    platform().handle(IPC.workspaceSave, (workspace: Workspace, opts?: WorkspaceSaveOptions) =>
-      this.saveFromRenderer(workspace, opts?.localOnly === true))
+    platform().handleWithSender(IPC.workspaceSave,
+      (senderId: number, workspace: Workspace, opts?: WorkspaceSaveOptions) =>
+        this.saveFromRenderer(senderId, workspace, opts?.localOnly === true))
     platform().handleWithSender(IPC.workspaceClaimLaunch,
       (senderId: number, nodeId: unknown, command: unknown, manual: unknown) =>
         this.launchClaims.claim(nodeId as string, command as string, manual === true, senderId))
@@ -1105,6 +1130,7 @@ export class WorkspaceStore {
   /** The index write itself, WITHOUT queueing — for callers that are already running on
    *  `saveChain` (queueing from inside a chain step would wait on the step itself). */
   private async writeIndexNow(): Promise<void> {
+    this.executionAdmission?.assertCurrent()
     const index = this.index
     if (!index) return
     this.applySettingsToIndex(index)
@@ -1228,6 +1254,55 @@ export class WorkspaceStore {
    *  used to interleave their file writes and land their indexes out of call order — the "both
    *  projects went blank after tab switching" wipe. */
   private saveChain: Promise<unknown> = Promise.resolve()
+  /** Last snapshot each owner loaded or submitted. Not shared and discarded on disconnect. */
+  private clientBaselines = new Map<number, { workspace: Workspace }>()
+
+  forgetClient(clientId: number): void {
+    this.clientBaselines.delete(clientId)
+  }
+
+  /** Merge only this writer's changes inside the existing FIFO; never queue save() from here. */
+  saveChanges(base: Workspace, requested: Workspace,
+    beforeSave?: (current: Workspace, next: Workspace) => void,
+    opts: WorkspaceSaveOptions = {}): Promise<Workspace> {
+    const original = structuredClone(base)
+    const wanted = structuredClone(requested)
+    // Core commands publish their rebased diff before saving. Unlike an owner tab's save,
+    // their content has not already travelled through the reflector and must be merged here.
+    return this.updateWorkspace((current) => mergeWorkspaceSave(original, wanted, current), beforeSave, opts)
+      .then((result) => result.workspace)
+  }
+
+  /** A short synchronous edit inside the same disk queue as browser saves and authority flushes. */
+  updateWorkspace(edit: (fresh: Workspace) => Workspace,
+    beforeSave?: (current: Workspace, next: Workspace) => void,
+    opts: WorkspaceSaveOptions = {}): Promise<{ saved: boolean; workspace: Workspace }> {
+    const run = this.saveChain.then(() => this.updateWorkspaceNow(edit, beforeSave, opts))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async updateWorkspaceNow(edit: (fresh: Workspace) => Workspace,
+    beforeSave: ((current: Workspace, next: Workspace) => void) | undefined,
+    opts: WorkspaceSaveOptions): Promise<{ saved: boolean; workspace: Workspace }> {
+    const current = await this.load({ sideline: false })
+    const next = edit(structuredClone(current))
+    const changed = new Set(next.projects.filter((p) => {
+      const old = current.projects.find((x) => x.id === p.id)
+      return !old || !sameWorkspaceSave({ version: 2, activeProjectId: '', projects: [old] },
+        { version: 2, activeProjectId: '', projects: [p] })
+    }).map((p) => p.id))
+    for (const p of current.projects) {
+      if (p.unavailable && changed.has(p.id)) {
+        throw new Error(`workspace-save-unavailable: ${p.id}; resolve the project file before saving`)
+      }
+    }
+    this.executionAdmission?.assertWorkspace(next)
+    beforeSave?.(current, next)
+    if (sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
+    await this.saveNow(next, opts.localOnly === true, changed)
+    return { saved: true, workspace: next }
+  }
 
   /**
    * Resolves once every write queued on `saveChain` so far (saves, content writes, reconciles) has
@@ -1259,9 +1334,22 @@ export class WorkspaceStore {
    * pending-adoption rule (see `pendingAdoptions`). The merge runs inside the chain step, never
    * before the enqueue: an await ahead of it would let a later save overtake this one.
    */
-  private saveFromRenderer(workspace: Workspace, localOnly: boolean): Promise<void> {
-    const run = this.saveChain.then(async () =>
-      this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(workspace) : workspace, localOnly))
+  private saveFromRenderer(senderId: number, workspace: Workspace, localOnly: boolean): Promise<void> {
+    const submitted = structuredClone(workspace)
+    const ownerLoad = this.clientBaselines.get(senderId)
+    const run = this.saveChain.then(async () => {
+      if (this.clientBaselines.get(senderId) !== ownerLoad) {
+        throw new Error('workspace-save-stale-client: the owner loaded again or disconnected; load before retrying')
+      }
+      if (ownerLoad) {
+        await this.updateWorkspaceNow((current) => mergeWorkspaceSave(ownerLoad.workspace, submitted, current,
+          (id) => this.contentAuthority?.governs?.(id) === true), undefined, { localOnly })
+        // Disconnect and a newer load cannot have their baseline recreated by a late save.
+        if (this.clientBaselines.get(senderId) === ownerLoad) ownerLoad.workspace = submitted
+      } else {
+        await this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(submitted) : submitted, localOnly)
+      }
+    })
     this.saveChain = run.catch(() => {})
     return run
   }
@@ -1379,6 +1467,7 @@ export class WorkspaceStore {
     const read = await this.readProjectFile(cwd, false)
     if (!read) return false
     const candidate = projectToFile(withContent(fileToProject(read.file, { id: e.id, cwd }), content), 0, savedAt)
+    this.admitProjectFile(e, candidate)
     // Unchanged: nothing to write, and no rev to burn.
     if (sameProjectContent(read.file, candidate)) return true
     let known: ProjectFileV1 | null = null
@@ -1419,6 +1508,7 @@ export class WorkspaceStore {
     const cachedById = new Map((Array.isArray(cached.nodes) ? cached.nodes : []).map((n) => [n.id, n]))
     const nodes = stripSharedNodeExec(content.nodes).map((n) => carryLocalNodeExec(cachedById.get(n.id), n))
     const updated = withContent(cached, { ...content, nodes })
+    this.executionAdmission?.assertProject(isFolderDataRef(e) ? { ...updated, cwd: e.cwd, storeInAppData: true } : updated)
     const viaFile = e.dataFile === true && isInlineProjectFileId(e.id)
     if (viaFile) {
       const landed = await this.writeDataFile(e.id, projectToFile(updated, 0, savedAt))
@@ -1439,7 +1529,8 @@ export class WorkspaceStore {
     return true
   }
 
-  private async saveNow(workspace: Workspace, localOnly = false): Promise<void> {
+  private async saveNow(workspace: Workspace, localOnly = false,
+    strictProjectWrites: ReadonlySet<string> = new Set()): Promise<void> {
     if (!workspace.projects.length && !this.index) {
       // A store that never read the index may not replace a populated one with "no projects":
       // that is the boot-save wipe — load() failed transiently, the renderer hydrated zero
@@ -1459,6 +1550,7 @@ export class WorkspaceStore {
     // (the project file, the data file and the index are all written after this line). Never catch
     // it and write the workspace as handed: that is the stale copy the overlay exists to overrule.
     if (this.contentAuthority) workspace = await this.contentAuthority.overlaySave(workspace)
+    this.executionAdmission?.assertWorkspace(workspace)
     const savedAt = new Date().toISOString()
     const previousIndex = this.index
     const { index, files, dataFiles } = splitWorkspace(workspace, (id) => this.revs.get(id) ?? 0, savedAt)
@@ -1570,7 +1662,10 @@ export class WorkspaceStore {
         this.lastWritten.set(file, content)
         this.revs.set(projectId, next.rev)
         folderFilesWritten.add(file)
-      } catch { /* folder gone (unmounted disk): the entry simply stays stale → unavailable next load */ }
+      } catch (error) {
+        if (strictProjectWrites.has(projectId)) throw error
+        // Legacy saves keep their folder-gone behavior; acknowledged deltas must report failure.
+      }
     }
 
     // A folder project moving its canvas from app data INTO its folder (issue #1145) whose folder
@@ -1621,7 +1716,12 @@ export class WorkspaceStore {
       this.lastWritten.delete(file)
       this.lastWrittenParsed.delete(file)
     }
-    for (const [projectId, candidate] of dataFiles) await this.writeDataFile(projectId, candidate)
+    for (const [projectId, candidate] of dataFiles) {
+      const result = await this.writeDataFile(projectId, candidate)
+      if (strictProjectWrites.has(projectId) && result !== 'written' && result !== 'unchanged') {
+        throw new Error(`workspace-save-not-written: ${projectId}`)
+      }
+    }
 
     // ssh caches: bump rev on change so a later remote write can win; mirror write in Task 8.
     for (const e of index.entries) {
@@ -1737,6 +1837,8 @@ export class WorkspaceStore {
    * also what makes a half-done migration consistent in both directions.
    */
   private async writeDataFile(projectId: string, candidate: ProjectFileV1): Promise<DataFileWrite> {
+    const admittedEntry = this.index?.entries.find((entry) => entry.id === projectId)
+    if (admittedEntry) this.admitProjectFile(admittedEntry, candidate)
     if (!isInlineProjectFileId(projectId)) return 'skipped'
     const file = inlineFilePath(projectId)
     const prev = this.lastWritten.get(file)
@@ -1881,6 +1983,7 @@ export class WorkspaceStore {
   }
 
   private async releaseFolderFilesNow(projectId: string, removeTracked: boolean): Promise<ReleaseFolderFilesResult> {
+    this.executionAdmission?.assertStorageChange(projectId)
     const e = this.index?.entries.find((x) => x.id === projectId)
     if (!e || !isFolderDataRef(e) || !e.cwd) return { ok: false, reason: 'not-app-data' }
     if (!isInlineProjectFileId(e.id) || !this.lastWritten.has(inlineFilePath(e.id))) {
@@ -1957,7 +2060,14 @@ export class WorkspaceStore {
     return run
   }
 
-  async prepareFolderStorage(projectId: string): Promise<PrepareFolderStorageResult> {
+  prepareFolderStorage(projectId: string): Promise<PrepareFolderStorageResult> {
+    const run = this.saveChain.then(() => this.prepareFolderStorageNow(projectId))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  private async prepareFolderStorageNow(projectId: string): Promise<PrepareFolderStorageResult> {
+    this.executionAdmission?.assertStorageChange(projectId)
     const e = this.index?.entries.find((x) => x.id === projectId)
     if (!e || !isFolderDataRef(e) || !e.cwd) return { ok: false, reason: 'not-app-data' }
     const state = await this.projectFileState(e.cwd)
@@ -2282,6 +2392,17 @@ export class WorkspaceStore {
     return e ? { cwd: e.cwd, ssh: e.ssh, name: e.name } : null
   }
 
+  /** Host-only location binding, using the same storage kind as load(). No disk IO or private
+   *  launch data. Ambiguous entries cannot authorize a host execution reservation. */
+  projectExecutionLocation(projectId: string): Pick<Project, 'id' | 'cwd' | 'ssh' | 'storeInAppData' | 'closed' | 'remote' | 'handedOffTo'> | undefined {
+    const entries = this.index?.entries.filter((entry) => (entry.project?.id ?? entry.id) === projectId) ?? []
+    if (entries.length !== 1) return undefined
+    const entry = entries[0]
+    return structuredClone({ id: projectId, cwd: entry.cwd ?? entry.project?.cwd,
+      ssh: entry.ssh ?? entry.project?.ssh, storeInAppData: isFolderDataRef(entry) || undefined,
+      closed: entry.closed ?? entry.project?.closed, handedOffTo: entry.handedOffTo ?? entry.project?.handedOffTo })
+  }
+
   /** Resolve the shared project together with its machine-local trust identity. The approval id
    *  never enters the shared project object or project.json. */
   async githubProject(projectId: string): Promise<{
@@ -2362,6 +2483,40 @@ export class WorkspaceStore {
     if (!hit) return undefined
     if (hit.ssh) return routeSshProjectNode(hit.node, hit.ssh)
     return hit.root ? resolveNodes([hit.node], hit.root)[0] : hit.node
+  }
+
+  /** Host action snapshot, including this machine's exec overlay. Never a shared/wire record.
+   * Matches load's trust rules without disk IO, migration bookkeeping or first-project ambiguity.
+   */
+  getNodeForHostAction(nodeId: string): CanvasNodeState | undefined {
+    const ids = this.projectIdsForNode(nodeId)
+    if (ids.length !== 1) return undefined
+    const entry = this.index?.entries.find((e) => (e.project?.id ?? e.id) === ids[0])
+    const hit = this.findNode(nodeId)
+    if (!entry || !hit) return undefined
+    return this.hostNodeSnapshots(entry, [hit.node], hit.root, hit.ssh)[0]
+  }
+
+  /** Bulk equivalent for a whole-project conditional check. One cached parse/overlay rather than
+   * a full project scan for each node. The caller still checks global node placement uniqueness. */
+  getProjectNodesForHostAction(projectId: string): CanvasNodeState[] | undefined {
+    const entries = this.index?.entries.filter((entry) => (entry.project?.id ?? entry.id) === projectId) ?? []
+    if (entries.length !== 1) return undefined
+    const entry = entries[0]
+    let nodes = entry.project?.nodes ?? entry.cache?.nodes
+    if (!nodes && folderFileCwd(entry) && entry.cwd) {
+      try { nodes = this.parsedLastWritten(projectFilePath(entry.cwd))?.nodes }
+      catch { return undefined }
+    }
+    if (!Array.isArray(nodes)) return undefined
+    return this.hostNodeSnapshots(entry, nodes,
+      !entry.project && !entry.cache && folderFileCwd(entry) ? entry.cwd : undefined,
+      !entry.project && entry.cache ? entry.ssh : undefined)
+  }
+
+  private hostNodeSnapshots(entry: IndexEntryV3, nodes: CanvasNodeState[], root?: string, ssh?: Project['ssh']): CanvasNodeState[] {
+    const owned = entry.project ? nodes : applyLocalNodeExec(nodes, localExecOverlay(entry, { nodes }))
+    return structuredClone(ssh ? routeSshProjectNodes(owned, ssh) : root ? resolveNodes(owned, root) : owned)
   }
 
   private findNode(
@@ -2764,6 +2919,7 @@ export class WorkspaceStore {
     }
     const updated = appendProjectNode(raw, input, now, accountColor)
     if (updated === null) return false
+    this.admitProjectFile(e, updated)
     try {
       await writeAtomic(file, updated)
     } catch {
@@ -2833,6 +2989,7 @@ export class WorkspaceStore {
       }
       const updated = removeProjectNode(raw, nodeId, now)
       if (updated === null) continue // not in this project (or unreadable file) — keep looking
+      this.admitProjectFile(e, updated)
       try {
         await writeAtomic(file, updated)
       } catch {
@@ -3011,6 +3168,7 @@ export class WorkspaceStore {
       } catch {
         return { file: e.cache, written: false }
       }
+      this.admitProjectFile(e, parsed)
       e.cache = parsed
       this.revs.set(e.id, parsed.rev)
       // Owed BEFORE the push, so a mirror that fails (the host is asleep, the dial flaps) is
@@ -3044,6 +3202,7 @@ export class WorkspaceStore {
     }
     const updated = transform(raw)
     if (updated === null) return current()
+    this.admitProjectFile(e, updated)
     try {
       await writeAtomic(file, updated)
     } catch {
@@ -3190,11 +3349,13 @@ export class WorkspaceStore {
     const rescued = this.rescuableNodes(e.id, e.cache.nodes, remote.nodes)
     if (!rescued.length) return null
     // The merged set must outrank both sides, or the next reconcile could rev-decide it away.
-    e.cache = {
+    const candidate = {
       ...e.cache,
       nodes: [...e.cache.nodes, ...rescued],
       rev: Math.max(e.cache.rev, remote.rev) + 1
     }
+    this.admitProjectFile(e, candidate)
+    e.cache = candidate
     this.revs.set(e.id, e.cache.rev)
     return fileToProject(e.cache, {
       id: e.id, ssh: e.ssh, closed: e.closed, closedAt: e.closedAt, handedOffTo: e.handedOffTo,
@@ -3336,6 +3497,7 @@ export class WorkspaceStore {
           owed = true // the server file lacks the merged-in nodes → owe a mirror write
         }
       }
+      this.admitProjectFile(e, adopted)
       e.cache = adopted
       e.name = adopted.name
       e.color = adopted.color
@@ -3358,7 +3520,9 @@ export class WorkspaceStore {
     if (mergeable && e.cache && remote) {
       const rescued = this.rescuableNodes(e.id, e.cache.nodes, remote.nodes)
       if (rescued.length) {
-        e.cache = { ...e.cache, nodes: [...e.cache.nodes, ...rescued], rev: Math.max(cacheRev, remote.rev) + 1 }
+        const candidate = { ...e.cache, nodes: [...e.cache.nodes, ...rescued], rev: Math.max(cacheRev, remote.rev) + 1 }
+        this.admitProjectFile(e, candidate)
+        e.cache = candidate
         this.revs.set(e.id, e.cache.rev)
         this.unmirrored.add(e.id) // the merged set must land on the server
         merged = fileToProject(e.cache, {

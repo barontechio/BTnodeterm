@@ -1,4 +1,6 @@
 import type { ChatCatalog } from '@shared/chat-catalog'
+import type { HostLaunchReply } from '@shared/headless-launch'
+import { E_NO_HANDLER, E_UNSUPPORTED, E_UNAUTHORIZED } from '@shared/rpc'
 import type { NormalizedAgentEvent } from '../../shared/agents/normalize'
 import { subscribeAgentReplay } from '../../shared/agent-replay-subscription'
 import type { DesktopWallpaper, WallpaperStill } from '../../shared/wallpaper'
@@ -73,6 +75,7 @@ import {
   type RemoteUsageQuery,
   type SessionMemoryQuery,
   type SessionMemoryReport,
+  type GitResult,
   type Settings,
   type SpeechApi,
   type SpeechModelInfo,
@@ -245,14 +248,86 @@ export class RpcClient {
   }
 }
 
-const AI_NAMING_UNAVAILABLE = {
-  ok: false as const,
-  message: 'AI naming is not available in the server edition yet'
-}
+const namingFailed = (e: unknown): GitResult => ({
+  ok: false,
+  message: e instanceof Error ? e.message : String(e)
+})
 
 /** Build the real `pty` / `workspace` / `projectSettings` / `settings` namespaces (plus the
  *  top-level `userDataDir`) over an RpcClient, mirroring the preload's
  *  invoke(→request)/send(→cast) split exactly. */
+export function buildMediaApi(client: RpcClient): Pick<NodeTerminalApi, 'media'> {
+  const tokenOf = (url: string): string => {
+    try { const parsed = new URL(url, 'http://media.local'); return parsed.pathname === '/media' ? parsed.searchParams.get('ref') ?? '' : '' } catch { return '' }
+  }
+  return { media: {
+    allow: (file, scope) => client.request(IPC.mediaAllowScoped, file, scope) as Promise<string>,
+    renew: (url) => client.request(IPC.mediaRenew, tokenOf(url)) as Promise<boolean>,
+    release: (url) => client.request(IPC.mediaRelease, tokenOf(url)) as Promise<void>,
+    allowSsh: async () => ({ ok: false, error: 'Playing media from an SSH host is not available in the browser.' }),
+    writeHtml: (html) => client.request(IPC.mediaWriteHtml, html) as Promise<string>
+  } }
+}
+
+export function buildWebPreviewApi(client: RpcClient): Pick<NodeTerminalApi, 'webPreview'> {
+  const token = (url: string) => {
+    try { const parsed = new URL(url); return parsed.pathname === '/web-preview' ? parsed.searchParams.get('ref') ?? '' : '' } catch { return '' }
+  }
+  return { webPreview: {
+    allow: (scope) => client.request(IPC.webPreviewAllow, scope) as Promise<string>,
+    renew: (url) => client.request(IPC.webPreviewRenew, token(url)) as Promise<boolean>,
+    release: (url) => client.request(IPC.webPreviewRelease, token(url)) as Promise<void>
+  } }
+}
+
+export function buildOwnerConfirmationApi(client: RpcClient): Pick<NodeTerminalApi, 'ownerConfirmation'> {
+  return { ownerConfirmation: {
+    connect: () => client.request(IPC.ownerConfirmationConnect) as Promise<string>,
+    disconnect: (epoch) => client.request(IPC.ownerConfirmationDisconnect, epoch) as Promise<void>,
+    decide: (answer) => client.request(IPC.ownerConfirmationDecide, answer) as Promise<boolean>,
+    onRequest: (listener) => client.subscribe(IPC.ownerConfirmationRequest, listener as Listener),
+    onDismiss: (listener) => client.subscribe(IPC.ownerConfirmationDismiss, listener as Listener)
+  } }
+}
+
+export function buildControlApi(client: RpcClient): Pick<NodeTerminalApi, 'control'> {
+  return {
+    control: {
+      capabilities: () => client.request(IPC.controlCapabilities).catch(() => null) as
+        ReturnType<NonNullable<NodeTerminalApi['control']>['capabilities']>,
+      branchClaude: async (id, at) => {
+        try { return await client.request(IPC.controlBranchClaude, id, at) as import('@shared/conversation-branch').ConversationBranchReply }
+        catch { return { ok: false, error: 'The branch result could not be confirmed. Inspect the terminal and canvas before repeating branch.' } }
+      },
+      runLaunch: async (id, command) => {
+        const uncertain = (error: unknown): HostLaunchReply => ({ ok: false, started: false,
+          error: `Launch could not be confirmed; inspect the session before repeating. ${error instanceof Error ? error.message : String(error)}` })
+        let report: unknown
+        try { report = await client.request(IPC.controlCapabilities) } catch (error) {
+          const code = error && typeof error === 'object' ? (error as { code?: unknown }).code : undefined
+          return code === E_NO_HANDLER || code === E_UNSUPPORTED ? null : uncertain(error)
+        }
+        if (!report || typeof report !== 'object' || (report as { hostLaunches?: unknown }).hostLaunches !== true) return null
+        try { return await client.request(IPC.controlRunLaunch, id, command) as HostLaunchReply } catch (error) { return uncertain(error) }
+      }
+    }
+  }
+}
+
+export function buildTranscriptSearchApi(client: RpcClient): Pick<NodeTerminalApi, 'transcripts'> {
+  return { transcripts: { search: (query, scope) => (scope === undefined ?
+    client.request(IPC.transcriptSearch, query) : client.request(IPC.transcriptSearchScoped, query, scope)) as
+      ReturnType<NodeTerminalApi['transcripts']['search']> } }
+}
+
+export function buildBoardCommentDeliveryApi(client: RpcClient, fallback: NodeTerminalApi['agentMessage']): Pick<NodeTerminalApi, 'agentMessage'> {
+  return { agentMessage: { ...fallback, deliverBoardComment: (request) =>
+    client.request(IPC.agentBoardCommentDeliver, request).catch((error: unknown) => ({
+      ok: false, error: `Board comment delivery could not be confirmed: ${error instanceof Error ? error.message : String(error)}. Inspect the session before sending again.`,
+      result: { kind: 'deliveryUnknown', reason: 'transport' }
+    })) as ReturnType<NodeTerminalApi['agentMessage']['deliverBoardComment']> } }
+}
+
 export function buildRealApi(
   client: RpcClient
 ): Pick<
@@ -279,9 +354,14 @@ export function buildRealApi(
     destroy: (persistKey, opts) =>
       client.cast(IPC.ptyDestroy, persistKey, opts?.everySocket === true),
     recycle: (persistKey) => client.cast(IPC.ptyRecycle, persistKey),
-    // No server handler — degrade gracefully (never reject the boot path).
-    generateName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
-    generateGroupName: () => Promise.resolve(AI_NAMING_UNAVAILABLE),
+    // A dropped socket or a relay refusal answers as a failed naming, never a rejection: the
+    // ✦ callers only read `ok`, and a node's spinner would otherwise never stop.
+    generateName: (persistKey, cwd, accountId) =>
+      (client.request(IPC.ptyGenerateName, persistKey, cwd, accountId) as Promise<GitResult>).catch(
+        namingFailed
+      ),
+    generateGroupName: (memberKeys, cwd) =>
+      (client.request(IPC.ptyGenerateGroupName, memberKeys, cwd) as Promise<GitResult>).catch(namingFailed),
     capture: (persistKey, full) =>
       client.request(IPC.ptyCapture, persistKey, full).catch(() => '') as Promise<string>,
     // Documented degrade, not a stub with a hole in it: SSH PROJECTS are desktop-only (the whole
@@ -340,17 +420,13 @@ export function buildRealApi(
           message: 'The agent launch could not be delivered to the terminal.'
         })
       ),
-    // No server handler — the session-name poll degrades to no adopted name. A PRE-EXISTING gap,
-    // and not any one agent's: `IPC.ptyReadSessionName` has never been registered server-side, so
-    // claude's, grok's and gemini's read legs are equally stubbed here (the write leg works on both
-    // surfaces — it goes through pty.sendText). The routing itself is already in core
-    // (`core/agent-session-name.ts`) and the server already threads gemini's path association into
-    // its session-name SWEEP, which is what keeps the phone's names correct; only this per-node poll
-    // is missing. Fixing it means registering the channel from both shells, exactly as
-    // `core/transcript-ipc.ts` did for the ⌘M transcript channels.
-    readSessionName: () => Promise.resolve(''),
+    // Node identity disambiguates equal conversation ids on different accounts/hosts. Server
+    // refuses remote or stale targets instead of searching its own local transcript tree.
+    readSessionName: (sessionId, accountId, agentId, nodeId) =>
+      client.request(IPC.ptyReadSessionName, sessionId, accountId, agentId, nodeId) as Promise<string | null>,
     onData: (sessionId, listener) =>
       client.subscribe(IPC.ptyData(sessionId), listener as Listener),
+    onInputBlocked: (listener) => client.subscribe(IPC.ptyInputBlocked, listener as Listener),
     onExit: (sessionId, listener) =>
       client.subscribe(IPC.ptyExit(sessionId), listener as Listener),
     // Co-attach channels: ordinary JSON `ev` frames (only pty:data is binary), so the frame
@@ -468,6 +544,14 @@ export function buildRealApi(
   // REAL: registerWorktreeSharedPathsHandlers (core), same construction point as main/server. Wire
   // carries exactly `(projectId, worktreePath)`; the server reads the sharedPaths list itself.
   const worktree: NodeTerminalApi['worktree'] = {
+    recovery: {
+      list: async () => {
+        try { return await client.request(IPC.worktreeRecoveryList) as import('@shared/worktree-recovery').WorktreeRecoveryList }
+        catch (error) { if ([E_NO_HANDLER, E_UNAUTHORIZED].includes((error as { code?: string }).code ?? '')) return null; throw error }
+      },
+      inspect: (id) => client.request(IPC.worktreeRecoveryInspect, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryInspection>,
+      keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>
+    },
     materializeShared: (projectId, worktreePath) =>
       client.request(IPC.worktreeMaterializeShared, projectId, worktreePath) as ReturnType<
         NodeTerminalApi['worktree']['materializeShared']
@@ -476,7 +560,12 @@ export function buildRealApi(
 
   const settings: SettingsApi = {
     load: () => client.request(IPC.settingsLoad) as Promise<Settings>,
-    save: (s: Settings) => client.request(IPC.settingsSave, s) as Promise<void>
+    save: (s: Settings) => client.request(IPC.settingsSave, s) as Promise<void>,
+    patch: (patch) => client.request(IPC.settingsPatch, patch).catch((error) => {
+      if ((error as { code?: string }).code === E_NO_HANDLER) return null
+      throw error
+    }) as Promise<Settings | null>,
+    onChanged: (listener) => client.subscribe(IPC.settingsChanged, listener as Listener)
   }
 
   // REAL: both shells boot the consent lifecycle (core/agent-integrations.ts) and register it.
@@ -903,6 +992,7 @@ export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas
   return {
     canvas: {
       mutate: (projectId, mutation) => client.cast(IPC.canvasMut, projectId, mutation),
+      onMutationRejected: (listener) => client.subscribe(IPC.canvasMutationRejected, listener as Listener),
       onMutation: (listener) => client.subscribe(IPC.canvasMut, listener as Listener)
     }
   }
@@ -1078,8 +1168,8 @@ export function buildTriggersApi(client: RpcClient): Pick<NodeTerminalApi, 'trig
 /**
  * The Server Edition's live links — the REAL bridge, backed by the same core service the desktop
  * registers (src/core/watch-link/service.ts). Its browser tabs are the server's own user (owner
- * clients), so the host-only `watchLink:` prefix does not refuse them. Until that edition has a license
- * layer the service answers create `unsupported` and list `[]` (R43). Kept OUT of every builder a relay
+ * clients), so the host-only `watchLink:` prefix does not refuse them. A disabled license layer
+ * answers create `unsupported` and list `[]`; enabled hosts retain the real entitlement gate. Kept OUT of every builder a relay
  * tab spreads (and out of the scoped-guest / access-policy BUILDERS lists): a relay tab shows another
  * machine's terminals, which are not this browser's to publish — relay-api.ts takes the inert stub.
  * A dropped socket answers create `network`; revoke and revokeAll reject, so the UI can say the stop
@@ -1297,6 +1387,96 @@ export function buildTranscriptApi(
   }
 }
 
+/** Server-owned account lifecycle; never install on a joined relay API. */
+export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 'sshProject' | 'sshFs'> {
+  let promptReady: Promise<string> | null = null
+  return {
+    ssh: {
+      list: () => client.request(IPC.sshList) as ReturnType<NodeTerminalApi['ssh']['list']>,
+      save: (server) => client.request(IPC.sshSave, server) as ReturnType<NodeTerminalApi['ssh']['save']>,
+      remove: (id) => client.request(IPC.sshDelete, id) as ReturnType<NodeTerminalApi['ssh']['remove']>,
+      importCandidates: () => client.request(IPC.sshImport) as ReturnType<NodeTerminalApi['ssh']['importCandidates']>
+    },
+    sshProject: {
+      capabilities: () => client.request(IPC.sshProjectCapabilities).catch((error) => {
+        if ((error as { code?: string }).code === E_NO_HANDLER) return null
+        throw error
+      }) as ReturnType<NonNullable<NodeTerminalApi['sshProject']['capabilities']>>,
+      connectPrompts: () => (promptReady = client.request(IPC.sshPromptConnect) as Promise<string>),
+      disconnectPrompts: (epoch) => client.request(IPC.sshPromptDisconnect, epoch) as Promise<void>,
+      connect: async (project, connection, cwd) => {
+        // Mount effects subscribe/register the prompt UI in the same turn as auto-connect.
+        await Promise.resolve()
+        if (promptReady) await promptReady
+        return client.request(IPC.sshConnectProject, project, connection, cwd) as ReturnType<NodeTerminalApi['sshProject']['connect']>
+      },
+      disconnect: (project) => client.request(IPC.sshDisconnectProject, project) as Promise<void>,
+      killSessions: (project, nodes, options) => client.request(IPC.sshKillSessions, project, nodes, options) as Promise<void>,
+      listDir: (project, directory) => client.request(IPC.sshListDir, project, directory) as ReturnType<NodeTerminalApi['sshProject']['listDir']>,
+      mkdir: (project, directory) => client.request(IPC.sshMkdir, project, directory) as Promise<boolean>,
+      uploadFile: (project, file, name) => client.request(IPC.sshUploadFile, project, file, name) as Promise<string | null>,
+      downloadFile: (project, file, directory) => client.request(IPC.sshDownloadFile, project, file, directory) as ReturnType<NodeTerminalApi['sshProject']['downloadFile']>,
+      onStatus: (listener) => client.subscribe(IPC.sshProjectStatus, listener as Listener),
+      submitPassphrase: (id, value) => client.request(IPC.sshPassphraseSubmit, id, value) as Promise<void>,
+      onPassphraseRequest: (listener) => client.subscribe(IPC.sshPassphraseRequest, listener as Listener),
+      onPassphraseDismiss: (listener) => client.subscribe(IPC.sshPassphraseDismiss, listener as Listener)
+    },
+    sshFs: {
+      list: (project, directory) => client.request(IPC.sshFsList, project, directory) as ReturnType<NodeTerminalApi['sshFs']['list']>,
+      read: (project, file) => client.request(IPC.sshFsRead, project, file) as Promise<string>,
+      readBinary: (project, file) => client.request(IPC.sshFsReadBinary, project, file) as Promise<string>,
+      write: (project, file, text) => client.request(IPC.sshFsWrite, project, file, text) as Promise<boolean>,
+      mkdir: (project, directory) => client.request(IPC.sshFsMkdir, project, directory) as Promise<boolean>,
+      exists: (project, file) => client.request(IPC.sshFsExists, project, file) as Promise<boolean>,
+      quickOpen: (project, directory) => client.request(IPC.sshFsQuickOpen, project, directory) as Promise<string[]>
+    }
+  }
+}
+
+/** Open a browser window during the user's click, then navigate after the host returns checkout. */
+export function buildLicenseApi(client: RpcClient): Pick<NodeTerminalApi, 'license'> {
+  return { license: {
+    capabilities: () => client.request(IPC.licenseCapabilities).catch((error) => {
+      if ((error as { code?: string }).code === E_NO_HANDLER) return null
+      throw error
+    }) as ReturnType<NonNullable<NodeTerminalApi['license']['capabilities']>>,
+    getStatus: () => client.request(IPC.licenseStatus) as ReturnType<NodeTerminalApi['license']['getStatus']>,
+    activate: (key) => client.request(IPC.licenseActivate, key) as ReturnType<NodeTerminalApi['license']['activate']>,
+    deactivate: () => client.request(IPC.licenseDeactivate) as ReturnType<NodeTerminalApi['license']['deactivate']>,
+    detail: () => client.request(IPC.licenseDetail) as ReturnType<NodeTerminalApi['license']['detail']>,
+    releaseOthers: () => client.request(IPC.licenseRelease) as ReturnType<NodeTerminalApi['license']['releaseOthers']>,
+    onChange: (listener) => client.subscribe(IPC.licenseChanged, listener as Listener),
+    upgrade: async (target) => {
+      const popup = window.open('about:blank', '_blank')
+      if (!popup) throw new Error('Allow popups to open license checkout, then try again.')
+      popup.opener = null
+      try {
+        const response = await client.request(IPC.licenseUpgrade, target) as { status: Awaited<ReturnType<NodeTerminalApi['license']['getStatus']>>; checkoutUrl?: string }
+        if (!response.checkoutUrl || new URL(response.checkoutUrl).protocol !== 'https:') throw new Error('The host did not return a secure checkout URL.')
+        popup.location.replace(response.checkoutUrl)
+        return response.status
+      } catch (error) { popup.close(); throw error }
+    }
+  } }
+}
+
+export function buildCodexAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'codexAccounts'> {
+  return { codexAccounts: {
+    add: (ctx) => client.request(IPC.codexAccountsAdd, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['add']>,
+    waitLogin: (id, ctx) => client.request(IPC.codexAccountsWaitLogin, id, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['waitLogin']>,
+    cancelWaitLogin: (id) => client.request(IPC.codexAccountsCancelWait, id) as Promise<void>,
+    identity: (id, ctx) => client.request(IPC.codexAccountsIdentity, id, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['identity']>,
+    systemIdentity: (ctx) => client.request(IPC.codexAccountsSystemIdentity, ctx) as ReturnType<NodeTerminalApi['codexAccounts']['systemIdentity']>,
+    remove: (id, ctx) => client.request(IPC.codexAccountsRemove, id, ctx) as Promise<void>,
+    switchThread: (id, cwd, source, target) => client.request(IPC.codexAccountsSwitchThread, id, cwd, source, target) as ReturnType<NodeTerminalApi['codexAccounts']['switchThread']>,
+    commitSwitch: (token) => client.request(IPC.codexAccountsCommitSwitch, token) as Promise<void>,
+    finishSwitch: (token) => client.request(IPC.codexAccountsFinishSwitch, token) as Promise<void>,
+    rollbackSwitch: (token) => client.request(IPC.codexAccountsRollbackSwitch, token) as Promise<void>,
+    switchThreadRemote: (id, target, hosts, ctx) => client.request(IPC.codexAccountsSwitchThreadRemote, id, target, hosts, ctx) as Promise<void>,
+    transferThreadToSsh: (id, cwd, project, target, source) => client.request(IPC.codexAccountsTransferThreadToSsh, id, cwd, project, target, source) as ReturnType<NodeTerminalApi['codexAccounts']['transferThreadToSsh']>
+  } }
+}
+
 /**
  * Managed CLAUDE accounts over the WS bridge (issue #313). REAL, not a stub: the lifecycle moved
  * into `src/core/claude-accounts-service.ts`, so the server registers the same four channels the
@@ -1307,10 +1487,6 @@ export function buildTranscriptApi(
  * `waitLogin` is a straight passthrough of a poll that runs up to 5 minutes. That is safe because
  * RpcClient has no request timeout: a pending request rejects only when the socket drops, which is
  * exactly the outcome the caller wants (the login row stays pending and offers Retry).
- *
- * The `codexAccounts` namespace stays STUBBED (E_UNSUPPORTED). Its switch verbs authorize the
- * owning window by Electron WebContents id, which has no meaning over a WS connection — porting it
- * needs a connection-identity design, not a builder.
  */
 export function buildClaudeAccountsApi(client: RpcClient): Pick<NodeTerminalApi, 'claudeAccounts'> {
   return {
@@ -1463,6 +1639,12 @@ export async function installWsBridge(): Promise<boolean> {
   const stubApi = buildStubApi()
   const api: NodeTerminalApi = {
     ...stubApi,
+    ...buildControlApi(client),
+    ...buildMediaApi(client),
+    ...buildWebPreviewApi(client),
+    ...buildOwnerConfirmationApi(client),
+    ...buildTranscriptSearchApi(client),
+    ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),
     ...buildFilesApi(client),
     ...buildAgentApi(client),
@@ -1482,6 +1664,9 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildTriggersApi(client),
     ...buildGitHubApi(client),
     ...buildClaudeAccountsApi(client),
+    ...buildCodexAccountsApi(client),
+    ...buildSshApi(client),
+    ...buildLicenseApi(client),
     codex: buildCodexApi(client),
     // `claude` is assembled from two builders: `cliCaps` from the relay-shared one, and the
     // transcript reader from the Server-Edition-only one (which also supplies `chat`).

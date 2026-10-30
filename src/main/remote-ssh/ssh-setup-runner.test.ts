@@ -80,7 +80,7 @@ describe('makeSshSetupRunner', () => {
       env?: Record<string, string>
       resolveRef?: (endpoint: SshSetupEndpoint) => SshSetupRef | null
       timeoutMs?: number
-      ssh?: { server: { host: string; user: string; port?: number }; remoteCwd: string } | undefined
+      ssh?: { server: { host: string; user: string; port?: number; identityFile?: string }; remoteCwd: string } | undefined
       signal?: AbortSignal
     } = {}
   ) => {
@@ -150,6 +150,18 @@ describe('makeSshSetupRunner', () => {
     const result = await promise
     expect(result.exitCode).toBe(0)
     expect(spawnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a different identity file even at the same host, user and port', async () => {
+    const { promise } = run({
+      ssh: { server: { host: 'example.test', user: 'deploy', identityFile: '/wanted-key' }, remoteCwd: '/srv/app' },
+      resolveRef: (endpoint) => {
+        expect(endpoint.identityFile).toBe('/wanted-key')
+        return { conn: { host: 'example.test', user: 'deploy', identityFile: '/other-key' }, controlPath: '/tmp/c.sock' }
+      }
+    })
+    expect((await promise).exitCode).toBe(255)
+    expect(spawnMock).not.toHaveBeenCalled()
   })
 
   it('the remote command cds into the quoted remote cwd and runs the script through sh -lc', async () => {
@@ -378,7 +390,7 @@ describe('makeSshSetupRunner', () => {
         onStatus: () => {}
       })
 
-    const runVia = (mgr: SshProjectManager, target: { server: { host: string; user: string; port?: number }; remoteCwd: string }) => {
+    const runVia = (mgr: SshProjectManager, target: { server: { host: string; user: string; port?: number; identityFile?: string }; remoteCwd: string }) => {
       const runner = makeSshSetupRunner((endpoint) => mgr.refForEndpoint(endpoint) ?? null, {
         sshPath: () => '/usr/bin/ssh',
         agentEnv: () => ({})
@@ -405,6 +417,16 @@ describe('makeSshSetupRunner', () => {
       expect((await promise).exitCode).toBe(0)
       expect(argv()).toContain(`ControlPath=${controlPathFor('p-2222')}`)
       expect(argv().join(' ')).toContain('-p 2222')
+    })
+
+    it('selects the matching identity when two projects share one user, host, port and folder', async () => {
+      const mgr = makeMgr()
+      await mgr.connect('key-a', { host: 'h', user: 'u', identityFile: '/key-a' }, '/srv/app')
+      await mgr.connect('key-b', { host: 'h', user: 'u', identityFile: '/key-b' }, '/srv/app')
+      const { promise } = runVia(mgr, { server: { host: 'h', user: 'u', identityFile: '/key-b' }, remoteCwd: '/srv/app' })
+      child.emit('close', 0)
+      expect((await promise).exitCode).toBe(0)
+      expect(argv()).toContain(`ControlPath=${controlPathFor('key-b')}`)
     })
 
     it('refuses when only the WRONG-port connection is live — no spawn, no dial', async () => {

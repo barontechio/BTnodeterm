@@ -375,11 +375,17 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.projectSetupSubscribe,
   IPC.projectSetupUnsubscribe,
   IPC.worktreeMaterializeShared,
+  // Physical-owner recovery administration; HOST_ONLY also refuses editors/relay owners.
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   // Host settings, credentials and paths.
   // Agent-integration consent status (#744): host-only, never a viewer's.
   IPC.integrationsStatus,
   IPC.settingsLoad,
   IPC.settingsSave,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   IPC.agentDiscoverModels,
   IPC.agentGatewayCredentialStatus,
   IPC.agentGatewayCredentialSave,
@@ -434,6 +440,9 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.gitWorktreeMerge,
   IPC.gitWorktreeRemove,
   IPC.gitSetActiveRemote,
+  // ✦ Name with AI runs an agent CLI on the host, under a host Claude account the caller names.
+  IPC.ptyGenerateName,
+  IPC.ptyGenerateGroupName,
   // Agent context, the host debug log, GitHub (host token) and agent control.
   IPC.contextEnsure,
   IPC.logSnapshot,
@@ -485,6 +494,8 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.relayHostedPendingClosed,
   IPC.relayHostedSharedChanged,
   // Server→client events (see the doc comment): what a non-editor receives is VIEW_EVENTS.
+  IPC.ptyInputBlocked,
+  IPC.canvasMutationRejected,
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
   IPC.workspaceExternalChange,
@@ -549,7 +560,10 @@ const always: EventCheck = () => true
 
 /** Exact event channels a Viewer/Commenter may RECEIVE. Anything else is dropped for them. */
 export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
+  // Addressed to a typing client; the only payload is the node whose input was refused.
+  [IPC.ptyInputBlocked]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.canvasMut]: (a, ctx) => sharedProject(a[0], ctx),
+  [IPC.canvasMutationRejected]: (a, ctx) => sharedProject(a[0], ctx),
   [IPC.agentStatus]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.agentSubagentActivity]: (a, ctx, owners) => {
     const toolUseId = field(a[0], 'toolUseId')

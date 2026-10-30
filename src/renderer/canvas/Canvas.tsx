@@ -1,3 +1,7 @@
+import { planGeometryCommand } from '@shared/geometry-command'
+import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
+import { planBoardAssignment } from '@shared/board-assignment'
+import { controlOpenAgent } from '@shared/control-open-agent'
 import { PrepareUpdateDialog } from '../components/PrepareUpdateDialog'
 import type { PrepNode } from '../lib/updatePrep'
 import { markLocalOnSshCanvas } from '../lib/localOnSshCanvas'
@@ -9,10 +13,8 @@ import { VisibleMiniMap } from './VisibleMiniMap'
 import { MinimapDock } from './MinimapDock'
 import { keepGlassBlurWhileMoving } from '../lib/glassContrast'
 import { LINK_ENDPOINT_NOT_FOUND } from '@shared/canvas-link'
-import { arrangeArgsRefusal, isTopLevelGroupArg, parseArrangeGap, TOP_ARRANGE_LAYOUTS } from '@shared/arrange-verb'
-import { geometryArgsRefusal, listGeometryRequested, parsePlaceArgs, parseResizeArgs } from '@shared/geometry-verbs'
+import { geometryArgsRefusal, listGeometryRequested } from '@shared/geometry-verbs'
 import { liveNodeGeometry } from '../lib/nodeGeometry'
-import { placeReply, resizeReply } from '../lib/geometryReply'
 import { createControlOpenBatch } from '../lib/controlOpenBatch'
 import { commitOwnedLaunchAttempt, registerLaunchCommit } from '../terminal/launch-attempt'
 import { hasLaunchWriter, launchCommand } from '../terminal/launch-command'
@@ -344,6 +346,7 @@ import { installTerminalFocusMirror } from '../lib/terminalFocusMirror'
 import { runQuitFlushes } from '../lib/quitFlush'
 import { nodeToRefocus } from '../lib/focusRestore'
 import { openDialogCount } from '../components/dialog-stack'
+import { hasOwnerConfirmation, registerConfirmationBlocker } from '../lib/ownerConfirmationSlot'
 import {
   applyWindowTitle,
   composeWindowTitle,
@@ -776,7 +779,7 @@ import {
   resolveNodeColor,
   resolveSystemNodeColor
 } from '@shared/node-colors'
-import { parseLenses, verifyLensPrompt, verifySynthesisPrompt } from '../lib/verifyPanel'
+import { planVerification } from '@shared/team-plan'
 import { useSettings } from '../state/settings'
 import { activePermissionMode, cursorCliCapsNow, grokCliCapsNow, projectPermissionMode } from '../state/permissionMode'
 import { useContextWindow } from '../state/contextWindow'
@@ -917,17 +920,13 @@ import {
   toggleCollapsed,
   endMaximizeOnUserGeometry,
   movedGestureEnds,
-  alignNodes,
   arrangeByLineage,
   arrangeGroupChildren,
   tidyCanvas,
   arrangeNodes,
-  fitAncestorChain,
   groupArrangeRefusal,
-  GROUP_ARRANGE_LAYOUTS,
   type GroupArrangeLayout,
   lineageLayers,
-  commonParentId,
   fitGroupToChildren,
   createAccountLoginNode,
   createCodexAccountLoginNode,
@@ -971,8 +970,6 @@ import {
   refitMaximizedNode,
   restoreMaximizedNode,
   placeNodeInRect,
-  placeNodes,
-  resizeNodes,
   terminalNodeSize,
   type CanvasNode
 } from '../state/workspace'
@@ -1509,6 +1506,14 @@ export function Canvas() {
     const t = setTimeout(() => setNotice(null), noticeDwellMs(notice.text))
     return () => clearTimeout(t)
   }, [notice])
+  useEffect(() => session.api.pty.onInputBlocked?.((event) => {
+    setNotice(event.reason === 'worktree-recovery'
+      ? { kind: 'error', text: 'This terminal has pending worktree recovery. Keyboard input was refused; inspect recovery before continuing.', sticky: true }
+      : { kind: 'info', text: 'This terminal is completing another action. Keyboard input was not sent; try again when it finishes.' })
+  }), [session.api])
+  useEffect(() => session.api.canvas.onMutationRejected?.((_projectId, message) => {
+    setNotice({ kind: 'error', text: message, sticky: true })
+  }), [session.api])
   const [zoomPct, setZoomPct] = useState(100)
   // Canvas lock (bottom-left Controls): freezes the CAMERA against gestures, namely pan (drag +
   // scroll) and zoom (pinch / Cmd+wheel / double-click). Nodes stay draggable and connectable:
@@ -2336,6 +2341,7 @@ export function Canvas() {
   const confirmBusy = useCallback(() => {
     const f = confirmFlags.current
     return (
+      hasOwnerConfirmation() ||
       f.confirm ||
       f.remove ||
       f.move ||
@@ -2348,6 +2354,8 @@ export function Canvas() {
       removePendingRef.current
     )
   }, [])
+  useEffect(() => registerConfirmationBlocker(() =>
+    Object.values(confirmFlags.current).some(Boolean) || removePendingRef.current), [])
   // Issue #848's offer is an actionable dialog like the rest, so it is in the same guard: an agent
   // `write`/`close` or a worktree removal must not stack over it (flag flipped at call time).
   const setLastSessionOffer = useCallback((v: { id: string; name: string } | null) => {
@@ -3898,6 +3906,7 @@ export function Canvas() {
   // A primitive count, not the list: a push about one link's viewers must not re-render the canvas.
   // A pinned drawer is rendered only while a link is live (`liveChatShown`); the pin is kept.
   const liveLinkCount = useWatchLinks((s) => s.links.length)
+  const serverLicenseEnabled = useEntitlement((s) => s.serverLicenseEnabled)
   const liveChatRef = useRef(liveChat)
   liveChatRef.current = liveChat
   useEffect(() => {
@@ -3933,6 +3942,7 @@ export function Canvas() {
   const liveLinkFacts = useCallback(
     (projectId: string): LiveLinkAvailabilityFacts => ({
       serverEdition: isBrowserRuntime(),
+      serverLicenseEnabled: useEntitlement.getState().serverLicenseEnabled,
       source: sessionForProject(projectId).source,
       activeLinks: useWatchLinks.getState().links.length
     }),
@@ -7848,6 +7858,10 @@ export function Canvas() {
         projectId: target.projectId
       })
       setWorktreeBusy(false)
+      if (!res.ok && res.reason === 'binding') {
+        setWorktreeError(`Created worktree at ${res.worktree.path}, but its canvas binding is uncertain: ${res.message}. Inspect the canvas before retrying.`)
+        return
+      }
       if (!res.ok && res.reason === 'git') {
         // inline, never window.alert
         setWorktreeError(res.rejected ? `Could not create the worktree: ${res.message}` : res.message)
@@ -9412,8 +9426,7 @@ export function Canvas() {
 
   // Run Claude's /branch in this node, then open a new node that resumes the original
   // conversation (claude -r <ORIGINAL_ID>). The source node stays on the new branch.
-  // We already know the current session id from the hooks; only fall back to parsing the
-  // terminal output if it's unknown.
+  // The host reserves input, proves the new session and durably opens the original beside it.
   const branchClaude = useCallback(
     async (
       nodeId: string,
@@ -9421,45 +9434,14 @@ export function Canvas() {
     ): Promise<{ ok: boolean; error?: string; newNodeId?: string }> => {
       const source = nodesRef.current.find((n) => n.id === nodeId) as CanvasNode | undefined
       if (!source) return { ok: false, error: `no node with id ${nodeId}` }
-      const known = useAgentStatus.getState().byId[nodeId]?.sessionId
-      let originalId = known
-      if (known) {
-        const delivery = await api.pty.sendText(nodeId, '/branch')
-        if (delivery !== true) return { ok: false, error: delivery === 'pasted-not-submitted' ? TEXT_NOT_SUBMITTED : 'Branch delivery failed.' }
-      } else {
-        const res = await branchClaudeSession(api, nodeId)
-        if (!res.ok || !res.originalId) {
-          const error = res.error ?? 'Branch failed.'
-          // The error dialog is for humans; agent-CLI calls get the error in the reply instead.
-          if (opts?.interactive !== false) {
-            setConfirm({ message: error, alert: true, onConfirm: () => setConfirm(null) })
-          }
-          return { ok: false, error }
-        }
-        originalId = res.originalId
+      if (!(await persist())) return { ok: false, error: 'Save the canvas successfully before branching this conversation.' }
+      const result = await branchClaudeSession(api, nodeId, opts?.at)
+      if (!result.ok && opts?.interactive !== false) {
+        setConfirm({ message: result.error ?? 'Branch failed.', alert: true, onConfirm: () => setConfirm(null) })
       }
-      const copy = duplicateNode(source)
-      copy.data = {
-        ...copy.data,
-        // Built fresh here (never re-wrapping a persisted command), so it is flagged exactly once.
-        initialCommand: withPermissionMode(
-          // The branched copy stays in the project it was branched from, so it comes back through
-          // that project's wrapper exactly like the source node did.
-          `${claudeLaunchCommand(useProjects.getState().activeProjectId)} -r ${originalId}`,
-          'claude',
-          activePermissionMode()
-        ),
-        title: `${source.data.title} (original)`
-      }
-      copy.selected = true
-      // Where the user right-clicked when the action came from the node menu; beside the source
-      // otherwise (the agent-CLI `branch` verb and the header action have no cursor).
-      const placed = placeSpawned(copy, opts?.at ?? besideNode(source))
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
-      markDirty()
-      return { ok: true, newNodeId: placed.id }
+      return result
     },
-    [api, setNodes, markDirty, placeSpawned, besideNode]
+    [api, persist, setConfirm]
   )
 
   // Transfer this agent's full conversation to a different agent. We render the source
@@ -12727,6 +12709,10 @@ export function Canvas() {
           { repoPath: repoRoot, mode, branch: target.branch, baseRef, path: target.path },
           { target: newFrame, projectId }
         )
+        if (!out.ok && out.reason === 'binding') {
+          setNotice({ kind: 'error', text: `Created worktree at ${out.worktree.path}, but its canvas binding is uncertain: ${out.message}. Inspect the canvas before retrying.` })
+          return
+        }
         if (!out.ok && out.reason === 'git') {
           setNotice({ kind: 'error', text: `Could not create the worktree for #${issue.number}: ${out.message}` })
           return
@@ -14937,7 +14923,7 @@ export function Canvas() {
           case 'open-agent': {
             // open-claude is the legacy fixed-agent form; open-agent takes any builtin or custom
             // agent id — resolveAgent is the single registry/base-harness resolver for both.
-            const agentId = (verb === 'open-agent' ? args.agent : 'claude') as AgentId
+            const agentId = controlOpenAgent(verb, args).agent as AgentId
             const count = Math.max(1, Math.min(5, parseInt(args.count || '1', 10) || 1))
             // --group parents the new node(s) into an existing group frame; a worktree-bound
             // group also hands its worktree path down as the cwd (same inheritance as
@@ -15256,211 +15242,20 @@ export function Canvas() {
             })
             return
           }
-          case 'ungroup': {
-            const gid = (args.group ?? '').trim()
-            const live = ctlNodes()
-            const frame = live.find((nd) => nd.id === gid && nd.type === 'group')
-            if (!frame) {
-              reply({ ok: false, error: `ungroup: --group names no group frame (${gid || 'missing'})` })
-              return
-            }
-            const freed = live.filter((nd) => nd.parentId === gid).map((nd) => nd.id)
-            commitCtlNodes(ungroupNodes(live, gid))
-            reply({ ok: true, message: `ungrouped ${gid}, freed ${freed.length} node(s)`, result: { freed } })
-            return
-          }
-          case 'move': {
-            // Reparent nodes — or whole frame subtrees — INTO an existing frame (or out to the
-            // top level): the one way to move a node OUT of its current frame, which `group`
-            // deliberately won't do. `reparentNode` keeps each node's ROOT-space position fixed
-            // and refuses a cycle (a frame into itself or its own descendant).
-            const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-            const live = ctlNodes()
-            const rawTarget = (args.group ?? '').trim().toLowerCase()
-            const toTop = !rawTarget || rawTarget === 'top' || rawTarget === 'none' || rawTarget === 'ungrouped'
-            const targetGroup = toTop ? null : args.group!.trim()
-            if (targetGroup && !live.some((nd) => nd.id === targetGroup && nd.type === 'group')) {
-              reply({ ok: false, error: `move: --group names no group frame (${targetGroup})` })
-              return
-            }
-            let next = live
-            const moved: string[] = []
-            for (const id of ids) {
-              const before = next
-              const nd = next.find((n) => n.id === id)
-              // Skip an unknown id, a node already in the requested container, or a cycle.
-              if (nd) next = reparentNode(next, id, targetGroup)
-              if (next !== before) moved.push(id)
-            }
-            if (moved.length === 0) {
-              reply({ ok: false, error: 'move: nothing moved (unknown ids, already there, or an invalid group cycle)' })
-              return
-            }
-            // The source frame(s) the nodes LEFT, and the destination, may now be the wrong size —
-            // hug whatever each ends up holding so no oversized/updated box is left behind.
-            const affected = new Set<string>()
-            if (targetGroup) affected.add(targetGroup)
-            for (const id of moved) {
-              const was = live.find((n) => n.id === id)
-              if (was?.parentId) affected.add(was.parentId)
-            }
-            for (const g of affected) {
-              if (next.some((n) => n.parentId === g)) next = fitGroupToChildren(next, g, snapGridNow())
-            }
-            commitCtlNodes(next)
-            const where = targetGroup ? `into ${targetGroup}` : 'to the top level'
-            reply({ ok: true, message: `moved ${moved.length} node(s) ${where}`, result: { moved, group: targetGroup } })
-            return
-          }
-          case 'resize': {
-            // Size existing nodes (issue #1288). The rules — kind minimum and canvas maximum, frames
-            // refused, collapsed/maximized handled, ancestor frames re-fitted — are all
-            // `resizeNodes`; this case only parses, writes on a change and says what was applied.
-            const req = parseResizeArgs(args)
-            if ('error' in req) {
-              reply({ ok: false, error: req.error })
-              return
-            }
-            const live = ctlNodes()
-            const out = resizeNodes(live, req.ids, { width: req.width, height: req.height }, snapGridNow())
-            if (!out.ok) {
-              reply({ ok: false, error: out.error })
-              return
-            }
-            // The SAME array means every node already had that size: an answer, nothing to write.
-            if (out.nodes !== live) commitCtlNodes(out.nodes)
-            reply({ ok: true, ...resizeReply(out, out.nodes !== live) })
-            return
-          }
-          case 'place': {
-            // Put nodes at canvas coordinates, or shift them (issue #1288). NOT a flag on `move`:
-            // without `--group`, `move` takes a node out of its frame. `placeNodes` keeps the parent,
-            // converts root space to parent-relative and re-fits the frames around what moved.
-            const req = parsePlaceArgs(args)
-            if ('error' in req) {
-              reply({ ok: false, error: req.error })
-              return
-            }
-            const live = ctlNodes()
-            const out = placeNodes(live, req.ids, req, snapGridNow())
-            if (!out.ok) {
-              reply({ ok: false, error: out.error })
-              return
-            }
-            if (out.nodes !== live) commitCtlNodes(out.nodes)
-            reply({ ok: true, ...placeReply(out, req, out.nodes !== live) })
-            return
-          }
+          case 'ungroup':
+          case 'move':
+          case 'resize':
+          case 'place':
           case 'arrange':
           case 'align': {
-            const live = ctlNodes()
-            // The flag shape was refused in main (`arrangeArgsRefusal`); this is the belt. With it,
-            // `--layout` on the `--group` form is absent or a known word by the time it is read
-            // below — an unknown one is refused by name, never delivered as a grid.
-            const shapeRefusal = verb === 'arrange' ? arrangeArgsRefusal(args) : null
-            if (shapeRefusal) {
-              reply({ ok: false, error: shapeRefusal })
-              return
-            }
-            // `--gap` (issue #1288), well-formed by now (the gate above): every arrange form passes it
-            // on; absent stays `undefined`, so each transform keeps its own default. `align` has none.
-            const parsedGap = parseArrangeGap(args.gap)
-            const gap = 'gap' in parsedGap ? parsedGap.gap : undefined
-            // `arrange --group <frameId>`: name the FRAME instead of listing its children. The
-            // whole rule set is `arrangeGroupChildren` — the same transform the frame's menu rows
-            // and the palette run — so this branch only parses, refuses by name and replies.
-            if (verb === 'arrange' && args.group) {
-              const gid = args.group.trim()
-              // Off canvas the lineage ropes are the OWNING project's, not the live canvas's — and a
-              // stored file may predate the wait mark, so it is re-marked exactly as a load would.
-              // The rope id rides along: it is what tells a wait from an opener.
-              const edges = (offCanvas ? markLegacyWaitRopes(offCanvas.project.ropes ?? []) : controlEdgesRef.current).map(
+            const plan = planGeometryCommand(verb, args, ctlNodes(), {
+              grid: snapGridNow(),
+              edges: (offCanvas ? offCanvas.project.ropes ?? [] : controlEdgesRef.current).map(
                 (e) => ({ id: e.id, source: e.source, target: e.target })
               )
-              // `arrange --group top`: the user's Tidy canvas (or its lineage bands), on the canvas
-              // that owns the caller — the same pure transforms the pane menu runs.
-              if (isTopLevelGroupArg(gid)) {
-                const topLayout = TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'
-                const next = topLayout === 'lineage' ? arrangeByLineage(live, edges, { gap }) : tidyCanvas(live, edges, { gap })
-                const count = live.filter((nd) => !nd.parentId).length
-                if (next !== live) commitCtlNodes(next)
-                reply({
-                  ok: true,
-                  message:
-                    next !== live
-                      ? `arranged ${count} top-level item(s) as ${topLayout}`
-                      : count < 2
-                        ? 'fewer than two top-level items — nothing to arrange'
-                        : topLayout === 'lineage' && lineageLayers(live, edges).layers.length === 0
-                          ? 'no opened-by or --after connection joins two top-level items — nothing moved'
-                          : `the canvas is already arranged as ${topLayout} — nothing moved`,
-                  result: { count, group: 'top', layout: topLayout, changed: next !== live }
-                })
-                return
-              }
-              const groupLayout = GROUP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'grid'
-              const refusal = groupArrangeRefusal(live, gid, groupLayout, edges)
-              if (refusal) {
-                reply({ ok: false, error: `arrange: ${refusal}` })
-                return
-              }
-              const cols = args.cols ? parseInt(args.cols, 10) || undefined : undefined
-              const next = arrangeGroupChildren(live, gid, { layout: groupLayout, cols, gap, edges, grid: snapGridNow() })
-              const count = live.filter((nd) => nd.parentId === gid).length
-              // The SAME array means every item already sat where the layout puts it: an answer,
-              // not a failure — and nothing to write.
-              if (next !== live) commitCtlNodes(next)
-              const frame = next.find((nd) => nd.id === gid)
-              reply({
-                ok: true,
-                message:
-                  next === live
-                    ? `group ${gid} is already arranged as ${groupLayout} — nothing moved`
-                    : `arranged ${count} item(s) in group ${gid} as ${groupLayout} and resized the frame to fit`,
-                result: {
-                  count,
-                  group: gid,
-                  layout: groupLayout,
-                  changed: next !== live,
-                  width: frame?.width,
-                  height: frame?.height
-                }
-              })
-              return
-            }
-            const ids = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-            const edge = (['left', 'right', 'top', 'bottom', 'hcenter', 'vcenter'] as const).find((e2) => e2 === args.edge)
-            if (verb === 'align' && !edge) {
-              reply({ ok: false, error: 'align requires --edge left|right|top|bottom|hcenter|vcenter' })
-              return
-            }
-            // arrange/align run in ONE coordinate space: all top-level, or all children of one
-            // frame. A mixed set (framed + loose, or two frames) is refused with a clear reason
-            // rather than the old misleading "none are top-level".
-            const container = commonParentId(live, ids)
-            if (container === undefined) {
-              const known = ids.filter((id) => live.some((n) => n.id === id))
-              reply({
-                ok: false,
-                error: known.length === 0
-                  ? `${verb}: none of the given node ids exist`
-                  : `${verb}: the nodes are in different containers — arrange the children of one frame (or top-level nodes) at a time`
-              })
-              return
-            }
-            const layout = (['grid', 'row', 'column'] as const).find((l) => l === args.layout) ?? 'grid'
-            const cols = args.cols ? parseInt(args.cols, 10) || undefined : undefined
-            let next = verb === 'arrange'
-              ? arrangeNodes(live, ids, { layout, cols, gap })
-              : alignNodes(live, ids, edge!)
-            // Tidying a frame's children usually leaves the frame the wrong size (it was sized to
-            // their old scattered spots) — hug the new layout, and re-fit every ANCESTOR frame too:
-            // a nested frame that grew past its parent would be clamped by `extent:'parent'` into
-            // an inverted range. Top-level sets have no frame.
-            if (container) next = fitAncestorChain(next, container, snapGridNow())
-            commitCtlNodes(next)
-            const how = verb === 'arrange' ? `as ${layout}` : `to ${edge}`
-            reply({ ok: true, message: `${verb === 'arrange' ? 'arranged' : 'aligned'} ${ids.length} node(s) ${how}`, result: { count: ids.length, container } })
+            })
+            if (plan.reply.ok && plan.changed) commitCtlNodes(plan.nodes)
+            reply(plan.reply)
             return
           }
           case 'link': {
@@ -15527,13 +15322,15 @@ export function Canvas() {
               })
               return
             }
-            const lenses = parseLenses(args.lenses)
-            const wantJudge = (args.synthesis ?? 'on').trim().toLowerCase() !== 'off'
             const { shimPath: vShim, platform: vShimHost } = await window.nodeTerminal.contextLink.info()
             // Reviewers open where the target's cwd says; an SSH-project panel runs on the host,
             // whose shim is POSIX, so only a local panel gets the host-platform wording.
             const vHost = sshFor(target.data.cwd as string | undefined) ? undefined : vShimHost
             const targetTitle = (target.data.title as string) || targetId
+            const panelPlan = planVerification({ targetId, targetTitle, agent: reviewAgent, shimPath: vShim,
+              hostPlatform: vHost, lenses: args.lenses, focus: args.focus, synthesis: args.synthesis })
+            const lenses = panelPlan.lenses
+            const wantJudge = panelPlan.judge !== null
             const targetCwd = target.data.cwd as string | undefined
             const live = nodesRef.current as CanvasNode[]
             const vStore = useProjects.getState()
@@ -15552,22 +15349,8 @@ export function Canvas() {
             // with a nine-character node title and no `--focus` at all (#706). So every panel
             // prompt goes through the spill before a node is built, and the awaits are done up
             // front because the factories below are synchronous.
-            const lensLaunches = await Promise.all(
-              lenses.map((lens) =>
-                spillLongPrompt(
-                  verifyLensPrompt({
-                    lens,
-                    targetTitle,
-                    targetId,
-                    agentId: reviewAgent,
-                    shimPath: vShim,
-                    hostPlatform: vHost,
-                    focus: args.focus
-                  })
-                )
-              )
-            )
-            const reviewers = lenses.map((lens, i) => {
+            const lensLaunches = await Promise.all(panelPlan.reviewers.map((role) => spillLongPrompt(role.prompt)))
+            const reviewers = panelPlan.reviewers.map((role, i) => {
               const node = createAgentNode(
                 reviewAgent,
                 live.length + i,
@@ -15582,22 +15365,14 @@ export function Canvas() {
                 lensLaunches[i].promptFile
               )
               return armAfter(
-                { ...node, data: { ...node.data, title: `Verify: ${lens}`, titleAuto: false } },
-                [targetId],
+                { ...node, data: { ...node.data, title: role.title, titleAuto: false } },
+                role.afterNodes,
                 undefined,
                 lensLaunches[i].promptFile
               )
             })
             const reviewerIds = reviewers.map((r) => r.id)
-            const judgeLaunch = await spillLongPrompt(
-              verifySynthesisPrompt({
-                lenses,
-                targetTitle,
-                agentId: reviewAgent,
-                shimPath: vShim,
-                hostPlatform: vHost
-              })
-            )
+            const judgeLaunch = panelPlan.judge ? await spillLongPrompt(panelPlan.judge.prompt) : {}
             const judge = wantJudge
               ? armAfter(
                   (() => {
@@ -15616,7 +15391,7 @@ export function Canvas() {
                     )
                     return { ...j, data: { ...j.data, title: 'Verify: verdict', titleAuto: false } }
                   })(),
-                  reviewerIds,
+                  panelPlan.judge!.afterRoles.map((index) => reviewerIds[index]),
                   undefined,
                   judgeLaunch.promptFile
                 )
@@ -15952,6 +15727,10 @@ export function Canvas() {
                 })
               }
             )
+            if (!created.ok && created.reason === 'binding') {
+              reply({ ok: false, error: `open-worktree: created ${created.worktree.path}, but binding is uncertain: ${created.message}. Inspect list before retrying.`, result: { worktree: created.worktree } })
+              return
+            }
             if (!created.ok) {
               reply({ ok: false, error: `open-worktree: ${created.reason === 'git' ? created.message : 'the project changed'}` })
               return
@@ -16455,20 +16234,14 @@ export function Canvas() {
             // Read prev fresh so the board-log diff below has the SAME base the write mutates —
             // a lazy-default board is materialized here (as the first UI edit would) so the
             // resolved column ids are stable across the write and the diff.
-            const prev = store.getProject(pid)?.kanban ?? defaultKanban(pid)
+            const assignment = planBoardAssignment(store.getProject(pid)?.kanban, pid, nodeId, args)
             // Resolve --column by id or (case-insensitive) title; empty / "ungrouped" → null
             // (unassign). `undefined` = no such column, so report what IS available.
-            const rawCol = (args.column ?? '').trim()
-            const columnId = resolveColumnRef(prev, rawCol)
-            if (columnId === undefined) {
-              reply({
-                ok: false,
-                error: `assign: no column "${rawCol}" — columns: ${prev.columns.map((c) => c.title).join(', ') || '(none)'}`
-              })
+            if (!assignment.ok) {
+              reply({ ok: false, error: assignment.error })
               return
             }
-            const before = (args.before ?? '').trim() || null
-            const next = assignNode(prev, nodeId, columnId, before)
+            const { previous: prev, next, columnId } = assignment
             store.setProjectKanban(pid, next)
             markDirty()
             // Board-log the move through the same diff funnel the UI uses (card-moved), so the
@@ -17751,14 +17524,22 @@ export function Canvas() {
   // so a single state slot cannot drop a concurrent request. The dismiss event closes a dialog
   // whose request expired main-side, so a late answer cannot land in a dead request.
   useEffect(() => {
-    return window.nodeTerminal.sshProject.onPassphraseRequest((e) =>
+    const api = window.nodeTerminal.sshProject
+    const offRequest = api.onPassphraseRequest((e) =>
       setSshPassphraseQueue((prev) => (prev.some((r) => r.requestId === e.requestId) ? prev : [...prev, e]))
     )
-  }, [])
-  useEffect(() => {
-    return window.nodeTerminal.sshProject.onPassphraseDismiss((e) => {
+    const offDismiss = api.onPassphraseDismiss((e) => {
       setSshPassphraseQueue((prev) => prev.filter((r) => r.requestId !== e.requestId))
     })
+    let disposed = false; let epoch: string | undefined
+    void api.connectPrompts?.().then((value) => {
+      if (disposed) void api.disconnectPrompts?.(value).catch(() => {})
+      else epoch = value
+    }).catch(() => {})
+    return () => {
+      disposed = true; offRequest(); offDismiss()
+      if (epoch) void api.disconnectPrompts?.(epoch).catch(() => {})
+    }
   }, [])
 
   // Create an SSH project from the dialog: commit the current canvas, then open-or-reuse the
@@ -18778,6 +18559,10 @@ export function Canvas() {
       const stored = active ? undefined : st.getProject(project.id)?.nodes.find((n) => n.id === nodeId)
       if (!live && !stored) return { ok: false, error: `run: no node with id ${nodeId}` }
       const pending = (live ? live.data.pendingLaunch : stored?.pendingLaunch) as PendingLaunch | undefined
+      const hostLaunch = await runHostQueuedLaunch(api, nodeId, pending)
+      if (hostLaunch) return { ok: hostLaunch.ok, error: hostLaunch.error, message: hostLaunch.message,
+        result: { id: nodeId, ids: [nodeId], started: hostLaunch.started, queued: !hostLaunch.started,
+          startedIds: hostLaunch.started ? [nodeId] : [], queuedIds: hostLaunch.started ? [] : [nodeId] } }
       const one = (started: boolean, reason?: string): ControlReply => ({
         ok: true,
         message: started
@@ -19370,6 +19155,7 @@ export function Canvas() {
         activeLinks: useWatchLinks.getState().links.length,
         entitled: useEntitlement.getState().isPremium,
         serverEdition: isBrowserRuntime(),
+        serverLicenseEnabled,
         icon: <IconBroadcast />,
         chatIcon: <IconChat />,
         manage: () => {
@@ -20647,8 +20433,8 @@ export function Canvas() {
           {...liveLinkRemoteFor(liveLinkDialog)}
           readPersistence={readLocalPersistence}
           prepare={liveLinkPrepareFor(liveLinkDialog)}
-          // No license layer in the Server Edition (R43): never an Upgrade button there.
-          onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}
+          // Only configured Server hosts can offer checkout; relay targets stay unavailable.
+          onUpgrade={isBrowserRuntime() && !serverLicenseEnabled ? undefined : () => { void useEntitlement.getState().upgrade('pro').catch((error) => setNotice({ kind: 'error', text: error instanceof Error ? error.message : String(error) })) }}
           onClose={closeLiveLinkDialog}
         />
       )}

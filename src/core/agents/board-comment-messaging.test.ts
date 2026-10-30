@@ -209,11 +209,17 @@ describe('a board comment that mentions a session', () => {
     ).toBe(false)
   })
 
-  it('the Server Edition (a creator-ledger shell) refuses board comments by edition', async () => {
+  it('a creator-ledger shell without an explicit owner entrance refuses board comments', async () => {
     const deps = fakeDeps({ callerOwnsTarget: () => true })
     const reply = await deliverBoardCommentFromUi(comment('b1'), deps)
     expect(reply.result).toEqual({ kind: 'notPermitted', reason: 'unsupported-edition' })
     expect(deps.rec.sent).toEqual([])
+  })
+
+  it('an owner-only entrance uses runtime pane ownership and consent without agent creator proof', async () => {
+    const deps = fakeDeps({ callerOwnsTarget: () => false, ownerBoardComments: true })
+    expect(await deliverBoardCommentFromUi(comment('b1'), deps)).toMatchObject({ ok: true })
+    expect(deps.rec.sent).toHaveLength(1)
   })
 })
 

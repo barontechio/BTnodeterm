@@ -17,7 +17,7 @@ import { CLOSED_SESSIONS_CAP } from '@shared/types'
 import { collisionSeed, derivedProjectId } from '@shared/project-id'
 import { capabilityHasMachineDefault, type ProjectCapability } from '@shared/project-capabilities'
 import type { ProjectIcon } from '@shared/project-icon'
-import { recordCapabilityAck, type CapabilityAnswer } from '@shared/project-capability-consent'
+import { recordCapabilityAck, setProjectCapability, type CapabilityAnswer } from '@shared/project-capability-consent'
 import {
   CANVAS_LAYOUTS_CAP,
   CANVAS_LAYOUT_NAME_MAX,
@@ -644,13 +644,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set((s) => ({
       projects: s.projects.map((p) => {
         if (p.id !== id) return p
-        if (on) return recordCapabilityAck({ ...p, [cap]: true }, cap, 'kept')
-        const next = { ...p }
-        if (capabilityHasMachineDefault(cap)) next[cap] = false
-        else delete next[cap]
-        // 'declined', not silence: the deletion lives only in this working copy, so a re-arriving
-        // `true` (teammate commit, git checkout) must re-notice instead of meeting a bare ack.
-        return recordCapabilityAck(next, cap, 'declined')
+        return setProjectCapability(p, cap, on)
       })
     }))
     // The setter owns the persist (issue #318): its call sites — the AgentsSection toggle, the

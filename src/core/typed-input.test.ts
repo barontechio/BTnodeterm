@@ -3,12 +3,34 @@ import {
   TYPED_TAB,
   localTypedArgs,
   localTypedEnv,
+  submitWithDispatchNotice,
   typeThenSubmitWhenSettled,
   typedInputScript,
   typedLines,
   typedStdin,
   type TypedSurface
 } from './typed-input'
+
+describe('host typed-submit dispatch notice', () => {
+  it('notifies after dispatch and before the backend promise settles', async () => {
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve })
+    const order: string[] = []
+    const result = submitWithDispatchNotice(() => { order.push('dispatch'); return pending }, () => { order.push('notice') })
+    expect(order).toEqual(['dispatch', 'notice'])
+    release(); await result
+  })
+
+  it('keeps notification failure pending until the dispatched effect actually settles', async () => {
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve }); let settled = false
+    const result = submitWithDispatchNotice(() => pending, () => { throw new Error('notice failed') }).finally(() => { settled = true })
+    void result.catch(() => {})
+    await Promise.resolve(); expect(settled).toBe(false)
+    release(); await expect(result).rejects.toThrow('notice failed')
+    const notice = vi.fn()
+    await expect(submitWithDispatchNotice(() => { throw new Error('not dispatched') }, notice)).rejects.toThrow('not dispatched')
+    expect(notice).not.toHaveBeenCalled()
+  })
+})
 
 describe('typedLines', () => {
   it('splits on every line-ending style and keeps blank lines', () => {

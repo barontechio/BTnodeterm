@@ -78,6 +78,9 @@ describe('access policy', () => {
     expect(decideAccess('req', IPC.boardLogAppend, ['P', entry('event')], ctx('editor'))).toEqual({ allow: true })
   })
   it('outbound: non-shared canvas and agent events are dropped for non-editors only', () => {
+    const refusal = (project: string) => JSON.stringify({ t: 'ev', channel: IPC.canvasMutationRejected, args: [project, 'Recovery pending.'] })
+    expect(filterOutboundEvent(refusal('P'), ctx('viewer'))).toBe(true)
+    expect(filterOutboundEvent(refusal('Q'), ctx('commenter'))).toBe(false)
     const mutQ = JSON.stringify({ t: 'ev', channel: IPC.canvasMut, args: ['Q', {}] })
     const statusN2 = JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId: 'n2' }] })
     const statusN1 = JSON.stringify({ t: 'ev', channel: IPC.agentStatus, args: [{ nodeId: 'n1' }] })
@@ -344,6 +347,13 @@ describe('outbound filter: deny by default for non-editors', () => {
     expect(filterOutboundEvent(ev(IPC.projectSetupEvent('P'), {}), ctx('viewer'))).toBe(true)
     expect(filterOutboundEvent(ev(IPC.projectSetupEvent('Q'), {}), ctx('viewer'))).toBe(false)
     expect(filterOutboundEvent(ev(IPC.githubIssuesChanged('P'), [1]), ctx('viewer'))).toBe(false)
+  })
+
+  it('attributes a blocked-input notice to its shared node and never accepts it as a viewer method', () => {
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, { nodeId: 'n1' }), ctx('viewer'))).toBe(true)
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, { nodeId: 'n2' }), ctx('viewer'))).toBe(false)
+    expect(filterOutboundEvent(ev(IPC.ptyInputBlocked, {}), ctx('viewer'))).toBe(false)
+    expect(decideAccess('cast', IPC.ptyInputBlocked, [{ nodeId: 'n1' }], ctx('viewer')).allow).toBe(false)
   })
 
   it('per-session terminal events are delivered', () => {

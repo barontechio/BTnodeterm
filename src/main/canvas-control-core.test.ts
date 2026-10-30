@@ -948,7 +948,7 @@ describe('parseControlRequest', () => {
       expect(body).toMatch(/`denied by user` is FINAL/)
       // The keys a human decides are named as unreachable, not merely "not listed".
       expect(body).toMatch(/permission modes, accounts and credentials, node identity, browser\s+control, telemetry, keybindings, confirm waivers/)
-      expect(body).toMatch(/Server Edition reads settings but refuses every `--set`/)
+      expect(body).toMatch(/Server Edition requires an attached owner UI for each change/)
       // The messaging line now names the way to ask for the switch, instead of implying there is none.
       expect(body).toContain('`--set agentMessaging --value true`')
     }
@@ -992,7 +992,7 @@ describe('parseControlRequest', () => {
         error: expect.stringContaining('settings-key-forbidden')
       })
     }
-    // "Server Edition reads settings but refuses every --set" — ask the server handler itself.
+    // A shell without a confirmation backend still refuses every set, never a standing grant.
     const serverDeps = {
       persistedCanvases: () => [{ id: 'p', nodes: [{ id: 'n' }] }],
       capabilityProjectFor: () => ({}),
@@ -1835,5 +1835,17 @@ describe('canvas geometry from the CLI (issue #1288)', () => {
     const answered = text.split('\n').find((l) => l.includes('Answered whether or not that project is on screen'))!
     expect(answered).toMatch(/\bresize\b/)
     expect(answered).toMatch(/\bplace\b/)
+  })
+})
+
+describe('the Server Edition control scope in the agent bodies', () => {
+  it('both bodies render the same `project` scope paragraph, from one function', async () => {
+    const core = await import('../core/canvas-control-core')
+    const lines = core.serverControlScopeDocLines()
+    for (const body of [core.buildCanvasSkillBody('/x/nodeterm.sh'), core.buildCanvasControlInstructions('/x/nodeterm.sh')]) {
+      for (const line of lines) expect(body).toContain(line)
+    }
+    expect(lines.join(' ')).toContain('--control-scope project')
+    expect(lines.join(' ')).toContain('--force yes')
   })
 })

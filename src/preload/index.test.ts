@@ -36,6 +36,47 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('routes partial settings writes and host pushes without exposing native events', async () => {
+    await api.settings.patch!({ gridSize: 24 })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.settingsPatch, { gridSize: 24 })
+    const receive = vi.fn(); const off = api.settings.onChanged!(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.settingsChanged)![1] as (event: unknown, settings: unknown) => void
+    handler({ sender: 'native' }, { gridSize: 24 })
+    expect(receive).toHaveBeenCalledExactlyOnceWith({ gridSize: 24 })
+    off(); expect(h.removeListener).toHaveBeenCalledWith(IPC.settingsChanged, handler)
+  })
+  it('routes owner confirmation epochs, decisions and dismissals without leaking event objects', async () => {
+    const confirmation = api.ownerConfirmation!
+    await confirmation.connect()
+    await confirmation.decide({ id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    await confirmation.disconnect('epoch')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationConnect)
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDecide, { id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDisconnect, 'epoch')
+    const receive = vi.fn()
+    const off = confirmation.onDismiss(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.ownerConfirmationDismiss)![1] as (event: unknown, id: string) => void
+    handler({ sender: 'native' }, 'one')
+    expect(receive).toHaveBeenCalledExactlyOnceWith('one')
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.ownerConfirmationDismiss, handler)
+  })
+  it('delivers persisted host project changes and unsubscribes when the view closes', () => {
+    const got: unknown[] = []
+    const off = api.workspace.onServerChange((project) => got.push(project))
+    const call = h.on.mock.calls.find((entry) => entry[0] === IPC.workspaceServerChange)!
+    const handler = call[1] as (event: unknown, project: unknown) => void
+    const project = { id: 'p', nodes: [{ id: 'team-member' }] }
+    handler({}, project)
+    expect(got).toEqual([project])
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.workspaceServerChange, handler)
+  })
+
+  it('routes explicit host-owned launch recovery through owner IPC', async () => {
+    await api.control!.runLaunch!('node', 'claude prompt')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.controlRunLaunch, 'node', 'claude prompt')
+  })
   it('routes foreground process termination through request IPC', async () => {
     await api.pty.terminateForeground('node-1', 'claude')
     expect(h.invoke).toHaveBeenCalledWith(IPC.ptyTerminateForeground, 'node-1', 'claude')

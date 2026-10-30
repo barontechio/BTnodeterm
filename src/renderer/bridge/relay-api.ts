@@ -103,6 +103,9 @@ export function buildRelayApi(
     //    announcements/usage/ssh*/remote*/relay*/notifications/menu events). The core-bound spreads
     //    below override the handful that must hit the remote core.
     ...local,
+    // Host owner actions must never fall through to the viewer's local desktop under a remote id.
+    control: { capabilities: async () => null },
+    worktree: { ...local.worktree, recovery: undefined },
 
     // ── CORE-BOUND: route to the REMOTE core over the relay RpcClient. ──
     workspace: real.workspace, // the host's canvas/project files

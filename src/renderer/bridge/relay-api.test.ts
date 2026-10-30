@@ -99,6 +99,18 @@ describe('buildRelayApi', () => {
     expect(api.githubControl).toBe(local.githubControl)
   })
 
+  it('does not expose the viewer desktop owner actions under remote node ids', async () => {
+    const { local } = fakeLocalApi(); const branch = vi.fn(); const runLaunch = vi.fn()
+    local.control = { capabilities: async () => null, branchClaude: branch, runLaunch }
+    local.worktree = { materializeShared: vi.fn(), recovery: { list: vi.fn(), inspect: vi.fn(), keep: vi.fn() } }
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport(); const { api } = buildRelayApi('conn-1', t)
+    expect(await api.control!.capabilities()).toBeNull()
+    expect(api.control!.branchClaude).toBeUndefined(); expect(api.control!.runLaunch).toBeUndefined()
+    expect(api.worktree.recovery).toBeUndefined()
+    expect(branch).not.toHaveBeenCalled(); expect(runLaunch).not.toHaveBeenCalled(); expect(t.sent).toEqual([])
+  })
+
   it('routes GitHub issue data to the host while keeping control local', () => {
     const { local } = fakeLocalApi()
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }

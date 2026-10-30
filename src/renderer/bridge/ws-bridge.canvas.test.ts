@@ -22,6 +22,13 @@ function fakeClient() {
 }
 
 describe('buildCanvasApi', () => {
+  it('subscribes and unsubscribes addressed host mutation refusals', () => {
+    const c = fakeClient(); const { canvas } = buildCanvasApi(c as never); const seen: string[][] = []
+    const off = canvas.onMutationRejected!((project, message) => seen.push([project, message]))
+    c.emit(IPC.canvasMutationRejected, 'p', 'Recovery is pending.')
+    expect(seen).toEqual([['p', 'Recovery is pending.']]); off()
+    c.emit(IPC.canvasMutationRejected, 'p', 'Later'); expect(seen).toHaveLength(1)
+  })
   it('mutate casts canvas:mut and onMutation subscribes to it', () => {
     const c = fakeClient()
     const { canvas } = buildCanvasApi(c as never)

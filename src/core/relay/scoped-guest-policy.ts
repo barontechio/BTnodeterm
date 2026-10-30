@@ -506,6 +506,11 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
  * sends one is not a relay tab doing its job.
  */
 export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
+  IPC.canvasMutationRejected,
+  // Recovery facts and approval belong to the physical host owner, never the shared project.
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   // A whole-workspace write from a peer would replace the host's other projects.
   IPC.workspaceSave,
   // Moving a project's storage writes and deletes host files (issue #1145); host-only.
@@ -520,6 +525,11 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.ptyExecuteLaunch,
   // Types into a pane by node id; HOST_ONLY, and relay-api.ts stubs it.
   IPC.ptySendPaneKeys,
+  // ✦ Name with AI runs an agent CLI under the host Claude account the CALLER names (accountId) and
+  // in a cwd it chooses; the invite is not consent to the host's accounts. The tab shows the
+  // refusal as a failed naming (ws-bridge.ts).
+  IPC.ptyGenerateName,
+  IPC.ptyGenerateGroupName,
   // Project settings / setup / trust: relay-api.ts keeps these LOCAL; the setup ones are host-only.
   IPC.projectSettingsRead,
   IPC.projectSettingsWriteShared,
@@ -535,6 +545,8 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   // Host settings and credentials (also host-only for every peer, shared/host-control.ts).
   IPC.settingsLoad,
   IPC.settingsSave,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   // Agent-integration consent status: paths in the host's home (host-only, #744).
   IPC.integrationsStatus,
   IPC.agentDiscoverModels,
@@ -561,6 +573,7 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.agentSeedIdentity,
   // Server→client events (a client cannot invoke them; what a scoped guest RECEIVES is decided by
   // `filterScopedEvent`).
+  IPC.ptyInputBlocked,
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
   IPC.workspaceExternalChange,

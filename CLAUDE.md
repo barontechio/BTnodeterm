@@ -1,7 +1,130 @@
 # CLAUDE.md
 
+Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
+planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,
+ordering, card membership and audit diffs also live in shared modules. Renderer compatibility
+exports keep old imports stable. Host writes use `core/canvas-content-writer.ts` and the existing
+WorkspaceStore queue (`docs/workspace-save-concurrency.md`), publishing reflected content mutations
+before authority overlays persist them. Authorize explicit targets and every indirectly affected
+frame/descendant before applying geometry. Preserve stored metadata and expanded collapsed sizes.
+Server `board` sees only its source project and scope-visible cards; `assign` can move the caller's
+own card or its permitted cards, and never starts work or touches a PTY. Reads keep defaults lazy.
+
+Global Claude transcript search uses `core/transcript-search-ipc.ts` in both shells and is
+owner-only. Server starts scanning lazily and awaits scanner shutdown. An index entry is bound to
+its path, not just its session id; account roots can contain equal ids and mtimes. Filter search
+against currently configured local roots before resolving account identity. Scoped queries use
+`transcript:search-scoped`, with no fallback to the legacy global channel on older hosts.
+
+Local `spawn-team` and `verify` use `core/headless-node-factory.ts` in both shells, with pure
+planning in `shared/team-plan.ts`. Save the whole batch before opening sessions. New dependency
+arms require verified current-session evidence and process-local creator/launch identity;
+restored nodes do not acquire automatic execution authority. Host launches retain the historical
+`executor: 'server'` wire value on Desktop too. Owner Run now goes through `control:run-launch`,
+serialized with automatic delivery; a lost reply must never trigger renderer terminal input.
+Desktop releases synthetic clients after the operation while preserving the persistent backend.
+SSH, Windows and non-headless agents keep their existing Desktop adapter. Missing selected
+accounts and prompt files hold the saved task instead of substituting credentials or a brief.
+
+`core/worktree-control.ts` is the local host create/unbind service. It shares the create/bind
+sequence with Desktop UI (`shared/worktree-create.ts`), uses Git's actual worktree list, and
+rechecks source/group/path claims under the workspace queue before binding. Preparation shares
+the validated materialization service and `ProjectSetupService.runAndWait`; no frame is exposed
+until setup succeeds. Failed setup or canvas persistence retains the successful checkout and
+returns its path. Unbind keeps files and sessions and refuses a missing/unreadable checkout until
+recovered. Removal still needs owner confirmation. `shared/cold-open.ts` supplies stored frame
+placement and cwd inheritance for both renderer and host opens.
+
+Audio/video formats and node data live in `shared/media.ts`. Server uses `core/media-references.ts`
+behind owner-only scoped RPCs and the authenticated `server/media.ts` HTTP route. References carry
+no URL path, remain reusable for seeking, expire unless renewed, and are revoked on client departure
+or explicit release. Every open rechecks the persisted local node, canonical path and inode, then
+streams from that checked descriptor with backpressure and cancellation. Format signatures, resource
+counts and pending I/O are bounded. HTTP session authentication is mandatory even with a valid
+reference. Desktop's native media protocol is unchanged; relay and SSH playback stay refused here.
+
+Browser web nodes use `BrowserWebNode` with an opaque-origin iframe and an external-open fallback.
+Local HTML requires `NODETERM_PREVIEW_ORIGIN` plus a distinct `NODETERM_PUBLIC_ORIGIN` hostname;
+ports do not isolate cookies. `core/web-previews.ts` issues immutable, bounded, owner-client-scoped
+snapshots for saved local web nodes. The preview virtual host serves only snapshots, never app,
+auth or application WS routes, and the app origin never serves snapshots. Local HTML is static:
+resource CSP cannot block a script's self-navigation, so both response and iframe keep scripts
+disabled, retaining sandbox automatic-feature restrictions. Generated files are owner-only,
+content-addressed and preserved while referenced. Native Desktop retains its existing adapter.
+
+`core/owner-confirmation.ts` owns pending owner decisions in both shells. Each request hashes its
+exact normalized binding and presentation and sends independent recipient tokens to registered,
+currently attached owner UIs. Approval yields a short-lived host-only execution permit; mandatory
+`checkCurrent` validation runs when it is consumed, and consumption is single-use even across
+async proof reads. Reconnection, logout, cancellation, expiry or failed target/policy reads cannot
+grant a later effect. Wait outside workspace locks and global command queues. `OwnerConfirmationHost`
+uses the existing dialog, disables Enter approval and button autofocus, and coordinates with Canvas's
+synchronous pending-confirm flags. UI countdowns are receipt-relative; the host deadline remains
+authoritative. The broker grants no waiver and does not alter the existing Server close policy.
+
+Managed Codex lifecycle is shared by Desktop and Server in `core/codex-account-service.ts`.
+`OwnerLifetimes` provides stable connection/document identities with departure subscriptions.
+Native IPC and Server owner RPC supply those identities; relay peers never receive the account
+plane. Reservations pin both accounts before asynchronous planning and check owner + deadline
+again before commit/finish. Disconnect/reload cancels waits and releases reservations. Keep the
+existing rollout hardlink, containment and daemon capability primitives; no implicit system-account
+fallback. The UI persists account settings before every login terminal, including Retry. SSH stays
+behind an injected structural adapter, with explicit refusal when unavailable.
+
+SSH project orchestration lives in `core/remote-ssh/ssh-project.ts` with injected transport,
+authentication, integration and status runners. Remote hooks, freshness/tunnel repair, endpoint
+migration, `SshFs` and remote atomic writes are shared core services too. Old main paths re-export
+their implementations; native IPC, passphrase dialogs, ssh-agent lifetime and media-protocol URLs
+remain shell adapters. Preserve shared connection/gate budgets and all existing strict host,
+consent, partial-write and account-home guards. Source guards follow the actual core implementation.
+The SSH inventory also lives in core: FIFO mutations return only after 0600 atomic persistence,
+keep the old cache on failure and return copies to callers.
+
+`PassphrasePrompts` is the host-only SSH secret-response broker. A request names one recipient
+owner lifetime and has a random id plus deadline; another connection, reload, expiry or oversized
+answer cannot resolve it. No-UI/disconnect/failure yields undefined; only explicit Cancel yields
+null. Release timers and transport waits on every exit, and never persist or broadcast an answer.
+Desktop hooks renderer departure into this service. `ssh-agent` and `ssh-askpass` are shared core
+services with native compatibility adapters; keep data-dir socket namespaces identical before and
+after CorePlatform initialization.
+
+`makeSshProjectRunners` shares native/OpenSSH process composition and the child gate across shells.
+Shells supply their own agent/askpass lifetimes, status and hook coordinates. Reuse
+`core/remote-workspace-io.ts` for checked remote reads, reconciliation and throttled canvas writes;
+flush before disconnect and re-owe a dropped trailing write. A transfer or remote read failure is
+never evidence that a host file is absent.
+
+`withGitRemoteResolver` preserves a request's Git destination through asynchronous operations
+without changing the native global fallback for existing callers. `GitService.registerIpc` accepts
+a sender-aware scope that captures a connection before the first await. Explicit local scopes
+must hide global remote state; disconnected or replaced remote targets must fail before local Git.
+Server's per-connection policy and connection-identity checks belong in its adapter.
+
+`sshReadCheckedArgs` returns its absence status only after proving a missing path below a
+searchable parent. Existing unreadable/nonregular entries and failed cats return an error instead.
+`SshFs.readTextChecked` never treats ordinary nonzero exit or SSH failure as absence; workspace
+reconciliation must preserve that distinction before any attempted remote write.
+
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
+
+Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
+`settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
+`settings:changed` pushes follow successful atomic persistence. `SettingsWriteQueue` overlays
+pending/in-flight UI edits on host snapshots and retains failed patches without resurrecting an
+older edit over a newer one. Only `E_NO_HANDLER` negotiates the legacy full-save path; uncertainty
+never falls back. Clean unloads write nothing. Explicit flush waits for earlier requests before
+the queued barrier. Legacy clients still perform whole-snapshot replacement; they do not gain
+field-level concurrency guarantees retroactively.
+
+Local CLI settings changes in both shells use `core/settings-control.ts`. Wait outside all store
+and command queues, then consume an exact owner permit and compare the approved old state again
+inside the destination store FIFO. A changed source session/account/project or capability answer
+invalidates it. A consumed permit's `current()` also checks owner lifetime/deadline inside that FIFO;
+waiting for an earlier write must not outlive approval. Only existing allowlisted fields may change;
+settings never consult confirm waivers.
+UI and host capability changes use the shared `setProjectCapability` setter, keeping the answer
+machine-local. Desktop cross-project and SSH paths retain their existing adapters.
 
 **Contributors: start with `CONTRIBUTING.md`** — the short version (setup, boundaries, house rules,
 testing habits). This file is what you reach for when you need to know *why* a rule is the way it
@@ -14,6 +137,53 @@ there are any. Structure proportional to the change. `CONTRIBUTING.md` § Pull r
 human-facing half of the same rule.
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+`CanvasExecutionReservations` is a host-local execution-metadata fence, separate from historical
+worktree recovery path markers. Acquire it with the actual node batch permit inside the workspace
+writer FIFO; waiting for `idle()` and acquiring later leaves a gap. It excludes execution, account,
+directory, storage and group membership changes while allowing layout edits and unrelated nodes.
+`WorkspaceStore.setExecutionAdmission` checks candidate content before publication/persistence,
+including authority flushes and phone writers. Client admission and the ordered host observer keep
+refused optimistic edits convergent without reverting accepted visual edits or losing local exec
+carry. Retain the fence through actual effect settlement even after owner departure. The primitive
+does not grant actor rights, lock external filesystem writers, or enable a worktree removal RPC.
+
+Owning Desktop and Server roots install `WorktreeCanvasAdmission` at recovery boot. Its path
+policy compares execution references with current private host state: historical layouts and tab
+closure remain editable, safe repair can move away from a retired path, and stale whole saves or
+new members cannot restore it. Alias resolution is the physical-start resolver, including dangling
+symlinks. Unavailable recovery facts preserve unchanged historical layout but refuse new local
+execution references. Inert editor/diff missing-file notices can keep their old display path; making
+them active again must pass admission. Whole-project checks use one bulk private host snapshot,
+with the same exec overlay/routing as the endpoint getter and separate placement uniqueness checks.
+An empty journal adds no canonical-path IO. These guards do not implement a removal transaction.
+
+`WorktreeRecoveryDispatch` enforces pending-member quarantine at `NodeExecutionCoordinator`'s
+dispatch boundary, including raw owner/headless input, cold create, recycle and agent actions.
+Claims alone do not waive policy: only a host recovery adapter's registered ACTUAL batch permit
+may dispatch to its own members. Lookalike permits, other action kinds, backend-detached callbacks,
+expired continuations and post-scope use remain refused. The callback stays awaited until the
+effect settles; domain authorization and exact fresh owner approval belong to its caller.
+Journal quarantine sets publish only with acknowledged facts, retain known pending members after
+uncertain persistence, and clear at recovered/kept transitions. Unknown corrupt facts do not invent
+quarantines on existing panes; physical starts and new execution references still refuse. A kept
+prepared record can be released only after the domain proved the original directory/Git identity
+and obtained fresh owner approval. The storage primitive does not supply those proofs. The owner
+keyboard notice explicitly identifies pending recovery. No deletion RPC is enabled by this guard.
+
+The first recovery action now exists in `WorktreeRecoveryService`: an authenticated owner's explicit
+keep request releases a prepared record only for its original canonical inode and linked branch.
+The node/backend barrier spans fresh Git proof and durable journal publication; proof runs inside
+the journal FIFO, and owner/record/directory validity is checked at publication/acknowledgement.
+Keeping never invokes Git mutation, PTY input/teardown, archive scripts or canvas changes. It retains
+dirty files and a surviving branch. Changed/missing/unavailable proofs retain the record. Lost disk
+acknowledgement retains known quarantine and requires host reconstruction before mutation.
+Owner list/inspect/keep RPCs take only a host record id, bind actual document lifetimes, and are
+host-only. Both roots cancel owners on departure/close and await journal IO during shutdown. The
+app-global `WorktreeRecoveryHost` exposes reviewed keep actions, reserves the common dialog slot,
+ignores stale responses, hides recovered tombstones and never repeats a lost action. Relay APIs
+omit this plane; old/non-owning hosts negotiate absence. Missing checkout recovery and confirmed
+deletion remain separate outstanding adapters.
 
 ## What this is
 
@@ -5297,7 +5467,7 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   that, `premaxRect` joined the stored geometry fields — before, an off-screen `arrange` restored a
   maximized node in memory and left its restore rect on disk. **Surfaces:** desktop only for the
   verbs. The Server Edition never reaches the renderer dispatch (its bridge's `onAgentControl` is a
-  noop and `createServerEditionControlHandler` serves no layout verb, `list` included), so all four
+  noop and `createServerEditionControlHandler` serves no layout verb), so `resize`/`place`/`arrange`/`move`
   take the named permanent `control-unsupported-on-this-edition` refusal. Relay tabs: an agent's
   call is answered by the HOST desktop's canvas, and the guest sees the result through canvas sync.
   Mobile N/A. Follow-up: `--width/--height` on the open verbs (today they ignore an unknown flag).
@@ -5550,7 +5720,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   delivery only. Its initial commands are persisted before attach/send and retained on failure;
   only acknowledged sends clear them. Boot ownership remains fail-closed. Desktop `list` (live
   and stored projects) names QUEUED / STARTING / LAUNCH FAILED / DROPPED / AGENT STATUS UNCONFIRMED, and every other agent row its state (WORKING / IDLE / NEEDS YOU: an unlabelled idle row and a row waiting on a person used to read the same)
-  rather than treating absence of a hook as success. Server v1 still explicitly refuses `list`.
+  rather than treating absence of a hook as success. The Server Edition answers `list` with the SAME rows
+  (`@shared/control-listing`, `HeadlessNodeFactory.list`): the caller's own node plus the nodes it opened
+  this server run (its ownership rule), its own project only; DROPPED and a stalled delivery are
+  renderer facts it never claims.
   **(8) An armed node must not cold-start its own agent** (found while fixing (7)). The mount-time
   cold-restore relaunch (`fresh && agentId && canResume(...)`) carries a second, independent
   refusal beside the `paused` one (`shouldColdResume`): `!data.pendingLaunch`. A first open is
@@ -11223,3 +11396,56 @@ partial/unknown delivery, with no resend. The SessionStart idle rescue latch sto
 agent and receive time; foreign/missing idle identity never creates proof or changes the
 renderer-visible session. These boundaries have behavioral regressions in
 `core/windows-delivery-safety.test.ts` and the mirror/client suites.
+
+### Host node execution and confirmed input
+
+`core/node-execution.ts` supplies bounded host-only exclusion through
+`PtyManager.runNodeAction`. Claims reject existing queued writes, controller deliveries, creates
+and teardown. An expired owner/deadline cancels the permit but retains exclusion until dispatched
+work settles. Check current saved target and physical generation at dispatch; an expired async
+continuation cannot write or create another node. Do not serialize an owner dialog inside a
+workspace/settings/node queue, expose a generic callback RPC, or mistake a renderer restart mutex
+for cross-tab host ownership. Existing multi-step restart/account flows still need their own
+coordinated domain adapters.
+
+Server's `ConfirmedNodeWrite` is initially local Claude only: verified idle session, kernel-proven
+foreground PID set, empty styled composer, unchanged source/target/account binding, existing
+creator/project policy and single-use exact-text owner approval. A draft/dialog refusal writes
+nothing. Possible paste or uncertain submit is never resent. Mark the existing handover tracker
+and withdraw older outcomes inside exclusion before returning a submitted/uncertain result; the
+next hook may not have arrived. Desktop retains its existing confirmation/waiver orchestration.
+
+Server session-title RPC carries a trailing node id and uses `ServerSessionNames` to derive
+the current account/harness/host/session. Remote, missing or changed targets return no title;
+never let them search local histories. JSON-null optional arguments are normalized at the wire
+adapter. Both RPC and sweep discard changed bindings after a read; the shared sweep also checks
+manual-title/session/account state immediately before publication. Its timer passes do not overlap,
+and Server stops them on both shutdown paths so an in-flight read cannot publish after disposal.
+
+Server SSH Claude histories use `RemoteClaudeTranscripts` behind the owner-bound
+`server/remote-transcripts` routing adapter. Current saved endpoint/account/session and connection
+generation are rechecked at queued dispatch and after IO. A completed RPC or departed owner cannot
+leave an authorized detached continuation. Snapshot queued argv; transport-owned callbacks run
+outside request ALS so later lifecycle work does not inherit expired read identity. The remote
+Python 3/POSIX command opens verified no-follow descriptors, bounds discovery/windows/concurrency,
+and writes no host file. Unknown roots, missing runtimes, unsafe trees and failed reads never mean
+absence or authorize account/local fallback. Read-only histories do not grant remote control proof.
+
+`PtyManager.runNodeActions` / `NodeExecutionCoordinator.runMany` atomically claim a bounded immutable
+set of nodes under one async execution context. Nested single claims do not own a group. Refuse a
+busy member/capacity overflow before claiming any; owner departure keeps every fence until real
+work settles. Expired continuations remain invalid after release. This host-only primitive grants
+neither filesystem path ownership nor worktree-removal authority.
+
+Server CLI branching uses `ConfirmedNodeBranch` plus `LocalClaudeActionTarget`, sharing `write`'s
+caller/project/account checks. Bind linked config directories too. Owner consent precedes queues;
+the fixed local POSIX tmux submit path announces Enter dispatch before allowing the expected target
+session change. Fresh pane evidence and its verified runtime id are both required. Unknown input
+is never repeated. A confirmed branch's original-resume transaction reserves its new node before
+publication, binds its physical generation and retains failed launches for recovery. Private exec
+checks use `getNodeForHostAction`, never a shared record that omits pending commands. Backend
+resources/callbacks leave node-action ALS; expired application continuations do not. The legacy
+renderer/Desktop branch path now invokes the same host service through its owner-only entry.
+That entry uses the real document lifetime and never fabricates an agent caller or creator grant.
+The UI saves first; unsupported hosts or lost replies cannot fall back to raw input. Relay tabs
+omit owner control actions so remote ids cannot target the viewer's local desktop.

@@ -93,6 +93,39 @@ function lastAgentStatus(): Record<string, unknown> | undefined {
 }
 
 describe('wireAgentStatus', () => {
+  it('refuses local transcript work for known remote hooks while keeping normalized status', () => {
+    const fh = fakeHooks(); const sub = recTail(); const ctx = recTail()
+    wireAgentStatus(platform, { hooks: fh.hooks as never, subagentTail: sub.tail as never,
+      contextTail: ctx.tail as never, isRemoteNode: () => true })
+    for (const agentId of ['claude', 'codex', 'gemini', 'grok', 'cursor', 'antigravity']) {
+      fh.fireRaw(agentId, 'remote', { hook_event_name: 'PreToolUse', session_id: 's',
+        transcript_path: path.join(os.homedir(), '.claude/projects/repo/s.jsonl'),
+        tool_name: 'Task', tool_use_id: 'child' }, true)
+    }
+    expect(ctx.calls).toEqual([]); expect(sub.calls).toEqual([])
+    const event = { nodeId: 'remote', agentId: 'claude', kind: 'state', state: 'working' }
+    fh.fireNormalized(event)
+    expect(lastAgentStatus()).toMatchObject(event)
+  })
+
+  it('releases an earlier local tail when current routing becomes remote', () => {
+    const fh = fakeHooks(); const sub = recTail(); const ctx = recTail(); let remote = false
+    const tails = wireAgentStatus(platform, { hooks: fh.hooks as never, subagentTail: sub.tail as never,
+      contextTail: ctx.tail as never, isRemoteNode: () => remote })
+    const payload = { hook_event_name: 'PreToolUse', session_id: 's',
+      transcript_path: path.join(os.homedir(), '.claude/projects/repo/s.jsonl'),
+      tool_name: 'Task', tool_use_id: 'child' }
+    fh.fireRaw('claude', 'node', payload)
+    expect(ctx.calls.some((call) => call.m === 'track')).toBe(true)
+    ctx.calls.length = 0; sub.calls.length = 0; remote = true
+    tails.reconcileRouting()
+    expect(ctx.calls).toContainEqual({ m: 'untrack', args: ['s'] })
+    fh.fireRaw('claude', 'node', payload)
+    expect(ctx.calls).toContainEqual({ m: 'untrack', args: ['s'] })
+    expect(ctx.calls.some((call) => call.m === 'track')).toBe(false)
+    expect(sub.calls).toContainEqual({ m: 'finish', args: ['child'] })
+  })
+
   it('broadcasts a normalized agent event on agent:status', () => {
     const fh = fakeHooks()
     wireAgentStatus(platform, { hooks: fh.hooks as never })

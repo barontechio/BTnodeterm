@@ -1,8 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   buildClaudeAccountsApi,
+  buildCodexAccountsApi,
+  buildSshApi,
+  buildLicenseApi,
+  buildControlApi,
+  buildMediaApi,
+  buildWebPreviewApi,
+  buildOwnerConfirmationApi,
+  buildTranscriptSearchApi,
+  buildBoardCommentDeliveryApi,
   buildFilesApi,
   buildRealApi,
   buildSessionMemoryApi,
@@ -11,6 +20,7 @@ import {
 import { buildStubApi } from './stubs'
 import { E_UNSUPPORTED } from '../../shared/rpc'
 import { IPC } from '../../shared/ipc'
+import { boardCommentOutcomeText } from '../../shared/board-comment'
 
 function fakeClient() {
   const calls: Array<{ kind: string; method: string; args: unknown[] }> = []
@@ -27,6 +37,210 @@ function fakeClient() {
     }
   }
 }
+
+describe('Server SSH owner protocol', () => {
+  it('waits for prompt readiness and carries explicit project context on filesystem requests', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    let ready!: (value: string) => void
+    request.mockImplementationOnce(() => new Promise<string>((resolve) => { ready = resolve }))
+    const api = buildSshApi(c as never)
+    const registration = api.sshProject.connectPrompts!()
+    const connecting = api.sshProject.connect('remote', { user: 'u', host: 'h' }, '/project')
+    await Promise.resolve()
+    expect(c.calls.some((call) => call.method === IPC.sshConnectProject)).toBe(false)
+    ready('epoch'); await registration; await connecting
+    await api.sshFs.read('remote', '/project/file')
+    await api.sshProject.disconnectPrompts!('epoch')
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshConnectProject, args: ['remote', { user: 'u', host: 'h' }, '/project'] })
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshFsRead, args: ['remote', '/project/file'] })
+    expect(c.calls).toContainEqual({ kind: 'request', method: IPC.sshPromptDisconnect, args: ['epoch'] })
+  })
+  it('negotiates only a missing capability handler and propagates transport failures', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request'); const api = buildSshApi(c as never)
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.sshProject.capabilities!()).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.sshProject.capabilities!()).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    api.sshProject.onPassphraseRequest(() => {}); api.sshProject.onPassphraseDismiss(() => {})
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseRequest, args: [] })
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.sshPassphraseDismiss, args: [] })
+  })
+})
+
+describe('Server license checkout', () => {
+  it('opens during the click and closes an unused popup when the host refuses', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    const popup = { opener: {}, location: { replace: vi.fn() }, close: vi.fn() }
+    const open = vi.fn(() => popup); vi.stubGlobal('window', { open })
+    try {
+      const status = { active: false }
+      request.mockResolvedValueOnce({ checkoutUrl: 'https://checkout.example.test/owner', status } as never)
+      const upgrading = buildLicenseApi(c as never).license.upgrade()
+      expect(open).toHaveBeenCalledOnce(); expect(popup.opener).toBeNull()
+      expect(await upgrading).toEqual(status)
+      expect(popup.location.replace).toHaveBeenCalledWith('https://checkout.example.test/owner')
+      request.mockRejectedValueOnce(new Error('license-disabled'))
+      await expect(buildLicenseApi(c as never).license.upgrade()).rejects.toThrow('license-disabled')
+      expect(popup.close).toHaveBeenCalledOnce()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('does not start a checkout if the browser blocks the window', async () => {
+    const c = fakeClient(); vi.stubGlobal('window', { open: () => null })
+    try {
+      await expect(buildLicenseApi(c as never).license.upgrade()).rejects.toThrow('Allow popups')
+      expect(c.calls).toEqual([])
+    } finally { vi.unstubAllGlobals() }
+  })
+})
+
+describe('Server media protocol', () => {
+  it('uses scoped references and renews/releases the opaque token without passing URL paths', async () => {
+    const c = fakeClient()
+    const media = buildMediaApi(c as never).media
+    await media.allow('/clip.mp4', { projectId: 'p', nodeId: 'v' })
+    await media.renew!('/media?ref=opaque')
+    await media.release!('/media?ref=opaque')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.mediaAllowScoped, args: ['/clip.mp4', { projectId: 'p', nodeId: 'v' }] },
+      { kind: 'request', method: IPC.mediaRenew, args: ['opaque'] },
+      { kind: 'request', method: IPC.mediaRelease, args: ['opaque'] }
+    ])
+  })
+})
+
+describe('owner settings synchronization', () => {
+  it('negotiates legacy saves only for a missing patch handler', async () => {
+    const c = fakeClient(); const request = vi.spyOn(c, 'request')
+    const api = buildRealApi(c as never).settings
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.patch!({ gridSize: 24 })).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.patch!({ gridSize: 32 })).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    expect(c.calls.some((call) => call.method === IPC.settingsSave)).toBe(false)
+    api.onChanged!(() => {})
+    expect(c.calls).toContainEqual({ kind: 'subscribe', method: IPC.settingsChanged, args: [] })
+  })
+})
+
+describe('managed Codex account protocol', () => {
+  it('sends all lifecycle phases through the same owner connection, without credential fields', async () => {
+    const c = fakeClient(); const api = buildCodexAccountsApi(c as never).codexAccounts
+    await api.add(); await api.waitLogin('account'); await api.identity('account')
+    await api.switchThread('thread', '/project', 'source', 'target')
+    await api.commitSwitch('ticket'); await api.finishSwitch('ticket'); await api.rollbackSwitch('ticket')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.codexAccountsAdd, args: [undefined] },
+      { kind: 'request', method: IPC.codexAccountsWaitLogin, args: ['account', undefined] },
+      { kind: 'request', method: IPC.codexAccountsIdentity, args: ['account', undefined] },
+      { kind: 'request', method: IPC.codexAccountsSwitchThread, args: ['thread', '/project', 'source', 'target'] },
+      { kind: 'request', method: IPC.codexAccountsCommitSwitch, args: ['ticket'] },
+      { kind: 'request', method: IPC.codexAccountsFinishSwitch, args: ['ticket'] },
+      { kind: 'request', method: IPC.codexAccountsRollbackSwitch, args: ['ticket'] }
+    ])
+  })
+})
+
+describe('isolated web preview protocol', () => {
+  it('issues by saved-node scope and passes only the opaque token when renewing or releasing', async () => {
+    const c = fakeClient(); const api = buildWebPreviewApi(c as never).webPreview!
+    await api.allow({ projectId: 'p', nodeId: 'web' })
+    await api.renew('https://preview.example.test/web-preview?ref=one')
+    await api.release('https://preview.example.test/web-preview?ref=one')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.webPreviewAllow, args: [{ projectId: 'p', nodeId: 'web' }] },
+      { kind: 'request', method: IPC.webPreviewRenew, args: ['one'] },
+      { kind: 'request', method: IPC.webPreviewRelease, args: ['one'] }
+    ])
+  })
+})
+
+describe('owner confirmation protocol', () => {
+  it('binds connection lifetime and exact one-use decisions to owner RPC', async () => {
+    const c = fakeClient(); const api = buildOwnerConfirmationApi(c as never).ownerConfirmation!
+    await api.connect()
+    await api.decide({ id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    await api.disconnect('epoch')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.ownerConfirmationConnect, args: [] },
+      { kind: 'request', method: IPC.ownerConfirmationDecide, args: [{ id: 'one', token: 'token', proof: 'proof', answer: 'approve' }] },
+      { kind: 'request', method: IPC.ownerConfirmationDisconnect, args: ['epoch'] }
+    ])
+  })
+})
+
+describe('transcript search protocol', () => {
+  it('uses an additive channel so an old host cannot silently ignore account scope', async () => {
+    const c = fakeClient()
+    const api = buildTranscriptSearchApi(c as never)
+    await api.transcripts.search('needle')
+    await api.transcripts.search('needle', { accountId: 'a', limit: 10 })
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.transcriptSearch, args: ['needle'] },
+      { kind: 'request', method: IPC.transcriptSearchScoped, args: ['needle', { accountId: 'a', limit: 10 }] }
+    ])
+    const old = { request: () => Promise.reject(new Error('no scoped handler')) }
+    await expect(buildTranscriptSearchApi(old as never).transcripts.search('needle', { accountId: 'a' })).rejects.toThrow('no scoped handler')
+  })
+})
+
+describe('Server board comment delivery', () => {
+  it('requests delivery and surfaces an uncertain connection outcome without retrying', async () => {
+    const c = fakeClient()
+    const api = buildBoardCommentDeliveryApi(c as never, buildStubApi().agentMessage)
+    const request = { projectId: 'p', commentId: 'c', author: 'Owner', text: 'hello', targetNodeId: 'a' }
+    await api.agentMessage.deliverBoardComment(request)
+    expect(c.calls).toEqual([{ kind: 'request', method: IPC.agentBoardCommentDeliver, args: [request] }])
+    const lost = { request: () => Promise.reject(new Error('socket closed')) }
+    const reply = await buildBoardCommentDeliveryApi(lost as never, buildStubApi().agentMessage).agentMessage.deliverBoardComment(request)
+    expect(reply).toMatchObject({ ok: false, result: { kind: 'deliveryUnknown' } })
+    expect(boardCommentOutcomeText('deliveryUnknown')).toMatchObject({ tone: 'warn', text: expect.stringContaining('inspect the session') })
+  })
+})
+
+describe('buildControlApi', () => {
+  it('routes owner recovery once, negotiates an old host and never replays a lost keep response', async () => {
+    const request = vi.fn(async (_method: string, ..._args: unknown[]) => ({ ok: true, records: [] }))
+    const api = buildRealApi({ request, subscribe: () => () => {} } as never).worktree.recovery!
+    await api.list(); await api.inspect('record'); await api.keep('record')
+    expect(request.mock.calls.map((call) => call[0])).toEqual([IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep])
+    request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
+    expect(await api.list()).toBeNull()
+    request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
+    await expect(api.keep('record')).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
+    expect(request).toHaveBeenCalledTimes(5)
+  })
+  it('branches once through the owner host RPC and never falls back after a missing or lost reply', async () => {
+    const request = vi.fn(async () => ({ ok: true, newNodeId: 'copy' }))
+    expect(await buildControlApi({ request } as never).control!.branchClaude!('node', { x: 10, y: 20 })).toMatchObject({ ok: true, newNodeId: 'copy' })
+    expect(request).toHaveBeenCalledExactlyOnceWith(IPC.controlBranchClaude, 'node', { x: 10, y: 20 })
+    for (const code of ['E_NO_HANDLER', 'E_DISCONNECTED']) {
+      const missing = vi.fn(async () => { throw { code } })
+      expect(await buildControlApi({ request: missing } as never).control!.branchClaude!('node')).toMatchObject({ ok: false })
+      expect(missing).toHaveBeenCalledTimes(1)
+    }
+  })
+  it('negotiates host-owned launch recovery and never falls back after a lost reply', async () => {
+    const request = vi.fn(async (method: string) => method === IPC.controlCapabilities ? { hostLaunches: true } : { ok: true, started: true })
+    const api = buildControlApi({ request } as never)
+    expect(await api.control!.runLaunch!('node', 'task')).toMatchObject({ started: true })
+    expect(request).toHaveBeenCalledWith(IPC.controlRunLaunch, 'node', 'task')
+    const lost = { request: async (method: string) => {
+      if (method === IPC.controlCapabilities) return { hostLaunches: true }
+      throw new Error('connection closed after submission')
+    } }
+    expect(await buildControlApi(lost as never).control!.runLaunch!('node', 'task')).toMatchObject({ ok: false, started: false })
+    const old = { request: async () => { throw Object.assign(new Error('no handler'), { code: 'E_NO_HANDLER' }) } }
+    expect(await buildControlApi(old as never).control!.runLaunch!('node', 'task')).toBeNull()
+  })
+  it('reads the host report and reports unknown on an older or unreachable host', async () => {
+    const c = fakeClient()
+    expect(await buildControlApi(c as never).control!.capabilities()).toBe('R')
+    expect(c.calls).toEqual([{ kind: 'request', method: IPC.controlCapabilities, args: [] }])
+    const old = { request: () => Promise.reject(new Error('no handler')) }
+    expect(await buildControlApi(old as never).control!.capabilities()).toBeNull()
+    expect(await buildStubApi().control!.capabilities()).toBeNull()
+  })
+})
 
 describe('buildFilesApi', () => {
   it('fs/git/files members are request-shaped with the right channels', async () => {
@@ -87,6 +301,29 @@ describe('buildRealApi: workspace', () => {
     const un = api.workspace.onCorruptRecovered(() => {})
     expect(c.calls[0]).toEqual({ kind: 'subscribe', method: IPC.workspaceCorruptRecovered, args: [] })
     expect(typeof un).toBe('function')
+  })
+})
+
+describe('buildRealApi: pty naming', () => {
+  // ✦ Name with AI used to resolve a hard-coded "not available in the server edition yet" here,
+  // long after the naming module moved to core. The server registers the same handlers as the
+  // desktop (core/naming-ipc.ts), so both members must reach them with every argument.
+  it('generateName / generateGroupName request the real server channels', async () => {
+    const c = fakeClient()
+    const api = buildRealApi(c as never)
+    await api.pty.generateName('n1', '/repo', 'acct-1')
+    await api.pty.generateGroupName(['n1', 'n2'], '/repo')
+    expect(c.calls).toEqual([
+      { kind: 'request', method: IPC.ptyGenerateName, args: ['n1', '/repo', 'acct-1'] },
+      { kind: 'request', method: IPC.ptyGenerateGroupName, args: [['n1', 'n2'], '/repo'] }
+    ])
+  })
+
+  it('answers a dropped socket or a relay refusal as a failed naming, never a rejection', async () => {
+    const c = { ...fakeClient(), request: () => Promise.reject(new Error('refused')) }
+    const api = buildRealApi(c as never)
+    await expect(api.pty.generateName('n1', '/repo')).resolves.toEqual({ ok: false, message: 'refused' })
+    await expect(api.pty.generateGroupName(['n1'], '/repo')).resolves.toEqual({ ok: false, message: 'refused' })
   })
 })
 

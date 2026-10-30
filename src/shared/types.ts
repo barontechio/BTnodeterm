@@ -485,9 +485,9 @@ export interface PendingLaunch {
   /** Delivered to the node's shell once the wait is over (agent CLI + prompt, or a plain command). */
   command: string
   /**
-   * Which core process owns delivery. Absent is the historical renderer-owned path. Server
-   * Edition headless opens stamp `server`, so a connected browser can render the armed state and
-   * dependency edges without racing the server to type the command into the same pane. The
+   * Which core process owns delivery. Absent is the historical renderer-owned path. Headless
+   * opens and orchestration on both shells retain the `server` wire value, so a connected viewer
+   * renders the armed state without racing the host scheduler to type into the same pane. The
    * desktop's headless start (#925) stamps `core` on its manualOnly write-ahead claim.
    */
   executor?: 'server' | 'core'
@@ -496,7 +496,7 @@ export interface PendingLaunch {
    * agent can briefly report `done` while its argv prompt is still booting; that idle blip must not
    * release a downstream launch. The server removes an id only after a verified `working` event,
    * then requires the ordinary later `done`. Persisted so a server restart cannot forget the gate.
-   * Desktop-owned launches leave this absent; renderer parity is a separate follow-up.
+   * Legacy renderer-owned launches leave this absent; headless orchestration on either shell uses it.
    */
   awaitWorking?: string[]
   /**
@@ -1469,10 +1469,13 @@ export interface PtyApi {
    *  the `/resume` name (e.g. after resume) without cross-contaminating same-folder sessions.
    *  `accountId` scopes the lookup to a managed Claude account's transcript root (default `~/.claude`).
    *  `agentId` picks the reader — grok's name lives in its session metadata, not a claude transcript;
-   *  omitted (every pre-grok caller) means the claude transcript reader. */
-  readSessionName(sessionId: string, accountId?: string, agentId?: string): Promise<string | null>
+   *  omitted (every pre-grok caller) means the claude transcript reader. `nodeId` binds Server
+   *  reads to current saved host/account/session routing; Native keeps its existing reader. */
+  readSessionName(sessionId: string, accountId?: string, agentId?: string, nodeId?: string): Promise<string | null>
   /** Listens for PTY output. Returns an unsubscribe function. */
   onData(sessionId: string, listener: (data: string) => void): () => void
+  /** Optional for older hosts. An exclusive host action refused this client's keyboard input. */
+  onInputBlocked?(listener: (event: { nodeId: string; reason?: 'worktree-recovery' }) => void): () => void
   /** Fires when the PTY process exits. Returns an unsubscribe function. */
   onExit(sessionId: string, listener: (exitCode: number) => void): () => void
   /** The authoritative size of a co-attached session: min(cols) × min(rows) over all subscribers
@@ -1611,6 +1614,8 @@ export interface ProjectSetupApi {
 }
 
 export interface WorktreeApi {
+  /** Owner administration for this core's local recovery state. Absent on old/relay clients. */
+  recovery?: import('./worktree-recovery').WorktreeRecoveryApi
   /**
    * Symlink a project's configured `sharedPaths` (git-ignored dirs like `node_modules`) from its
    * repo root into a freshly-created git worktree, so a setup `npm install` there sees the links.
@@ -1741,8 +1746,11 @@ export interface FilesApi {
 }
 
 export interface MediaApi {
-  /** Allow an absolute local path to be served, and return its nt-media:// URL. */
-  allow(absPath: string): Promise<string>
+  /** Desktop returns nt-media://; Server requires a saved node scope and returns an HTTP reference. */
+  allow(absPath: string, scope?: import('./media').MediaScope): Promise<string>
+  /** Optional Server reference lifecycle; native protocol URLs need neither operation. */
+  renew?(url: string): Promise<boolean>
+  release?(url: string): Promise<void>
   /**
    * Allow a file that lives on an SSH project's HOST: main pulls it into a local cache over the
    * project's ControlMaster (skipped when the cached copy's size still matches the remote), then
@@ -2653,6 +2661,9 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface SettingsApi {
   load(): Promise<Settings>
   save(settings: Settings): Promise<void>
+  /** Atomic owner edits; null means an older host has no patch handler. */
+  patch?(patch: Partial<Settings>): Promise<Settings | null>
+  onChanged?(listener: (settings: Settings) => void): () => void
 }
 
 /** Agent-integration consent status (issue #744). The CHOICE rides `settings.agentIntegrations`;
@@ -2763,6 +2774,9 @@ export interface SshPassphraseRequest {
 }
 
 export interface SshProjectApi {
+  capabilities?(): Promise<{ enabled: boolean; filesystem: boolean; transfers: boolean; media: boolean; transcriptAgents?: string[]; hostContext: 'server' } | null>
+  connectPrompts?(): Promise<string>
+  disconnectPrompts?(epoch: string): Promise<void>
   /** Open (or reuse) the ControlMaster for an SSH project; resolves once connected. */
   connect(
     projectId: string,
@@ -3534,12 +3548,14 @@ export interface ContextApi {
 export interface CanvasApi {
   /**
    * Publish one local node mutation for `projectId` (a project IS a canvas — a mutation is only
-   * ever applied to the canvas it was made on). Fire-and-forget; the reflector fans it out to every
-   * OTHER attached client and never echoes it back to the sender.
+   * ever applied to the canvas it was made on). The reflector echoes its ordered acknowledgement.
+   * A host refusal retires that pending slot, then publishes the canonical state and a notice.
    */
   mutate(projectId: string, mutation: CanvasMutation): void
-  /** Fires with each PEER's mutation (project id + mutation). Returns unsubscribe. */
+  /** Fires with ordered peer/core mutations and our acknowledgements. Returns unsubscribe. */
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
+  /** Addressed host refusal; a canonical correction may arrive on onMutation. Older hosts omit it. */
+  onMutationRejected?(listener: (projectId: string, message: string) => void): () => void
 }
 
 /**
@@ -3664,6 +3680,8 @@ export interface ChatTranscriptResult {
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed
    *  to "no transcript exists". Absent on every other result. */
   unreadable?: true
+  /** Optional actionable refusal from a strict SSH reader; older hosts keep generic copy. */
+  unreadableReason?: 'remote-runtime-unavailable' | 'remote-unsafe-transcript' | 'remote-reader-unavailable' | 'remote-reader-permission-required'
 }
 
 /**
@@ -3882,9 +3900,16 @@ export interface TranscriptHit {
   accountId?: string
 }
 
+export interface TranscriptSearchScope {
+  /** null = system account; absent = all configured local accounts. */
+  accountId?: string | null
+  cwd?: string
+  limit?: number
+}
+
 export interface TranscriptsApi {
   /** Search all on-disk Claude session transcripts by content. */
-  search(query: string): Promise<TranscriptHit[]>
+  search(query: string, scope?: TranscriptSearchScope): Promise<TranscriptHit[]>
 }
 
 /** What the Claude CLI on THIS machine can do. Fed by the `claude --version` probe in
@@ -4156,6 +4181,7 @@ export interface LicenseDetail {
 }
 
 export interface LicenseApi {
+  capabilities?(): Promise<{ enabled: boolean; hostContext: 'server' } | null>
   /** Open Stripe checkout bound to this device and poll for the entitlement (no key paste).
    * `target` picks the link: 'seats' = the add-seats (quantity) link, else base Pro (default).
    * Returns the current status immediately; the active status arrives via onChange. */
@@ -4564,6 +4590,14 @@ export interface OpenLinkApi {
 }
 
 export interface NodeTerminalApi {
+  /** Optional for older hosts; null means this connection cannot describe the host's support. */
+  control?: {
+    capabilities(): Promise<import('./control-capabilities').ControlCapabilityReport | null>
+    /** Null means an older host; transport errors must return a refusal, never a legacy fallback. */
+    runLaunch?(nodeId: string, expectedCommand: string): Promise<import('./headless-launch').HostLaunchReply | null>
+    /** Owner action on the host. Missing support or a lost reply must never fall back to raw input. */
+    branchClaude?(nodeId: string, at?: import('./conversation-branch').ConversationBranchPosition): Promise<import('./conversation-branch').ConversationBranchReply>
+  }
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi
@@ -4581,6 +4615,8 @@ export interface NodeTerminalApi {
   shell: ShellApi
   fs: FsApi
   media: MediaApi
+  webPreview?: import('./web-preview').WebPreviewApi
+  ownerConfirmation?: import('./owner-confirmation').OwnerConfirmationApi
   browser: BrowserApi
   files: FilesApi
   updates: UpdateApi

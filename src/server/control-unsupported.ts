@@ -1,5 +1,9 @@
 import { parseControlRequest } from '../core/canvas-control-core'
+import { controlCapabilitiesReply } from '../core/control-capabilities'
+import { controlCapabilities, serverSupportsControl } from '../shared/control-capabilities'
 import type { ServerControlReply } from './headless-node-factory'
+import type { GeometryControlVerb } from '../shared/geometry-command'
+import { controlOpenAgent } from '../shared/control-open-agent'
 
 /**
  * The Server Edition's answer to `/control/*`: a NAMED, permanent refusal.
@@ -55,15 +59,27 @@ export function controlUnsupportedMessage(verb: string): string {
  * OFF. This preserves the pre-Phase-1 response byte-for-byte, which is both the safe upgrade
  * default and the explicit rollback path.
  */
-export async function serverEditionControlHandler({ verb }: { verb: string }): Promise<{
-  ok: false
-  error: string
-  message: string
-}> {
+export async function serverEditionControlHandler({ verb, args = {}, verified = false }: {
+  verb: string
+  args?: Record<string, string>
+  verified?: boolean
+}): Promise<ServerControlReply> {
+  if (verb === 'capabilities') return controlCapabilitiesReply(controlCapabilities('server', false), args, verified)
   return { ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: controlUnsupportedMessage(verb) }
 }
 
 export interface ServerEditionControlActions {
+  write?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  branch?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  worktree(verb: 'open-worktree' | 'close-worktree', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  orchestrate(verb: 'spawn-team' | 'verify', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  reportIssue(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  showImage(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  showVideo(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  showWeb(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
+  board(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  assign(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   openProject(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -93,8 +109,8 @@ export interface ServerEditionControlActions {
   rename(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   color(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   sticky(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
-  /** Reads only; `--set` is refused by name (src/server/settings-control.ts). */
-  settings(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
+  /** Changes need the shared owner-confirmed service; reads retain the legacy helper. */
+  settings(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   /** `run --node <id>` (#925): deliver a retained launch for the node's creator. */
   run(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   /** `report-outcome` (@shared/station-outcome): a station's report about ITSELF — no creator check,
@@ -102,6 +118,8 @@ export interface ServerEditionControlActions {
   reportOutcome(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   /** `issues` / `prs` (core/github/control-read.ts): the board's GitHub lane, read-only, from the
    *  GitHub service's cache. The caller's own project only (this edition keeps no grant ledger). */
+  /** `list` (@shared/control-listing): the caller's canvas, read-only, the desktop's rows. */
+  list(sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   githubRead(verb: 'issues' | 'prs', sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply>
   deliver(input: {
     verb: 'send' | 'reply' | 'notify'
@@ -111,25 +129,6 @@ export interface ServerEditionControlActions {
   }): Promise<ServerControlReply>
 }
 
-const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
-  'open-project',
-  'open-terminal',
-  'open-agent',
-  'close',
-  'link',
-  'group',
-  'rename',
-  'color',
-  'send',
-  'reply',
-  'notify',
-  'sticky',
-  'settings',
-  'run',
-  'report-outcome',
-  'issues',
-  'prs'
-])
 
 /** A permanent, verb-specific refusal used only while canvas control itself is enabled. */
 export function unsupportedServerVerbMessage(verb: string): string {
@@ -153,7 +152,7 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
   verified: boolean
 }) => Promise<ServerControlReply> {
   return async ({ verb, nodeId, args, verified }) => {
-    if (!SERVER_V1_VERBS.has(verb)) {
+    if (!serverSupportsControl(verb)) {
       return {
         ok: false,
         error: CONTROL_UNSUPPORTED_ERROR,
@@ -172,19 +171,53 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       }
     }
 
-    switch (command.verb) {
+    switch (verb) {
+      case 'branch':
+        return actions.branch ? actions.branch(nodeId, command.args, verified) : {
+          ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: 'branch-unavailable: no owner confirmation adapter is installed. Do not retry.'
+        }
+      case 'write':
+        return actions.write ? actions.write(nodeId, command.args, verified) : {
+          ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: 'write-unavailable: no owner confirmation adapter is installed. Do not retry.'
+        }
+      case 'capabilities':
+        return controlCapabilitiesReply(controlCapabilities('server', true), command.args, verified)
       case 'open-project':
         return actions.openProject(nodeId, command.args, verified)
       case 'open-terminal':
         return actions.openTerminal(nodeId, command.args, verified)
       case 'open-agent':
-        return actions.openAgent(nodeId, command.args, verified)
+      case 'open-claude':
+        return actions.openAgent(nodeId, controlOpenAgent(verb, command.args), verified)
+      case 'show-image':
+        return actions.showImage(nodeId, command.args, verified)
+      case 'show-video':
+        return actions.showVideo(nodeId, command.args, verified)
+      case 'show-web':
+        return actions.showWeb(nodeId, command.args, verified)
+      case 'spawn-team':
+      case 'verify':
+        return actions.orchestrate(verb, nodeId, command.args, verified)
+      case 'open-worktree':
+      case 'close-worktree':
+        return actions.worktree(verb, nodeId, command.args, verified)
       case 'close':
         return actions.close(nodeId, command.args, verified)
       case 'link':
         return actions.link(nodeId, command.args, verified)
       case 'group':
         return actions.group(nodeId, command.args)
+      case 'board':
+        return actions.board(nodeId, command.args)
+      case 'assign':
+        return actions.assign(nodeId, command.args)
+      case 'ungroup':
+      case 'move':
+      case 'resize':
+      case 'place':
+      case 'arrange':
+      case 'align':
+        return actions.geometry(verb, nodeId, command.args)
       case 'rename':
         return actions.rename(nodeId, command.args)
       case 'color':
@@ -192,30 +225,34 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
       case 'sticky':
         return actions.sticky(nodeId, command.args)
       case 'settings':
-        return actions.settings(nodeId, command.args)
+        return actions.settings(nodeId, command.args, verified)
       case 'run':
         return actions.run(nodeId, command.args, verified)
       case 'report-outcome':
         return actions.reportOutcome(nodeId, command.args, verified)
+      case 'report-issue':
+        return actions.reportIssue(nodeId, command.args, verified)
+      case 'list':
+        return actions.list(nodeId, command.args)
       case 'issues':
       case 'prs':
-        return actions.githubRead(command.verb, nodeId, command.args)
+        return actions.githubRead(verb, nodeId, command.args)
       case 'send':
       case 'reply':
       case 'notify':
         return actions.deliver({
-          verb: command.verb,
+          verb,
           sourceNodeId: nodeId,
           targetNodeId: command.args.node,
-          body: command.verb === 'notify' ? '' : command.args.text
+          body: verb === 'notify' ? '' : command.args.text
         })
       default:
-        // `SERVER_V1_VERBS` and this switch are kept separate on purpose: the parser's wider
-        // ControlVerb union can grow without silently making a new server action reachable.
+        // Adding a supported command requires an implementation here as well as its manifest.
+        const unreachable: never = verb
         return {
           ok: false,
           error: CONTROL_UNSUPPORTED_ERROR,
-          message: unsupportedServerVerbMessage(verb)
+          message: unsupportedServerVerbMessage(unreachable)
         }
     }
   }

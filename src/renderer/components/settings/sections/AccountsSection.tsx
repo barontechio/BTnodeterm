@@ -876,18 +876,25 @@ export function AccountsSection({ isActive }: { isActive: boolean }): React.JSX.
     const remote = !!account.host
     const projectId = remote ? connectedProjectIdForHost(account.host) : undefined
     if (remote && !projectId) return
-    window.dispatchEvent(
-      new CustomEvent('nodeterm:add-codex-account-login', {
-        detail: remote ? { accountId: account.id, remote, host: account.host } : { accountId: account.id }
-      })
-    )
-    const captured = projectId
-      ? await window.nodeTerminal.codexAccounts.waitLogin(account.id, { projectId })
-      : await window.nodeTerminal.codexAccounts.waitLogin(account.id)
-    if (captured) {
-      applyCodexAccounts((accs) =>
-        applyResolvedCodexAccounts(accs, [{ id: account.id, email: captured.email }])
+    try {
+      // Retry can follow a failed initial settings save. The host must recognize the managed
+      // account before an agent-less login terminal opens, on every entry into this workflow.
+      await useSettings.getState().flush()
+      window.dispatchEvent(
+        new CustomEvent('nodeterm:add-codex-account-login', {
+          detail: remote ? { accountId: account.id, remote, host: account.host } : { accountId: account.id }
+        })
       )
+      const captured = projectId
+        ? await window.nodeTerminal.codexAccounts.waitLogin(account.id, { projectId })
+        : await window.nodeTerminal.codexAccounts.waitLogin(account.id)
+      if (captured) {
+        applyCodexAccounts((accs) =>
+          applyResolvedCodexAccounts(accs, [{ id: account.id, email: captured.email }])
+        )
+      }
+    } catch (error) {
+      setAddError(addKey('codex', account.host ?? ''), errorText(error, 'Could not complete the Codex login. Retry after reconnecting.'))
     }
   }
 
@@ -914,16 +921,13 @@ export function AccountsSection({ isActive }: { isActive: boolean }): React.JSX.
         ...(host ? { host } : {})
       }
       applyCodexAccounts((accs) => [...accs, account])
-      // PTY scoping identifies this agent-less login by the core's account list. The ordinary
-      // settings save is coalesced for 300 ms; launching before it lands uses the system home.
-      await useSettings.getState().flush()
     } catch (e) {
       // Without this the browser's E_UNSUPPORTED rejection was an UNHANDLED promise rejection: the
       // spinner stopped and nothing else happened, which reads as a dead button.
       setAddError(
         key,
         isUnsupported(e)
-          ? 'Managed Codex accounts are not available in the browser yet — manage them from the desktop app.'
+          ? 'Managed Codex accounts are unavailable on the connected host. Update the host or use its supported account settings.'
           : host
             ? errorText(e, `Could not set up a Codex account on ${host}.`)
             : 'Could not set up the Codex account.'

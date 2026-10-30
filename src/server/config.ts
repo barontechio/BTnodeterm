@@ -1,4 +1,5 @@
 import os from 'os'
+import { parseControlScope, type ControlScope } from './control-scope'
 import path from 'path'
 import {
   parseTrustedNets,
@@ -57,6 +58,16 @@ export type ServerConfig = {
    * NODETERM_CANVAS_CONTROL discovery bit injected by HookServer.
    */
   canvasControl?: boolean
+  /** Opt-in server-host SSH context; credentials/config are this host's, never the viewer's. */
+  sshProjects?: boolean
+  /** Enables host-bound licensing and licensed Live Links. Off by default, with no license polling. */
+  licenseEnabled?: boolean
+  /**
+   * Which nodes a canvas-control caller may read and act on (src/server/control-scope.ts):
+   * `creator` (default) or `project`. Environment: NODETERM_SERVER_CONTROL_SCOPE; CLI:
+   * --control-scope. Only meaningful with canvas control enabled.
+   */
+  controlScope?: ControlScope
   /**
    * Reverse-proxy SSO trust (issue #29): requests whose TCP peer is inside `nets` and
    * which carry `header` (non-empty) are authenticated without a session cookie.
@@ -78,6 +89,8 @@ export type ServerConfig = {
    * `X-Forwarded-Proto`), with a one-time warning when a non-loopback Host arrives.
    */
   publicOrigin?: string
+  /** Optional isolated HTTPS hostname for self-contained HTML previews. */
+  previewOrigin?: string
   /**
    * TEST ONLY: an in-process relay transport for each hosted-team listener, in place of the real
    * WebSocket to the relay. Passed straight to `createHostedService`'s `transport`.
@@ -140,12 +153,12 @@ export function trustProxyRefusedMessage(nets: string): string {
 
 /** Validate `NODETERM_PUBLIC_ORIGIN` into a normalized https origin. Throws (never echoing more than
  *  the value the operator typed) on anything that is not exactly an https origin. */
-function parsePublicOrigin(value: string): string {
+function parsePublicOrigin(value: string, label = 'NODETERM_PUBLIC_ORIGIN'): string {
   let url: URL
   try {
     url = new URL(value)
   } catch {
-    throw new Error(`NODETERM_PUBLIC_ORIGIN must be an https origin such as https://term.example.com (got "${value}").`)
+    throw new Error(`${label} must be an https origin such as https://term.example.com (got "${value}").`)
   }
   if (
     url.protocol !== 'https:' ||
@@ -156,7 +169,7 @@ function parsePublicOrigin(value: string): string {
     url.hash !== ''
   ) {
     throw new Error(
-      `NODETERM_PUBLIC_ORIGIN must be an https origin with no path, query or credentials, such as https://term.example.com (got "${value}").`
+      `${label} must be an https origin with no path, query or credentials, such as https://term.example.com (got "${value}").`
     )
   }
   return url.origin
@@ -216,6 +229,12 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     args['canvas-control'] !== undefined
       ? truthy(args['canvas-control'])
       : truthy(env.NODETERM_SERVER_CANVAS_CONTROL)
+  const sshProjects = args['ssh-projects'] !== undefined ? truthy(args['ssh-projects']) : truthy(env.NODETERM_SERVER_SSH)
+  const licenseEnabled = args.license !== undefined ? truthy(args.license) : truthy(env.NODETERM_SERVER_LICENSE)
+  if (args['control-scope'] === true) {
+    throw new Error('--control-scope needs a value: creator or project')
+  }
+  const controlScope = parseControlScope(pick('control-scope', 'NODETERM_SERVER_CONTROL_SCOPE', ''))
 
   // Headless binds nothing, so the "plain HTTP on a public interface" hazard the loopback refusal
   // guards against does not apply — a stray NODETERM_HOST must not fail a headless boot.
@@ -280,6 +299,11 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
 
   const publicOriginRaw = pick('public-origin', 'NODETERM_PUBLIC_ORIGIN', '')
   const publicOrigin = publicOriginRaw !== '' ? parsePublicOrigin(publicOriginRaw) : undefined
+  const previewRaw = pick('preview-origin', 'NODETERM_PREVIEW_ORIGIN', '')
+  const previewOrigin = previewRaw ? parsePublicOrigin(previewRaw, 'NODETERM_PREVIEW_ORIGIN') : undefined
+  if (previewOrigin && (!publicOrigin || new URL(previewOrigin).hostname === new URL(publicOrigin).hostname)) {
+    throw new Error('NODETERM_PREVIEW_ORIGIN requires NODETERM_PUBLIC_ORIGIN and a distinct hostname; changing only the port does not isolate cookies.')
+  }
 
   return {
     port,
@@ -291,7 +315,11 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     trustProxy,
     ...(trustProxyRefused !== undefined ? { trustProxyRefused } : {}),
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
+    ...(previewOrigin !== undefined ? { previewOrigin } : {}),
     headless,
-    canvasControl
+    canvasControl,
+    sshProjects,
+    licenseEnabled,
+    controlScope
   }
 }

@@ -44,6 +44,10 @@ import { IPC } from './ipc'
  * carrying their own `startsWith` is exactly how one of them ends up a release behind the other.
  */
 export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
+  'ssh:',
+  'sshFs:',
+  'ssh-project:',
+  'owner-confirmation:',
   'githubControl:',
   // The host's credential and identity planes. None of these crosses the relay for a legitimate
   // tab (relay-api.ts keeps license/accounts/usage LOCAL), and each is something the invite never
@@ -80,6 +84,18 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
 ]
 
 export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
+  IPC.mediaAllowScoped,
+  IPC.mediaRenew,
+  IPC.mediaRelease,
+  IPC.mediaWriteHtml,
+  IPC.webPreviewAllow,
+  IPC.webPreviewRenew,
+  IPC.webPreviewRelease,
+  IPC.ownerConfirmationConnect,
+  IPC.ownerConfirmationDisconnect,
+  IPC.ownerConfirmationDecide,
+  IPC.settingsPatch,
+  IPC.settingsChanged,
   IPC.projectSetupRun,
   IPC.projectSetupCancel,
   IPC.projectSetupConsentSubmit,
@@ -100,10 +116,12 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.appUpdatePrepShutdown,
   IPC.appUpdatePrepQuit,
   // A board comment that @mentions a session types into that session's pane. Only the host's own
-  // user may do that: a relay peer's comment is display-only. Registered with a raw ipcMain handler
-  // (so no peer can reach it at all); listed here too, so moving it onto the platform table later
-  // cannot quietly open it.
+  // user may do that: a relay peer's comment is display-only. The registrar checks the owner
+  // and shell-specific live-window eligibility; relay dispatch refuses this channel too.
   IPC.agentBoardCommentDeliver,
+  // Global transcript search spans account roots; only the authenticated machine owner may read it.
+  IPC.transcriptSearch,
+  IPC.transcriptSearchScoped,
   IPC.stationNoticeDropped,
   // The host's own dispatcher state; a relay tab's board belongs to the host and its dispatch is
   // refused, so a peer has nothing true to report.
@@ -135,6 +153,12 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   // Dev-server ports: a scan lists the host's listening ports, and a forward binds a port on the
   // HOST machine's loopback over one of its SSH masters. Neither is a peer's to ask for.
   IPC.devPortsScan,
+  IPC.controlCapabilities,
+  IPC.controlRunLaunch,
+  IPC.controlBranchClaude,
+  IPC.worktreeRecoveryList,
+  IPC.worktreeRecoveryInspect,
+  IPC.worktreeRecoveryKeep,
   IPC.devPortsForward,
   IPC.devPortsUnforward
 ])

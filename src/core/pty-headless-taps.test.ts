@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { IPC } from '../shared/ipc'
+import { OwnerLifetimes } from './owner-lifetimes'
+import { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
+import type { PtyCreateOptions, PtyCreateResult } from '../shared/types'
 
 /**
  * The core-side io of the headless launcher (#925): an output tap per node, and a write/release
@@ -20,6 +23,7 @@ interface FakePty {
   killed: boolean
 }
 const spawned: FakePty[] = []
+let spawnHook: (() => void) | undefined
 
 // Pin the persistence backend: `sessionHostSupported()` only asks whether
 // out/session-host/host.cjs exists on disk, so whether this suite exercises the mocked
@@ -31,6 +35,7 @@ vi.mock('./session-host-backend', async () =>
 
 vi.mock('node-pty', () => ({
   spawn: (_file: string, _args: string[], _opts: unknown) => {
+    spawnHook?.()
     const p: FakePty = { writes: [], resizes: [], paused: false, killed: false }
     spawned.push(p)
     return {
@@ -70,6 +75,7 @@ describe('PtyManager headless taps (#925)', () => {
 
   beforeEach(() => {
     spawned.length = 0
+    spawnHook = undefined
     fake = fakePlatform()
     initPlatform(fake)
     vi.useFakeTimers()
@@ -85,6 +91,126 @@ describe('PtyManager headless taps (#925)', () => {
     m.registerIpc()
     return m
   }
+
+  it('checks recovery before stale-cwd fallback or allocating a physical backend', async () => {
+    const m = await manager()
+    const existing = await m.createHeadless({ persistKey: 'existing', cols: 80, rows: 24 })
+    const admission = vi.fn((directory: string) => { if (directory === '/removed-checkout') throw new Error('worktree-recovery-required') })
+    m.setWorktreeRecoveryAdmission(admission)
+    await expect(m.createHeadless({ persistKey: 'blocked', cwd: '/removed-checkout', cols: 80, rows: 24 })).rejects.toThrow('recovery-required')
+    expect(admission).toHaveBeenCalledWith('/removed-checkout'); expect(spawned).toHaveLength(1)
+    expect((await m.createHeadless({ persistKey: 'existing', cols: 80, rows: 24 })).sessionId).toBe(existing.sessionId)
+    expect(admission).toHaveBeenCalledOnce()
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    expect(spawned).toHaveLength(2); m.killAll()
+  })
+
+  it('holds worktree members and new backend starts while unrelated live input remains available', async () => {
+    const m = await manager()
+    await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    let release!: () => void
+    const pending = m.runWorktreeAction(['group', 'member'], { current: () => true },
+      () => new Promise<void>((resolve) => { release = resolve }))
+    await expect(m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })).rejects.toThrow('busy')
+    await expect(m.createHeadless({ cols: 80, rows: 24 })).rejects.toThrow('busy')
+    expect(m.writeHeadless('member', 'held')).toBe(false)
+    expect(m.writeHeadless('outside', 'still available')).toBe(true)
+    expect(spawned).toHaveLength(2)
+    release(); await pending
+    await m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })
+    expect(spawned).toHaveLength(3)
+    m.killAll()
+  })
+
+  it('quarantines known recovery members for owner/headless input and fresh execution, with a real scoped host exception', async () => {
+    const m = await manager()
+    const member = await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    const dispatch = new WorktreeRecoveryDispatch({ isNodePending: (id) => id === 'member' || id === 'cold' })
+    m.setNodeExecutionAdmission((id, permit) => dispatch.assertAllowed(id, permit))
+    m.write(1, member.sessionId, 'owner-input')
+    expect(m.writeHeadless('member', 'headless-input')).toBe(false)
+    expect(m.writeHeadless('outside', 'unrelated-input')).toBe(true)
+    await expect(m.createHeadless({ persistKey: 'cold', cols: 80, rows: 24 })).rejects.toThrow('recovery-required')
+    expect(spawned).toHaveLength(2)
+    expect(fake.sent.filter((event) => event.channel === IPC.ptyInputBlocked)).toEqual([
+      { to: 1, channel: IPC.ptyInputBlocked, args: [{ nodeId: 'member', reason: 'worktree-recovery' }] }
+    ])
+    await m.runWorktreeAction(['member'], { current: () => true }, async (permit) => {
+      expect(m.writeHeadless('member', 'ordinary-claim')).toBe(false)
+      await dispatch.withRecovery(permit, () => { expect(m.writeHeadless('member', 'host-recovery')).toBe(true) })
+      expect(m.writeHeadless('member', 'after-recovery-scope')).toBe(false)
+    })
+    expect(spawned[0].writes).toEqual(['host-recovery'])
+    m.setNodeExecutionAdmission(null); m.killAll()
+  })
+
+  it('refuses worktree dispatch while a backend start is unresolved, then releases after failure', async () => {
+    const m = await manager()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const backend = m as unknown as { spawnNewInternal(clientId: number, options: PtyCreateOptions): Promise<PtyCreateResult> }
+    const spawn = vi.spyOn(backend, 'spawnNewInternal').mockImplementation(async () => {
+      await held; throw new Error('fixture spawn failed')
+    })
+    const creating = m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 }); void creating.catch(() => {})
+    const work = vi.fn()
+    await expect(m.runWorktreeAction(['group'], { current: () => true }, work)).rejects.toThrow('busy')
+    expect(work).not.toHaveBeenCalled()
+    release(); await expect(creating).rejects.toThrow('fixture spawn failed'); spawn.mockRestore()
+    await expect(m.runWorktreeAction(['group'], { current: () => true }, () => 'free')).resolves.toBe('free')
+    m.killAll()
+  })
+
+  it('retains the creation barrier after owner departure until external work settles', async () => {
+    const m = await manager(); const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
+    let release!: () => void
+    const pending = m.runWorktreeAction(['group'], { current: () => true, owner },
+      () => new Promise<void>((resolve) => { release = resolve }))
+    owners.forget(1)
+    await expect(m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })).rejects.toThrow('busy')
+    await expect(m.runWorktreeAction(['other'], { current: () => true }, () => {})).rejects.toThrow('busy')
+    release(); await expect(pending).rejects.toThrow('expired')
+    await m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })
+    owners.dispose(); m.killAll()
+  })
+
+  it('releases the start barrier when a member is already busy or the transaction fails', async () => {
+    const m = await manager(); let release!: () => void
+    const occupied = m.runNodeAction('member', 'branch', { current: () => true }, () => new Promise<void>((resolve) => { release = resolve }))
+    await expect(m.runWorktreeAction(['member'], { current: () => true }, () => {})).rejects.toThrow('busy')
+    await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+    release(); await occupied
+    await expect(m.runWorktreeAction(['member'], { current: () => true }, () => { throw new Error('Git refused') })).rejects.toThrow('Git refused')
+    await m.createHeadless({ persistKey: 'another', cols: 80, rows: 24 })
+    m.killAll()
+  })
+
+  it('keeps a created backend alive without authorizing its expired application continuation', async () => {
+    const m = await manager(); let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    let backend!: Promise<boolean>; let application!: Promise<boolean>
+    spawnHook = () => { backend = hold.then(() => m.writeHeadless('n1', 'backend')) }
+    await m.runNodeAction('n1', 'branch', { current: () => true }, async () => {
+      application = hold.then(() => m.writeHeadless('n1', 'expired'))
+      await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    })
+    release(); expect(await backend).toBe(true); expect(await application).toBe(false)
+    expect(spawned[0].writes).toEqual(['backend']); await m.killAll()
+  })
+
+  it('runs backend data/flush callbacks outside an expired action that delivered the event', async () => {
+    const m = await manager(); let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve }); let event!: Promise<void>
+    await m.runNodeAction('n1', 'branch', { current: () => true }, async () => {
+      await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+      m.onOutput('n1', () => { m.writeHeadless('n1', 'driver reply') })
+      event = hold.then(() => { spawned[0].onDataCb?.('output') })
+    })
+    release(); await event; await vi.advanceTimersByTimeAsync(50)
+    expect(spawned[0].writes).toEqual(['driver reply']); await m.killAll()
+  })
 
   it('onOutput receives flushed output for the node, and unsubscribes cleanly', async () => {
     const m = await manager()
@@ -146,5 +272,78 @@ describe('PtyManager headless taps (#925)', () => {
     expect(seen).toEqual(['z'])
     expect(warn).toHaveBeenCalledWith('[pty] output tap failed', 'boom')
     warn.mockRestore()
+  })
+
+  it('fences all competing entry points and addresses a throttled notice only to the typing client', async () => {
+    const m = await manager()
+    const r = await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    await fake.handlers[IPC.ptyCreate](1, { cols: 80, rows: 24, persistKey: 'n1' })
+    let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    const identity = m.nodeExecutionIdentity('n1')
+    const action = m.runNodeAction('n1', 'branch', { current: () => m.nodeExecutionIdentity('n1') === identity }, async () => {
+      expect(m.writeHeadless('n1', 'owned')).toBe(true)
+      await hold
+    })
+    m.write(1, r.sessionId, 'other-tab')
+    m.write(1, r.sessionId, 'more')
+    expect(m.writeHeadless('n1', 'other-launch')).toBe(false)
+    await expect(m.backgroundWrite('n1', 'background')).resolves.toBe(false)
+    await expect(m.controlInput(r.sessionId, { kind: 'keys', data: 'remote' })).resolves.toBe(false)
+    await expect(m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })).rejects.toThrow('busy')
+    await expect(m.recycleSession(null, 'n1')).rejects.toThrow('busy')
+    await expect(m.destroySession(null, 'n1')).rejects.toThrow('busy')
+    expect(spawned[0].killed).toBe(false)
+    expect(spawned[0].writes).toEqual(['owned'])
+    expect(fake.sent.filter((e) => e.channel === IPC.ptyInputBlocked)).toEqual([
+      { to: 1, channel: IPC.ptyInputBlocked, args: [{ nodeId: 'n1' }] }
+    ])
+    await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' })
+    expect(m.writeHeadless('n2', 'independent')).toBe(true)
+    release(); await action
+    m.write(1, r.sessionId, 'after')
+    expect(spawned[0].writes).toEqual(['owned', 'after'])
+    await m.killAll()
+  })
+
+  it('does not acquire over a queued write, and refuses expired continuations before they create a replacement', async () => {
+    const m = await manager()
+    await m.createHeadless({ cols: 80, rows: 24, persistKey: 'n1' })
+    const write = m.backgroundWrite('n1', 'queued')
+    await expect(m.runNodeAction('n1', 'account', { current: () => true }, () => {})).rejects.toThrow('busy')
+    await write
+    let late!: Promise<unknown>; let release!: () => void
+    const hold = new Promise<void>((resolve) => { release = resolve })
+    await m.runNodeAction('n1', 'write', { current: () => true }, () => {
+      late = hold.then(() => m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' }))
+    })
+    void late.catch(() => {})
+    release(); await expect(late).rejects.toThrow('expired')
+    expect(spawned).toHaveLength(1)
+    await m.killAll()
+    await expect(m.createHeadless({ cols: 80, rows: 24, persistKey: 'n2' })).rejects.toThrow('stopped')
+  })
+
+  it('holds the pane queue between an envelope paste and its settled Enter', async () => {
+    const m = await manager()
+    // The backend acknowledgements are controlled; exclusion and the public compound operation
+    // are real. Hold the screen read AFTER paste, where two separate sendText calls had a gap.
+    const backend = m as unknown as { sendTextNow(id: string, text: string, opts?: { enter?: boolean }): Promise<boolean> }
+    const writes = vi.spyOn(backend, 'sendTextNow').mockResolvedValue(true)
+    let release!: (screen: string) => void
+    const screen = new Promise<string>((resolve) => { release = resolve })
+    vi.spyOn(m, 'captureSession').mockResolvedValueOnce('before').mockImplementationOnce(() => screen)
+    const delivery = m.sendSettledEnvelope('n1', 'message\nFOOTER')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(writes).toHaveBeenCalledTimes(1)
+    const competing = m.sendText('n1', 'competing')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(writes).toHaveBeenCalledTimes(1)
+    await expect(m.runNodeAction('n1', 'write', { current: () => true }, () => {})).rejects.toThrow('busy')
+    release('message\nFOOTER'); await expect(delivery).resolves.toBe(true)
+    await competing
+    expect(writes.mock.calls).toEqual([['n1', 'message\nFOOTER', { enter: false }], ['n1', '', { enter: true }], ['n1', 'competing', undefined]])
+    await expect(m.runNodeAction('n1', 'write', { current: () => true }, () => 'ready')).resolves.toBe('ready')
+    await m.killAll()
   })
 })
