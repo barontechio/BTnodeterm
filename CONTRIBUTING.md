@@ -1950,3 +1950,8 @@ node before publication, preserves launch recovery, and uses the existing delive
 Desktop and Server UI branching use the separate authenticated-owner entry with the real document
 lifetime. A direct human action creates no agent grant; agent CLI branching still requires its own
 confirmed caller/project policy. Never forward owner actions to a relay viewer's local desktop.
+
+`GitService.worktreeRemoveClean` is a host-domain building block, without generic IPC. It checks
+the current local directory identity and expected linked branch, and invokes Git without `--force`.
+A failed removal reply can still report verified directory absence; retain the branch and recover
+bindings explicitly. It supplies no owner consent, node exclusion or directory reservation itself.

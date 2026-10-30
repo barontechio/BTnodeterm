@@ -395,6 +395,12 @@ These are four independent leaf PRs that can proceed after their own mutation/po
 
 ### PR 08 Share worktree lifecycle
 
+The conservative Git removal primitive is available internally as `worktreeRemoveClean`: current
+local directory identity, exact linked branch, no `--force`, no primary checkout removal, no missing
+checkout pruning and no forced branch deletion. Real Git fixtures preserve dirty/untracked files,
+locked checkouts and unmerged branches. This does not enable CLI removal: the directory/node
+reservation and durable canvas recovery adapter must be connected first.
+
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.
 - Unbind keeps the directory. Removal requires explicit confirmation, checks worktree ownership and uncommitted work, and refuses to affect the primary checkout or another worktree.

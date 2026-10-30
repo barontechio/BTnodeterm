@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { worktreeAdd, listWorktrees, worktreeMerge, worktreeRemove, type GitExec } from './worktree-ops'
+import { worktreeAdd, listWorktrees, worktreeMerge, worktreeRemove, worktreeRemoveClean, type GitExec } from './worktree-ops'
 
 const ok = (out = ''): GitExec => ({ ok: true, out, err: '' })
 const ko = (err = 'fail'): GitExec => ({ ok: false, out: '', err })
@@ -246,6 +246,17 @@ describe('worktreeMerge', () => {
 })
 
 describe('worktreeRemove', () => {
+  it('reports verified absence after a failed clean-removal reply without deleting its branch or pruning', async () => {
+    let removed = false; const calls: string[][] = []
+    const result = await worktreeRemoveClean(async (_cwd, args) => {
+      calls.push(args)
+      if (args[0] === 'worktree' && args[1] === 'list') return ok('worktree /repo\nbranch refs/heads/main\n\nworktree /wt/x\nbranch refs/heads/feature\n')
+      removed = true; return ko('reply unavailable after deletion')
+    }, '/repo', '/wt/x', '/home', 'feature', true, async (directory) => directory !== '/wt/x' || !removed)
+    expect(result).toMatchObject({ ok: false, worktreeGone: true })
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toEqual(['worktree', 'remove', '--', '/wt/x'])
+  })
   it('refuses the repo path itself (no git call)', async () => {
     const { git, calls } = fakeGit({})
     const r = await worktreeRemove(git, '/repo', '/repo', '/home', true)
