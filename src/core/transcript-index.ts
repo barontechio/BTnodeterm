@@ -103,23 +103,33 @@ async function scanTranscripts(epoch: number): Promise<ScanFile[]> {
 
 async function readTail(filePath: string): Promise<string> {
   try {
-    const st = await fs.promises.stat(filePath)
-    if (st.size > READ_CAP_BYTES) {
-      const fd = await fs.promises.open(filePath, 'r')
-      try {
-        const { buffer } = await fd.read({
-          position: st.size - READ_CAP_BYTES,
-          length: READ_CAP_BYTES,
-          buffer: Buffer.alloc(READ_CAP_BYTES)
+    // Pin the file before inspecting it. These flags protect the final component where
+    // supported; scanner paths/ancestors remain host-derived, not a containment boundary.
+    const fd = await fs.promises.open(filePath, fs.constants.O_RDONLY |
+      (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0))
+    try {
+      const st = await fd.stat()
+      if (!st.isFile()) return ''
+      const length = Math.min(st.size, READ_CAP_BYTES)
+      const start = st.size - length
+      const buffer = Buffer.alloc(length)
+      let total = 0
+      // Fix the window at fstat time: growth cannot expand allocation or bytes read.
+      // Short reads may occur before EOF; truncation contributes only actual bytes.
+      while (total < length) {
+        const { bytesRead } = await fd.read({
+          buffer, offset: total, length: length - total, position: start + total
         })
-        const s = buffer.toString('utf8')
-        const nl = s.indexOf('\n')
-        return nl >= 0 ? s.slice(nl + 1) : s
-      } finally {
-        await fd.close()
+        if (bytesRead === 0) break
+        total += bytesRead
       }
+      const s = buffer.subarray(0, total).toString('utf8')
+      if (start === 0) return s
+      const nl = s.indexOf('\n')
+      return nl >= 0 ? s.slice(nl + 1) : s
+    } finally {
+      await fd.close()
     }
-    return await fs.promises.readFile(filePath, 'utf8')
   } catch {
     return ''
   }
