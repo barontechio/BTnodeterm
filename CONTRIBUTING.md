@@ -2144,3 +2144,7 @@ queued command dispatch and connected publication. Cancellation may close only t
 created by that attempt; an expired requester reusing an existing master must not destroy it.
 Transport callbacks leave the short connect scope, and optional background setup starts only
 after authorized publication. A cancelled attempt rejects even when its physical close is pending.
+
+A retained SSH connection during pending or uncertain teardown owns cleanup only. Background
+CLI probes use connection-lifetime queue checks and cannot publish connected, retry, or start
+follow-up setup after close begins, including close triggered synchronously by a status callback.

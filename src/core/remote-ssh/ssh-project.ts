@@ -2647,25 +2647,42 @@ export class SshProjectManager {
     }
   }
 
+  private connectionCurrent(projectId: string, entry: Conn): boolean {
+    return this.conns.get(projectId) === entry && !this.disconnects.has(projectId)
+  }
+
+  /** Background application work owns a connection lifetime, never the completed connect RPC. */
+  private async withConnectionWork(projectId: string, entry: Conn, work: () => Promise<void>): Promise<void> {
+    const current = () => this.connectionCurrent(projectId, entry)
+    if (!current()) return
+    const scope = { active: true, current }
+    // runScoped gives each command its own queue guard. Do not wrap status callbacks in a
+    // runner scope: a synchronous disconnect must still be allowed to dispatch physical exit.
+    try { await this.connectScopes.run(scope, work) }
+    finally { scope.active = false }
+  }
+
   /**
    * One remote `codex --help` (login shell, marker-delimited — `codex-no-daemon-probe.ts`), pushed
    * as a `connected` event once it lands. No retries: an unknown answer only means the remote line
    * stays as it has always been (no `--no-daemon`), and the next connect asks again.
    */
   private async probeRemoteCodexNoDaemon(projectId: string, entry: Conn): Promise<void> {
-    let supported: boolean | null = null
-    try {
-      const { stdout } = await this.runScoped(childArgs(entry.conn, entry.controlPath, codexNoDaemonProbeCommand()))
-      supported = parseCodexNoDaemonProbe(stdout)
-    } catch {
-      supported = null
-    }
-    if (supported === null || this.conns.get(projectId) !== entry) return
-    const hostKey = codexProbeHostKey(entry.conn)
-    if (!hostKey) return
-    const answer: RemoteCodexNoDaemon = { hostKey, supported }
-    entry.remoteCodexNoDaemon = answer
-    this.emitStatus({ projectId, status: 'connected', remoteCodexNoDaemon: answer })
+    await this.withConnectionWork(projectId, entry, async () => {
+      let supported: boolean | null = null
+      try {
+        const { stdout } = await this.runScoped(childArgs(entry.conn, entry.controlPath, codexNoDaemonProbeCommand()))
+        supported = parseCodexNoDaemonProbe(stdout)
+      } catch {
+        supported = null
+      }
+      if (supported === null || !this.connectionCurrent(projectId, entry)) return
+      const hostKey = codexProbeHostKey(entry.conn)
+      if (!hostKey) return
+      const answer: RemoteCodexNoDaemon = { hostKey, supported }
+      entry.remoteCodexNoDaemon = answer
+      this.emitStatus({ projectId, status: 'connected', remoteCodexNoDaemon: answer })
+    })
   }
 
   /**
@@ -2684,36 +2701,40 @@ export class SshProjectManager {
    * version, old or new, stops the retries: a CLI doesn't change under a live connection.
    */
   private async probeClaudeAutoPermissionMode(projectId: string, entry: Conn): Promise<void> {
-    const delays = this.r.probeRetryDelaysMs ?? PROBE_RETRY_DELAYS_MS
-    for (let attempt = 0; ; attempt++) {
-      // One remote `claude --version` feeds BOTH version gates (permission-mode auto >= 2.1.71 and
-      // fullscreen tui >= 2.1.89), no second probe.
-      const version = await this.remoteClaudeVersion(entry.conn, entry.controlPath)
-      // Disconnected / reconnected (new Conn) while we probed → the answer belongs to a dead
-      // connection; drop it rather than write it onto the new one.
-      if (this.conns.get(projectId) !== entry) return
-      const supported = supportsAutoPermissionMode(version)
-      entry.claudeAutoPermissionMode = supported
-      entry.remoteClaudeVersion = version
-      this.emitStatus({
-        projectId,
-        status: 'connected',
-        claudeAutoPermissionMode: supported,
-        remoteClaudeVersion: version
-      })
-      if (version !== null) {
-        // Ensure Claude's fullscreen TUI on the host's ~/.claude/settings.json (write-if-absent),
-        // so a remote Claude session behaves natively in the host's tmux. Gated on the same probed
-        // version; fail-open inside RemoteHooks. Needs the resolved $HOME for an absolute path.
-        if (entry.remoteHome && supportsFullscreenTui(version)) {
-          await this.remoteHooks.ensureFullscreenTui(entry.conn, entry.controlPath, entry.remoteHome)
+    await this.withConnectionWork(projectId, entry, async () => {
+      const delays = this.r.probeRetryDelaysMs ?? PROBE_RETRY_DELAYS_MS
+      for (let attempt = 0; ; attempt++) {
+        if (!this.connectionCurrent(projectId, entry)) return
+        // One remote `claude --version` feeds BOTH version gates (permission-mode auto >= 2.1.71 and
+        // fullscreen tui >= 2.1.89), no second probe.
+        const version = await this.remoteClaudeVersion(entry.conn, entry.controlPath)
+        // Disconnected / reconnected (new Conn) while we probed → the answer belongs to a dead
+        // connection; drop it rather than write it onto the new one.
+        if (!this.connectionCurrent(projectId, entry)) return
+        const supported = supportsAutoPermissionMode(version)
+        entry.claudeAutoPermissionMode = supported
+        entry.remoteClaudeVersion = version
+        this.emitStatus({
+          projectId,
+          status: 'connected',
+          claudeAutoPermissionMode: supported,
+          remoteClaudeVersion: version
+        })
+        if (!this.connectionCurrent(projectId, entry)) return
+        if (version !== null) {
+          // Ensure Claude's fullscreen TUI on the host's ~/.claude/settings.json (write-if-absent),
+          // so a remote Claude session behaves natively in the host's tmux. Gated on the same probed
+          // version; fail-open inside RemoteHooks. Needs the resolved $HOME for an absolute path.
+          if (entry.remoteHome && supportsFullscreenTui(version)) {
+            await this.remoteHooks.ensureFullscreenTui(entry.conn, entry.controlPath, entry.remoteHome)
+          }
+          return
         }
-        return
+        if (attempt >= delays.length) return
+        await new Promise((r) => setTimeout(r, delays[attempt]))
+        if (!this.connectionCurrent(projectId, entry)) return
       }
-      if (attempt >= delays.length) return
-      await new Promise((r) => setTimeout(r, delays[attempt]))
-      if (this.conns.get(projectId) !== entry) return
-    }
+    })
   }
 
   /**

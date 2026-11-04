@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { describe, it, expect, vi } from 'vitest'
 import { SshProjectManager, type SshProjectRunners } from './ssh-project'
 import { testTmpDir } from '../test-tmp'
@@ -129,6 +130,69 @@ describe('connect authority through setup and publication', () => {
      await rejected
      expect(f.manager.refForProject('p')?.remoteCwd).toBe('/original')
    } finally { gate.release(); f.manager.disconnectAll() }
+ })
+ it.each([
+   ['claude', false], ['codex', false], ['claude', true], ['codex', true]
+ ] as const)('does not republish %s during closing (uncertain=%s)', async (agent, uncertain) => {
+   const probe = deferred(), exit = deferred()
+   let probing = false, exiting = false
+   const marker = agent === 'claude' ? '__NT_V_START__' : '__NT_CODEX_ND__'
+   const f = make({probeRetryDelaysMs: [], run: async (args) => {
+     if (args.some(arg => arg.includes(marker))) {
+       probing = true
+       await probe.promise
+       return {code: 0, stdout: agent === 'claude' ? '__NT_V_START__2.1.99__NT_V_END__' : '__NT_CODEX_ND__yes__NT_CODEX_ND_END__'}
+     }
+     if (args.includes('-O') && args.includes('exit')) {
+       exiting = true
+       await exit.promise
+       return {code: uncertain ? 255 : 0, stdout: ''}
+     }
+     return {code: 0, stdout: ''}
+   }})
+   await f.manager.connect('p', endpoint)
+   await vi.waitFor(() => expect(probing).toBe(true))
+   const closing = f.manager.disconnect('p', {final: true})
+   try {
+     await vi.waitFor(() => expect(exiting).toBe(true))
+     if (uncertain) { exit.release(); await closing }
+     const before = f.onStatus.mock.calls.length
+     probe.release()
+     await new Promise(resolve => setImmediate(resolve))
+     expect(f.onStatus.mock.calls.slice(before).filter(([event]) => event.status === 'connected')).toHaveLength(0)
+   } finally { probe.release(); exit.release(); await closing; f.manager.disconnectAll() }
+ })
+ it('does not begin fullscreen setup when a probe status callback closes the connection', async () => {
+   const queueScope = new AsyncLocalStorage<() => boolean>()
+   const probe = deferred()
+   let probing = false
+   let closing: Promise<void> | undefined
+   const f = make({probeRetryDelaysMs: [],
+     withQueuedExecutionCheck: (current, work) => queueScope.run(current, work),
+     run: async (args) => {
+     if (queueScope.getStore()?.() === false) return {code: 255, stdout: ''}
+     if (args.some(arg => arg.includes('printf %s "$HOME"'))) return {code: 0, stdout: '/home/fixture'}
+     if (args.some(arg => arg.includes('__NT_V_START__'))) {
+       probing = true
+       await probe.promise
+       return {code: 0, stdout: '__NT_V_START__2.1.99__NT_V_END__'}
+     }
+     return {code: 0, stdout: ''}
+   }})
+   const hooks = (f.manager as unknown as {remoteHooks: {ensureFullscreenTui: (...args: unknown[]) => Promise<void>}}).remoteHooks
+   const fullscreen = vi.spyOn(hooks, 'ensureFullscreenTui').mockResolvedValue(undefined)
+   f.onStatus.mockImplementation(event => {
+     if (event.remoteClaudeVersion) closing = f.manager.disconnect('p', {final: true})
+   })
+   try {
+     await f.manager.connect('p', endpoint)
+     await vi.waitFor(() => expect(probing).toBe(true))
+     probe.release()
+     await vi.waitFor(() => expect(closing).toBeDefined())
+     await closing
+     expect(fullscreen).not.toHaveBeenCalled()
+     expect(f.manager.refForProject('p')).toBeUndefined()
+   } finally { probe.release(); f.manager.disconnectAll() }
  })
  it('does not publish connected from a cancelled attempt while its exit is held', async () => {
    const checkGate=deferred(), exitGate=deferred(); let checking=false, exiting=false
