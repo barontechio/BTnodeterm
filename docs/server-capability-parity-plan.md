@@ -6,12 +6,69 @@ This is an implementation proposal. Work proceeds by the acceptance gates below,
 
 ## Resumed implementation (2026-11-04)
 
-Latest local acceptance: frozen `f6532fd9` passes 24,911 tests (109 skipped), typecheck and Desktop/
-Server builds. The actual user known-host file is unchanged. This accepts the composed connection
-lifetime correction, owner-lived SSH context meters and descriptor-bounded transcript index, in
-addition to the previously accepted recovery/gateway/capsule deliveries. Fresh remote CI is still
-required for the documentation-only head. Rebinding, streaming transfers and browser joining remain
-outside this accepted snapshot while their independent findings and follow-ups are resolved.
+Latest accepted local aggregate remains `f6532fd9`: 24,911 tests (109 skipped), typecheck and
+Desktop/Server builds. The subsequent `8ea31d98` composition includes independently reviewed
+recovered-checkout rebinding (integration `a727ad39`, `173887a6`, `7fb89952`)
+and browser team joining (integration `a855ef46`, `994972d0`, `31d754cd`,
+`8ea31d98`). Its types and both builds pass, but its full run has 24,959 passes, one failure and
+109 skips: the third SSH protocol case (OpenSSH, already-closed connection) returned a found
+transcript with no messages. The cause remains unproved; isolated passing runs do not fix it.
+
+Streaming transfers are now composed as `7f2f4063`, `9f7b1de4`, `41a17ed1`, `e7ad991f`, from reviewed
+sources `922e0755`, `526b05f3`, `ee6702c4`, `81b9bfd6`. The merged candidate passes typecheck and
+both Desktop/Server builds. Its 17-file focused run passes 252 tests and times out one existing anonymous-upload rename case at five seconds; no timeout
+was increased and that failure remains recorded. Fresh quality/security gates and coordinator
+acceptance remain required. The last remote head `4c3c9c67` has passing CI;
+its one medium gateway warning and six moderate minimatch packaging-chain audit entries are not
+claims of zero security debt. No new production activation or upstream proposal is implied.
+
+### SSH streaming transfer contract and evidence
+
+Owner-only preparation binds an opaque, five-minute reference to the actual WebSocket owner,
+host-private cookie principal, saved project/root/endpoint/control path/generation and, for node
+attachments/media, the saved node/account/session/runtime identity. Relay and browser joined/offline
+APIs cannot inherit this capability from the owning Server. Proxy authentication without a stable
+cookie principal is unavailable. Observed source/proof invalidation is permanent, including a
+caller cancellation arriving after the failed read. Ordinary cancellation alone preserves valid
+renewable media. Remote failure never selects the Server's or viewer's local filesystem.
+
+Shared Core carries file bodies over bounded HTTP/SSH streams, not terminal RPC: 128 MiB per file,
+120-second operations, 64 global/16 owner references and 8 global/2 owner operations. The common SSH
+gate retains custody until physical process/channel closure, including pending native opens and
+cancellation. Downloads are single-use; signature-checked raster/audio/video media supports
+cookie-authenticated GET/HEAD Range, with 206/416 responses. Directory/archive downloads and SVG/PDF
+bulk media are outside this slice; the existing bounded PDF reader remains separate.
+
+Uploads create new files only, with conflict for an existing name. Python 3 opens a no-follow
+ancestor/file descriptor chain; Linux uploads require O_TMPFILE, user xattrs, hardlinks, procfs and
+file/directory fsync. Unsupported hosts/filesystems refuse explicitly. An anonymous inode receives
+the exact body, final authorization marker and durable nonce/size/SHA-256 receipt before no-replace
+publication. No named partial file is created. The final grant targets the exact opened, verified
+directory/ancestor inodes, not an atomic lock on their pathname. A move observed before the last
+check prevents publication. A move after that check may publish the complete file in the moved
+original directory; a failed post-check returns UNKNOWN, leaves the replacement untouched and
+never triggers body replay or unsafe pathname cleanup. The UI explicitly mentions the original
+folder even if moved and asks inspection before retrying. There is no overwrite/CAS guarantee.
+
+Independent review of `ee6702c4` ran 107 focused checks, typecheck, six original adversarial cases
+and real helper/namespace schedules, supporting this explicitly revised descriptor contract. It
+found one remaining late-cancellation renewal defect. Follow-up `81b9bfd6` passes the unchanged
+original reproduction plus three independent cancellation/header controls and 16 focused tests,
+including actual OpenSSH/native loopback. No residual defect was demonstrated in that narrow
+review. These fixtures use an ssh2 peer, encrypted temporary keys and executable-level private
+`-F` configuration with strict pinned host keys; they are not an actual sshd interoperability or
+all-platform/filesystem certificate. Native Channel listener warnings remain observations, not a
+proved leak or proof of its absence.
+
+A single diagnostic full run of test-only `f2ddf7b6` on `8ea31d98` was stopped at the coordinator's
+ten-minute cap with observed exit 130 after unrelated timeouts and a worker termination timeout.
+Host load reached 151 on 32 CPUs; this observation does not explain the original empty SSH reader.
+No complete aggregate result or causal reader fix is claimed. No repeat full under that load is
+part of this milestone; dedicated CI can supply the next full gate after candidate approval.
+
+Remaining work includes C-phase worktree composition, the standalone ungroup candidate (not yet
+accepted because of a root-project duplicate-ID policy gap), notifications and native pre-auth
+readiness. External worker deployment, mobile behavior and production activation remain unverified.
 
 The owner has authorized completing the unfinished useful parity work. The current delivery is
 split into isolated worktree/session, SSH, and web/collaboration tracks. Shared contracts and

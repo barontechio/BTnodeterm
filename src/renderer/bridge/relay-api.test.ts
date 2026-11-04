@@ -413,7 +413,7 @@ it('browser joined API cannot fall through to the owning local Server administra
   const saved = (globalThis as Record<string, unknown>).window
   const admin = vi.fn(() => Promise.reject(new Error('local administration reached')))
   Object.assign(local, {
-    ssh: { list: admin }, media: { allow: admin }, developmentPreviews: { list: admin },
+    ssh: { list: admin }, remoteTransfers: { prepare: admin }, media: { allow: admin }, developmentPreviews: { list: admin },
     settings: { load: admin, save: admin }, worktree: { create: admin, recovery: {} },
     githubControl: { status: admin }, transcripts: { search: admin }
   })
@@ -426,6 +426,7 @@ it('browser joined API cannot fall through to the owning local Server administra
     await expect(handle.api.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
     await expect(handle.api.githubControl.status()).rejects.toMatchObject({ code: E_UNSUPPORTED })
     expect(handle.api.worktree.recovery).toBeUndefined()
+    expect(handle.api.remoteTransfers).toBeUndefined()
     expect(await handle.api.settings.load()).toHaveProperty('fontSize')
     const retired = buildRelayApi('browser-team-retired', new FakeTransport())
     expect(retired.api.hosted).toBeDefined()
@@ -444,7 +445,7 @@ it('offline browser relay API never inherits owning Server administration; Deskt
   const { local } = fakeLocalApi()
   const saved = (globalThis as Record<string, unknown>).window
   const admin = vi.fn(async () => undefined)
-  Object.assign(local, { settings: { save: admin }, ssh: { list: admin } })
+  Object.assign(local, { settings: { save: admin }, ssh: { list: admin }, remoteTransfers: { prepare: admin } })
   ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
   const shell = vi.spyOn(runtime, 'isBrowserRuntime').mockReturnValue(true)
   try {
@@ -453,11 +454,13 @@ it('offline browser relay API never inherits owning Server administration; Deskt
     await expect(offline.ssh.list()).rejects.toMatchObject({ code: E_UNSUPPORTED })
     expect(offline.settings).not.toBe(local.settings)
     expect(offline.ssh).not.toBe(local.ssh)
+    expect(offline.remoteTransfers).toBeUndefined()
     expect(admin).not.toHaveBeenCalled()
     shell.mockReturnValue(false)
     const native = offlineRelayApi()
     expect(native.settings).toBe(local.settings)
     expect(native.ssh).toBe(local.ssh)
+    expect(native.remoteTransfers).toBeUndefined()
   } finally {
     shell.mockRestore()
     ;(globalThis as Record<string, unknown>).window = saved

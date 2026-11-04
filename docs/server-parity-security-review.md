@@ -1,5 +1,46 @@
 # Server parity security review
 
+## Current transfer composition and pending aggregate (2026-11-04)
+
+Reviewed transfer sources `922e0755`, `526b05f3`, `ee6702c4`, `81b9bfd6` are integrated as
+`7f2f4063`, `9f7b1de4`, `41a17ed1`, `e7ad991f`. Component review supports integration, not release
+or a passing merged aggregate. The browser join/offline boundary retains an inert administration
+base; remote transfers are explicitly absent on relay APIs, while actual owner HTTP redemption
+requires the captured cookie principal and live owner/source identity. The merged 17-file regression
+run passes 252 cases, including this boundary, guest/role policies,
+license checks and real transfer protocols, and times out one existing anonymous-upload rename
+case at five seconds. That failure remains recorded without a timeout change. Merged types and
+both Desktop/Server builds pass; dedicated CI and final candidate acceptance remain separate.
+
+The original review found renewable references after observed invalidity and a mismatch between
+an absolute pathname claim and descriptor publication. Invalidity now latches permanently, including
+missing/malformed read proofs and helper failure followed by late caller cancellation. The original
+late-cancel reproduction retains its assertions/schedule; independent follow-up passes four
+adversarial controls and 16 focused tests. Ordinary valid-media cancellation remains renewable.
+
+The approved upload contract is explicitly narrower than atomic pathname immutability: final
+authority targets the opened, checked directory/ancestor inode chain. Before-last-check invalidity
+means no publication. A rename after that check can publish into the original moved folder; a
+failed post-check reports UNKNOWN, never writes into the replacement, replays the body or unlinks
+an unproved pathname. UI uncertainty text states that moved-folder possibility. Original external
+race evidence remains valid under this stated contract. Uploads are create-only and require Linux
+O_TMPFILE, xattrs, procfs, hardlinks and fsync; no general overwrite or all-filesystem guarantee.
+Bounded references/streams, cookie/owner/source checks and physical transport cleanup remain
+separate obligations. Real tests use a private ssh2 peer, not production or an actual sshd server.
+
+`8ea31d98` types and both builds pass, but its full run has one empty-transcript SSH assertion
+failure (24,959 passed, 109 skipped). Its cause remains open. The sole test-instrumented diagnostic
+run `f2ddf7b6` was aborted by the coordinator's ten-minute limit with actual exit 130 after multiple
+timeouts and a worker termination timeout; no final aggregate counts or causal fix are claimed.
+Observed load 151 on 32 CPUs is context, not proof of the earlier failure's cause. Dedicated fresh
+CI and coordinator review remain necessary for the merged candidate; production is not activated.
+
+The last remote `4c3c9c67` quality/security runs pass with one medium gateway authentication-flow
+warning. The six moderate minimatch packaging-chain audit entries below remain debt. No new scan,
+zero-alert conclusion or remediation of native pre-auth readiness is claimed here. Worktree C,
+standalone ungroup's root-project duplicate-ID policy gap, notifications and external worker/mobile
+verification remain distinct pending work.
+
 ## Confirmed follow-up result and gateway redirect guard
 
 Frozen `f6532fd9`, including the redirect guard and corrected fixtures, passes 24,911 tests
