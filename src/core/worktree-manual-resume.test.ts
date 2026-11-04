@@ -183,9 +183,20 @@ describe.skipIf(process.platform !== 'linux')('manual recovery with real local p
   it('refuses an unreadable host project profile instead of approving its fallback', async () => {
     const f = await fixture()
     f.manager.setProjectSpawnOverrides(async () => { throw new Error('profile read failed') })
-    expect(await f.service.resume(f.row.id, f.key, f.owner)).toMatchObject({ ok: false, outcome: 'refused', error: expect.stringContaining('profile read failed') })
+    expect(await f.service.resume(f.row.id, f.key, f.owner)).toMatchObject({ ok: false, outcome: 'refused', error: expect.stringContaining('manual-shell-verification-failed') })
     expect(f.confirmations.request).not.toHaveBeenCalled()
     expect(f.journal.list()[0].manualResume).toBeUndefined()
+  })
+
+  it('keeps private backend argv and process diagnostics out of the owner reply', async () => {
+    const f = await fixture()
+    vi.spyOn(f.manager, 'createManualShell').mockResolvedValue({ ok: false, dispatched: true,
+      error: 'Command failed: tmux -e NODETERM_RECOVERY_ID=PRIVATE_NONCE /proc/123456/stat' })
+    const result = await f.service.resume(f.row.id, f.key, f.owner)
+    expect(result).toMatchObject({ ok: false, outcome: 'uncertain', error: expect.stringContaining('manual-shell-verification-failed') })
+    expect(JSON.stringify(result)).not.toContain('PRIVATE_NONCE')
+    expect(JSON.stringify(result)).not.toContain('123456')
+    expect(f.journal.list()[0].manualResume?.[0].state).toBe('dispatching')
   })
 
 })

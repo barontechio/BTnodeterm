@@ -606,7 +606,10 @@ export class WorktreeRecoveryService {
     } catch (error) {
       if (ready) domain.dispatch.revokeManualSession(nodeId, ready)
       try { this.deps.journal.list() } catch { dispatched = true }
-      return { ok: false, outcome: dispatched ? 'uncertain' : 'refused', error: `Manual shell ${dispatched ? 'may have started; inspect the recorded state before another action' : 'was refused'}: ${error instanceof Error ? error.message : String(error)}` }
+      // Backend exceptions can contain argv, the private intent nonce, or /proc identities.
+      // Expose only stable host error codes, never the raw diagnostic across IPC.
+      const code = error instanceof Error ? error.message.match(/^(?:manual-shell|node-execution|durable-sync|canvas-execution|worktree-journal)-[a-z-]+(?=$|:)/)?.[0] : undefined
+      return { ok: false, outcome: dispatched ? 'uncertain' : 'refused', error: `Manual shell ${dispatched ? 'may have started; inspect the recorded state before another action' : 'was refused'}: ${code ?? 'manual-shell-verification-failed'}` }
     } finally { approval?.cancel(); this.pending.delete(id) }
   }
 
