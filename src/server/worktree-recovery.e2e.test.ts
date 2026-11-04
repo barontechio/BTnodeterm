@@ -132,6 +132,21 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
       expect(facts.phase).toBe('recovered')
       expect(facts.provenance.kind).toBe(recorded ? 'recorded-directory' : 'observed-missing')
       if (!recorded) expect(facts.directoryStamp).toBeUndefined()
+      git('worktree', 'add', '-b', 'feature', checkout)
+      const rebinding = request(IPC.worktreeRecoveryRebind, facts.id)
+      await vi.waitFor(() => expect(prompts).toHaveLength(2))
+      expect(prompts[1].action).toBe('rebind-worktree')
+      expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0].rebind).toBeUndefined()
+      const consent = prompts[1]
+      await request(IPC.ownerConfirmationDecide, { id: consent.id, token: consent.token, proof: consent.proof, answer: 'approve' })
+      expect(await rebinding).toMatchObject({ ok: true, outcome: 'rebound' })
+      const rebound = await request(IPC.workspaceLoad) as Awaited<ReturnType<WorkspaceStore['load']>>
+      expect(rebound.projects[0].nodes.find((node) => node.id === 'group')).toMatchObject({ cwd: checkout,
+        worktree: { repoPath: repo, path: checkout, branch: 'feature', baseRef: 'main', createdByApp: false } })
+      expect(rebound.projects[0].nodes.find((node) => node.id === 'editor')?.fileMissing).toBe(true)
+      expect(await request(IPC.worktreeRecoveryList)).toMatchObject({ ok: true, records: [{ pathRestricted: false }] })
+      expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0]).toMatchObject({ phase: 'recovered', rebind: { state: 'bound' } })
+
     } finally { socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs() }
   })
 

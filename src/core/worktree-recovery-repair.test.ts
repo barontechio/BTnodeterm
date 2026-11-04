@@ -10,7 +10,7 @@ import { initCanvasSync } from './canvas-sync'
 import { WorkspaceStore } from './workspace-store'
 import { CanvasContentWriter } from './canvas-content-writer'
 import { canvasExecutionBinding } from './canvas-execution-reservations'
-import { installWorktreeCanvasAdmission } from './worktree-canvas-admission'
+import { installWorktreeCanvasAdmission, WorktreeCanvasAdmission } from './worktree-canvas-admission'
 import { WorktreeRemovalJournal } from './worktree-removal-journal'
 import { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
 import { WorktreeRecoveryService } from './worktree-recovery-service'
@@ -279,7 +279,7 @@ it.each(['folder', 'appdata', 'inline'] as const)('recovers an already missing %
     const row = f.journal.list()[0]
     expect(row).toMatchObject({ phase: 'removed', provenance: { kind: 'observed-missing', ancestor: root } })
     expect(row.directoryStamp).toBeUndefined()
-    expect(JSON.parse(fs.readFileSync(f.journal.file, 'utf8')).version).toBe(3)
+    expect(JSON.parse(fs.readFileSync(f.journal.file, 'utf8')).version).toBe(4)
     return recycle(...args)
   })
   expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
@@ -440,4 +440,193 @@ it('refuses a redirected Git marker even when the underlying repository still an
   fs.renameSync(path.join(f.repo, '.git'), metadata); fs.symlinkSync(metadata, path.join(f.repo, '.git'))
   expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
   expect(f.confirmations.request).not.toHaveBeenCalled(); expect(f.recycle).not.toHaveBeenCalled()
+})
+
+async function rebindFixture(storage: 'folder' | 'appdata' | 'inline' = 'folder') {
+  const f = await missingFixture(storage)
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true })
+  const row = f.journal.list()[0]
+  execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'feature', f.checkout], { stdio: 'pipe' })
+  f.recycle.mockClear(); f.confirmations.request.mockClear()
+  return { ...f, row }
+}
+it.each(['folder', 'appdata', 'inline'] as const)('rebinds verified %s association durably while retaining every manual restriction', async (storage) => {
+  const f = await rebindFixture(storage)
+  const terminal = structuredClone(f.store.getNodeForHostAction('terminal'))
+  const origin = structuredClone(f.row.provenance)
+  const result = await f.service.rebind(f.row.id, f.owner)
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, outcome: 'rebound' })
+  expect(f.recycle).not.toHaveBeenCalled(); expect(f.confirmations.request).toHaveBeenCalledOnce()
+  const fresh = (await new WorkspaceStore().load({ sideline: false })).projects[0]
+  expect(fresh.nodes.find((node) => node.id === 'group')).toMatchObject({ cwd: f.checkout, worktree: {
+    path: f.checkout, repoPath: f.repo, branch: 'feature', baseRef: 'main', createdByApp: false
+  } })
+  expect(fresh.nodes.find((node) => node.id === 'terminal')).toEqual(terminal)
+  expect(fresh.nodes.find((node) => node.id === 'editor')?.fileMissing).toBe(true)
+  const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
+  expect(reload.list()).toHaveLength(1)
+  expect(reload.list()[0]).toMatchObject({ provenance: origin, rebind: { state: 'bound' }, repair: { manualStart: ['terminal'] } })
+  expect(reload.blocks(f.checkout)).toBe(false); expect(reload.isNodePending('terminal')).toBe(true)
+  expect(() => f.coordinator.assertAllowed('terminal')).toThrow('recovery-required')
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+})
+
+it.each(['branch', 'inode', 'owner', 'git-marker'] as const)('refuses rebind when approved %s changes during consent', async (change) => {
+  const f = await rebindFixture()
+  f.confirmations.request.mockImplementationOnce(async () => {
+    if (change === 'branch') execFileSync('git', ['-C', f.checkout, 'switch', '-c', 'different'], { stdio: 'pipe' })
+    if (change === 'inode') { fs.renameSync(f.checkout, f.checkout + '-old'); fs.mkdirSync(f.checkout) }
+    if (change === 'owner') f.owners.forget(1)
+    if (change === 'git-marker') fs.appendFileSync(path.join(f.checkout, '.git'), '\n')
+    return { ok: true, consume: async () => true, current: () => f.owner.active(), cancel() {} }
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false })
+  expect(f.store.getNodeForHostAction('group')?.worktree).toBeUndefined()
+  expect(f.journal.list()[0].rebind).toBeUndefined()
+  expect(f.journal.blocks(f.checkout)).toBe(true)
+  expect(f.recycle).not.toHaveBeenCalled()
+})
+
+it.each(['folder', 'appdata', 'inline'] as const)('retains prepared %s rebind after failed metadata durability and reconciles with fresh consent', async (storage) => {
+  const f = await rebindFixture(storage); const open = fs.promises.open
+  const content = storage === 'folder' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(root, 'data', 'inline-projects', 'project.json')
+  const spy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === content) vi.spyOn(handle, 'sync').mockRejectedValue(new Error('rebind flush failed'))
+    return handle
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain', error: expect.stringContaining('rebind flush failed') })
+  expect(f.journal.list()[0].rebind?.state).toBe('prepared')
+  expect(f.journal.blocks(f.checkout)).toBe(true); expect(f.journal.isNodePending('terminal')).toBe(true)
+  spy.mockRestore()
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: true, outcome: 'rebound' })
+  expect(f.confirmations.request).toHaveBeenCalledTimes(2); expect(f.recycle).not.toHaveBeenCalled()
+})
+
+it.each(['content', 'index'] as const)('refuses releasing the path when durable %s changes during final publication', async (part) => {
+  const f = await rebindFixture(); const mark = f.journal.markRebound.bind(f.journal)
+  const file = part === 'content' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(root, 'data', 'workspace.json')
+  vi.spyOn(f.journal, 'markRebound').mockImplementation(async (...args) => {
+    // Simulate an external writer after metadata fsync, before the journal's dispatch guard.
+    fs.appendFileSync(file, ' ')
+    return mark(...args)
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain', error: expect.stringContaining('durable-sync-file-changed') })
+  const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
+  expect(reload.list()[0].rebind?.state).toBe('prepared'); expect(reload.blocks(f.checkout)).toBe(true)
+  expect(reload.isNodePending('terminal')).toBe(true); expect(f.recycle).not.toHaveBeenCalled()
+})
+
+it('holds the workspace FIFO through bound publication and preserves a queued visual save', async () => {
+  const f = await rebindFixture(); const entered = deferred(); const finish = deferred()
+  const mark = f.journal.markRebound.bind(f.journal)
+  vi.spyOn(f.journal, 'markRebound').mockImplementation(async (...args) => { entered.resolve(); await finish.promise; return mark(...args) })
+  const rebinding = f.service.rebind(f.row.id, f.owner); await entered.promise
+  let edited = false
+  const queued = f.writer.edit((fresh) => { edited = true; fresh.projects[0].nodes.find((n) => n.id === 'group')!.position.x = 947 })
+  await Promise.resolve(); expect(edited).toBe(false)
+  finish.resolve(); expect(await rebinding).toMatchObject({ ok: true }); await queued
+  expect(f.store.getNodeForHostAction('group')).toMatchObject({ position: { x: 947 }, worktree: { path: f.checkout } })
+})
+
+it('cannot use the rebind scope around a queued operation before the actual repair transition', async () => {
+  const f = await rebindFixture(); const scope = f.admission.withVerifiedRebind.bind(f.admission)
+  let checked = false
+  vi.spyOn(f.admission, 'withVerifiedRebind').mockImplementation(async (permit, row, work) => scope(permit, row, async () => {
+    const proposed = structuredClone(await f.store.load({ sideline: false }))
+    const group = proposed.projects[0].nodes.find((n) => n.id === 'group')!
+    group.worktree = structuredClone(row.rebind!.binding); group.cwd = f.checkout
+    // No repair ALS yet: even the exact final binding remains unavailable.
+    expect(f.admission.reservations.isRepairBinding(permit, proposed.projects[0], group)).toBe(false)
+    expect(() => f.admission.assertWorkspace(proposed)).toThrow()
+    const unheld = new WorktreeCanvasAdmission(f.store, f.journal)
+    await unheld.withVerifiedRebind(permit, row, async () => {
+      expect(() => unheld.assertWorkspace(proposed)).toThrow('recovery-required')
+    })
+    checked = true
+    return work()
+  }))
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: true })
+  expect(checked).toBe(true)
+})
+
+it('does not bypass a second tombstone for the same checkout', async () => {
+  const f = await rebindFixture(); const paths = f.journal.reservedPaths.bind(f.journal)
+  vi.spyOn(f.journal, 'reservedPaths').mockImplementation(() => [...paths(), f.checkout])
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(f.journal.list()[0].rebind?.state).toBe('prepared')
+  expect(f.store.getNodeForHostAction('group')?.worktree).toBeUndefined()
+})
+
+it('retains quarantine on a lost bound publication acknowledgement and verifies durable facts on reload', async () => {
+  const f = await rebindFixture(); const rename = fs.promises.rename
+  let journalWrites = 0
+  vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args: Parameters<typeof rename>) => {
+    const result = await rename(...args)
+    if (args[1] === f.journal.file && ++journalWrites === 2) throw new Error('bound acknowledgement lost')
+    return result
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(() => f.journal.blocks(f.checkout)).toThrow('journal-unavailable')
+  expect(f.journal.isNodePending('terminal')).toBe(true)
+  const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
+  expect(reload.list()[0].rebind?.state).toBe('bound')
+  expect(reload.blocks(f.checkout)).toBe(false); expect(reload.isNodePending('terminal')).toBe(true)
+  expect(f.confirmations.request).toHaveBeenCalledOnce(); expect(f.recycle).not.toHaveBeenCalled()
+})
+
+it.each(['prepare', 'content', 'bound'] as const)('rechecks original Git evidence during rebind %s publication', async (boundary) => {
+  const f = await rebindFixture(); const write = fs.promises.writeFile; let injected = false; let journalWrites = 0
+  vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof write>) => {
+    const result = await write(...args); const target = String(args[0])
+    const journalTemp = target.startsWith(f.journal.file + '.')
+    if (journalTemp) journalWrites++
+    const match = boundary === 'prepare' ? journalTemp && journalWrites === 1 : boundary === 'bound' ? journalTemp && journalWrites === 2 :
+      target.startsWith(path.join(f.repo, '.nodeterm', 'project.json') + '.')
+    if (match && !injected) {
+      injected = true
+      const admin = fs.readFileSync(path.join(f.checkout, '.git'), 'utf8').trim().slice('gitdir: '.length)
+      fs.writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/different\n')
+    }
+    return result
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(injected).toBe(true); expect(f.recycle).not.toHaveBeenCalled()
+  const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
+  expect(reload.list()[0].rebind?.state).not.toBe('bound'); expect(reload.blocks(f.checkout)).toBe(true)
+  expect(reload.isNodePending('terminal')).toBe(true)
+})
+
+it('rechecks target evidence after syncing an unchanged private index', async () => {
+  const f = await rebindFixture(); const open = fs.promises.open; let injected = false
+  vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === path.join(root, 'data', 'workspace.json')) {
+      const sync = handle.sync.bind(handle)
+      vi.spyOn(handle, 'sync').mockImplementation(async () => {
+        await sync(); injected = true
+        const admin = fs.readFileSync(path.join(f.checkout, '.git'), 'utf8').trim().slice('gitdir: '.length)
+        fs.writeFileSync(path.join(admin, 'HEAD'), 'ref: refs/heads/different\n')
+      })
+    }
+    return handle
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(injected).toBe(true); expect(f.journal.list()[0].rebind?.state).toBe('prepared')
+  expect(f.journal.blocks(f.checkout)).toBe(true)
+})
+
+it.each(['version', 'envelope', 'target', 'members', 'created', 'phase'] as const)('rejects invalid v4 rebind %s without discarding manual restrictions', async (change) => {
+  const f = await rebindFixture(); expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: true })
+  const envelope = JSON.parse(fs.readFileSync(f.journal.file, 'utf8')); const record = envelope.records[0]
+  if (change === 'version') envelope.version = 3
+  if (change === 'envelope') envelope.futureAuthority = true
+  if (change === 'target') record.rebind.binding.path = f.repo
+  if (change === 'members') record.rebind.members.pop()
+  if (change === 'created') record.rebind.binding.createdByApp = true
+  if (change === 'phase') record.phase = 'removed'
+  const bytes = JSON.stringify(envelope); fs.writeFileSync(f.journal.file, bytes)
+  await expect(f.journal.load()).rejects.toThrow()
+  expect(f.journal.isNodePending('terminal')).toBe(true)
+  expect(fs.readFileSync(f.journal.file, 'utf8')).toBe(bytes)
 })

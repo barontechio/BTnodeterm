@@ -42,7 +42,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
         }
         if (!live) return
         setMissing(discovered)
-        const pending = result.records.filter((row) => row.phase !== 'recovered' || !!row.manualStartIds?.length)
+        const pending = result.records.filter((row) => row.phase !== 'recovered' || !!row.manualStartIds?.length || row.pathRestricted === true)
         setError(''); setRecords(pending)
         setSelected((id) => pending.some((row) => row.id === id) ? id : pending[0]?.id ?? '')
       } catch { if (live) setError('Recovery status could not be read. Refresh before continuing.') }
@@ -70,20 +70,22 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
     JSON.stringify(inspection.record) === JSON.stringify(row)
   const canRepair = !message && !error && !!api?.recover && row?.phase !== 'recovered' && inspection?.ok === true &&
     inspection.status === 'missing' && JSON.stringify(inspection.record) === JSON.stringify(row)
+  const canRebind = !message && !error && !!api?.rebind && row?.phase === 'recovered' && row.pathRestricted === true &&
+    inspection?.ok === true && ['changed', 'kept'].includes(inspection.status) && JSON.stringify(inspection.record) === JSON.stringify(row)
   const keep = async () => {
-    if (!api || !row || (!canKeep && !canRepair) || keeping.current) return
+    if (!api || !row || (!canKeep && !canRepair && !canRebind) || keeping.current) return
     keeping.current = true; setBusy(true); const started = epoch.current
     try {
-      if (canRepair) flushSync(close) // The existing owner broker owns the second, exact host-bound confirmation.
-      const result = canRepair ? await api.recover!(row.id) : await api.keep(row.id)
+      if (canRepair || canRebind) flushSync(close) // The existing owner broker owns the second, exact host-bound confirmation.
+      const result = canRebind ? await api.rebind!(row.id) : canRepair ? await api.recover!(row.id) : await api.keep(row.id)
       if (started !== epoch.current) return
       setMessage(result.ok ? result.message : result.error); setInspection(null)
-      if (canRepair && claimOwnerConfirmation(TICKET)) setOpen(true)
+      if ((canRepair || canRebind) && claimOwnerConfirmation(TICKET)) setOpen(true)
       await reload.current?.()
     } catch {
       if (started === epoch.current) {
         setMessage('Recovery may have completed. Refresh its status before another action.'); setInspection(null)
-        if (canRepair && claimOwnerConfirmation(TICKET)) setOpen(true)
+        if ((canRepair || canRebind) && claimOwnerConfirmation(TICKET)) setOpen(true)
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
@@ -105,10 +107,10 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
   if (!api || (!open && !records.length && !missing.length && !error)) return null
-  const status = inspection?.ok ? inspection.status === 'kept'
+  const status = canRebind ? 'A checkout is present at the recorded path. Review its actual Git identity before rebinding. Terminals stay manually blocked and their cwd is preserved.' : inspection?.ok ? inspection.status === 'kept'
     ? 'The original checkout and branch are present. Keep them to release this pending recovery.'
     : inspection.status === 'missing' && row?.phase !== 'recovered' ? 'The checkout is missing. Recover the recorded plain terminals and file notices without retrying Git. Terminals remain blocked for explicit manual start or rebinding.'
-    : row?.manualStartIds?.length ? 'Metadata is recovered. Terminals remain blocked on this host until explicit manual start or verified rebinding.'
+    : row?.manualStartIds?.length ? 'Metadata is recovered. Terminals remain blocked on this host until explicit manual start; rebinding does not start them.'
     : 'The original checkout could not be verified. Keep this recovery record while inspecting the files.'
     : inspection?.error ?? (selected ? 'Checking the existing checkout…' : missing.length ? 'These saved checkouts are missing. Recovery requires confirmation on this host; no prior deletion is assumed.' : 'No pending recovery records.')
   return <>
@@ -147,8 +149,8 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
           </div>)}
         </div>}
       </div>}
-      alert={(!canKeep && !canRepair) || busy} confirmLabel={!busy && canRepair ? 'Recover missing checkout' : canKeep && !busy ? 'Keep existing checkout' : 'Close'} cancelLabel="Close"
+      alert={(!canKeep && !canRepair && !canRebind) || busy} confirmLabel={!busy && canRebind ? 'Review verified rebinding' : !busy && canRepair ? 'Recover missing checkout' : canKeep && !busy ? 'Keep existing checkout' : 'Close'} cancelLabel="Close"
       danger={false} enterConfirms={false} autoFocusButtons={false}
-      onConfirm={() => { if (busy) return; if (canKeep || canRepair) void keep(); else close() }} onCancel={close} />}
+      onConfirm={() => { if (busy) return; if (canKeep || canRepair || canRebind) void keep(); else close() }} onCancel={close} />}
   </>
 }

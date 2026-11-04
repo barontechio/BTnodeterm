@@ -98,13 +98,14 @@ export class CanvasContentWriter {
   }
 
   /** Exact execution-metadata transition in the real store FIFO. No legacy load/save fallback. */
-  async repairExecution<T>(hold: CanvasExecutionHold, edit: (workspace: Workspace) => T): Promise<{ value: T; saved: boolean }> {
+  async repairExecution<T>(hold: CanvasExecutionHold, edit: (workspace: Workspace) => T,
+    afterDurable?: (workspace: Workspace, assertDurable: () => void) => Promise<void>): Promise<{ value: T; saved: boolean }> {
     if (!this.deps.workspaceStore.updateWorkspaceForExecutionRepair) throw new Error('canvas-execution-repair-unavailable')
     let value!: T
     const result = await this.deps.workspaceStore.updateWorkspaceForExecutionRepair(hold, (fresh) => {
       if (this.deps.isStopped?.()) throw this.stoppedWrite
       value = edit(fresh); return fresh
-    }, (current, next) => { this.publishChanges(current, next) })
+    }, (current, next) => { this.publishChanges(current, next) }, afterDurable)
     return { value, saved: result.saved }
   }
 

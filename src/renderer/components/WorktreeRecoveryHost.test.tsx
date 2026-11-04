@@ -117,4 +117,21 @@ describe('owner worktree recovery UI', () => {
     expect(button('Recover feature').disabled).toBe(true)
   })
 
+  it('shows recovered path restrictions without terminals and requests rebind once outside the dialog slot', async () => {
+    const api = fixture(); const recovered: WorktreeRecoveryItem = { ...row, phase: 'recovered', pathRestricted: true, manualStartIds: [] }
+    api.list = async () => ({ ok: true, records: [recovered] })
+    api.inspect = async () => ({ ok: true, record: recovered, status: 'changed' })
+    api.rebind = vi.fn(async () => {
+      expect(hasOwnerConfirmation()).toBe(false)
+      throw new Error('lost rebind reply')
+    })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    await act(async () => button('Worktree recovery (1)').click())
+    expect(api.rebind).not.toHaveBeenCalled()
+    await act(async () => button('Review verified rebinding').click())
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.rebind).toHaveBeenCalledExactlyOnceWith('record')
+    expect(button('Review verified rebinding')).toBeUndefined()
+  })
+
 })

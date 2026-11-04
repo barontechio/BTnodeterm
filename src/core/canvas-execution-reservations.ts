@@ -49,6 +49,15 @@ export class CanvasExecutionReservations {
     if (!scope.live) throw new Error('canvas-execution-expired-repair')
     scope.permit.assertCurrent()
   }
+  /** An authority exception must belong to the actual transitioned FIFO repair, not an outer
+   * queued promise or detached continuation. The permit is the existing host claim object. */
+  isRepairBinding(permit: NodeExecutionBatchPermit, project: Location, node: CanvasNodeState): boolean {
+    const scope = this.repairScope.getStore()
+    const held = this.held.get(key(project.id, node.id))
+    if (!scope?.live || scope.permit !== permit || !held || held.repair !== scope) return false
+    permit.assertCurrent()
+    return canvasExecutionBinding(project, node) === held.binding
+  }
   assertCurrent(): void {
     for (const target of this.held.values()) {
       const project = this.source.project(target.project.id)

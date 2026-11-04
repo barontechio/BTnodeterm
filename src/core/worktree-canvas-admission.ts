@@ -1,15 +1,17 @@
 import path from 'node:path'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import type { NodeExecutionBatchPermit } from './node-execution'
 import { carryLocalNodeExec } from '../shared/node-exec'
 import type { CanvasMutation, CanvasNodeState, Project, Workspace } from '../shared/types'
 import { CanvasExecutionReservations, canvasExecutionBinding } from './canvas-execution-reservations'
 import { setCanvasMutationObserver, setClientMutationAdmission, type ClientMutationRejection } from './canvas-sync'
 import { worktreeRecoveryAdmission } from './worktree-recovery-admission'
-import type { WorktreeRemovalJournal } from './worktree-removal-journal'
+import type { WorktreeRemovalJournal, WorktreeRemovalRecord } from './worktree-removal-journal'
 import type { WorkspaceExecutionAdmission, WorkspaceStore } from './workspace-store'
 
 type Source = Pick<WorkspaceStore, 'projectExecutionLocation' | 'projectIdsForNode' | 'getNodeForHostAction' | 'getProjectNodesForHostAction'>
 type ProjectLocation = NonNullable<ReturnType<Source['projectExecutionLocation']>>
-type Facts = Pick<WorktreeRemovalJournal, 'needsAdmission' | 'reservedPaths'>
+type Facts = Pick<WorktreeRemovalJournal, 'needsAdmission' | 'reservedPaths'> & Partial<Pick<WorktreeRemovalJournal, 'list'>>
 
 // Closing a tab or moving storage is not a new filesystem reference. Account/session/held-launch
 // changes do matter: they must not re-arm an unchanged path awaiting recovery.
@@ -23,12 +25,24 @@ function referenceBinding(project: ProjectLocation, node: CanvasNodeState): stri
  */
 export class WorktreeCanvasAdmission implements WorkspaceExecutionAdmission {
   readonly reservations: CanvasExecutionReservations
+  private readonly rebindScope = new AsyncLocalStorage<{ live: boolean; permit: NodeExecutionBatchPermit; row: WorktreeRemovalRecord }>()
   private readonly admitDirectory: (directory: string) => void
   constructor(private readonly source: Source, private readonly journal: Facts) {
     this.reservations = new CanvasExecutionReservations({
       project: (id) => source.projectExecutionLocation(id), node: (projectId, id) => this.currentNode(projectId, id)
     })
     this.admitDirectory = worktreeRecoveryAdmission(journal)
+  }
+  async withVerifiedRebind<T>(permit: NodeExecutionBatchPermit, row: WorktreeRemovalRecord, work: () => Promise<T>): Promise<T> {
+    permit.assertCurrent()
+    const captured = structuredClone(row)
+    if (permit.kind !== 'worktree' || this.rebindScope.getStore() || captured.rebind?.state !== 'prepared' ||
+      captured.members.length !== permit.nodeIds.length || captured.members.some((member) => !permit.nodeIds.includes(member.nodeId)) ||
+      JSON.stringify(this.journal.list?.().find((record) => record.id === row.id)) !== JSON.stringify(captured))
+      throw new Error('worktree-rebind-invalid-admission')
+    const scope = { live: true, permit, row: captured }
+    try { return await this.rebindScope.run(scope, work) }
+    finally { scope.live = false }
   }
   private currentNode(projectId: string, nodeId: string): CanvasNodeState | undefined {
     const projects = this.source.projectIdsForNode(nodeId)
@@ -47,6 +61,19 @@ export class WorktreeCanvasAdmission implements WorkspaceExecutionAdmission {
     lookup: (id: string) => CanvasNodeState | undefined): void {
     if (project.ssh || project.remote || node.ssh) return
     if (node.sshRemoteTmux || node.sshFs) throw new Error('worktree-recovery-directory-unverifiable: remote route is incomplete')
+    const scope = this.rebindScope.getStore()
+    const planned = scope?.row.rebind
+    const rebinding = scope?.live && planned && project.id === scope.row.projectId &&
+      planned.members.some((member) => member.nodeId === node.id && member.binding === canvasExecutionBinding(project, node)) &&
+      this.reservations.isRepairBinding(scope.permit, project, node)
+    const admit = rebinding ? worktreeRecoveryAdmission({ reservedPaths: () => {
+      scope.permit.assertCurrent()
+      // Remove this record's one reservation, not every record at the same path.
+      const paths = [...this.journal.reservedPaths()]
+      const index = paths.indexOf(scope.row.worktreePath)
+      if (index >= 0) paths.splice(index, 1)
+      return paths
+    } }) : this.admitDirectory
     const missingFile = (node.kind === 'editor' || node.kind === 'diff') && node.fileMissing === true
     const references = new Set([missingFile ? undefined : node.cwd,
       node.worktree?.path, node.worktree?.repoPath, node.runConfig?.projectDir])
@@ -72,7 +99,7 @@ export class WorktreeCanvasAdmission implements WorkspaceExecutionAdmission {
       if (!reference) continue
       if (!path.isAbsolute(reference) && (!project.cwd || !path.isAbsolute(project.cwd)))
         throw new Error('worktree-recovery-directory-unverifiable: relative path without a local project root')
-      this.admitDirectory(path.resolve(project.cwd ?? path.parse(reference).root, reference))
+      admit(path.resolve(project.cwd ?? path.parse(reference).root, reference))
     }
   }
   private assertNode(project: ProjectLocation, node: CanvasNodeState,

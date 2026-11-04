@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { GroupWorktree } from '../shared/worktree'
 import type { WorktreeGitEvidence } from './worktree-git-evidence'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -30,6 +31,16 @@ export interface WorktreeRepairPlan {
   /** Retain host dispatch quarantine even after metadata repair; never a launch grant. */
   manualStart: string[]
 }
+export interface WorktreeRebindPlan {
+  state: 'prepared' | 'bound'
+  directoryStamp: string
+  repoStamp: string
+  git: WorktreeGitEvidence
+  targetGit: WorktreeGitEvidence
+  binding: GroupWorktree
+  members: WorktreeRepairPlan['members']
+  staged: WorktreeRepairPlan['members']
+}
 export type WorktreeProvenance = { kind: 'recorded-directory' } | {
   kind: 'observed-missing'; observedAt: number; ancestor: string; ancestorStamp: string; repoStamp: string; git: WorktreeGitEvidence
 }
@@ -38,6 +49,7 @@ export interface WorktreeRemovalRecord extends Omit<WorktreeRemovalIntent, 'dire
   provenance: WorktreeProvenance
   id: string; createdAt: number; phase: Phase
   repair?: WorktreeRepairPlan
+  rebind?: WorktreeRebindPlan
 }
 interface Options {
   /** The existing hook/data-directory ownership verdict; a second app instance cannot write. */
@@ -48,7 +60,7 @@ interface Options {
 function record(raw: unknown): WorktreeRemovalRecord {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('worktree-journal-invalid-record')
   const row = raw as WorktreeRemovalRecord
-  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair', 'provenance'])
+  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair', 'provenance', 'rebind'])
   const absolute = (value: unknown) => typeof value === 'string' && value.length <= 4096 && !value.includes('\0') &&
     path.isAbsolute(value) && path.resolve(value) === value && path.parse(value).root !== value
   if (Object.keys(row).some((key) => !fields.has(key)) ||
@@ -87,6 +99,24 @@ function record(raw: unknown): WorktreeRemovalRecord {
       !Array.isArray(repair.manualStart) || new Set(repair.manualStart).size !== repair.manualStart.length ||
       repair.manualStart.some((id) => !row.members.some((member) => member.nodeId === id)))
       throw new Error('worktree-journal-invalid-repair')
+  }
+  if (row.rebind !== undefined) {
+    const plan = row.rebind; const binding = plan?.binding
+    const validMembers = (members: WorktreeRepairPlan['members']) => Array.isArray(members) && members.length === row.members.length &&
+      new Set(members.map((member) => member?.nodeId)).size === members.length && members.every((member) => member &&
+        row.members.some((original) => original.nodeId === member.nodeId) && typeof member.binding === 'string' &&
+        /^[0-9a-f]{64}$/.test(member.binding) && Object.keys(member).every((key) => ['nodeId', 'binding'].includes(key)))
+    if (!plan || row.phase !== 'recovered' || !row.repair ||
+      Object.keys(plan).some((key) => !['state', 'directoryStamp', 'repoStamp', 'git', 'targetGit', 'binding', 'members', 'staged'].includes(key)) ||
+      !['prepared', 'bound'].includes(plan.state) || !stamp(plan.directoryStamp) || !stamp(plan.repoStamp) || !plan.git ||
+      Object.keys(plan.git).some((key) => !['gitDirectory', 'commonDirectory', 'fingerprint'].includes(key)) ||
+      !absolute(plan.git.gitDirectory) || !absolute(plan.git.commonDirectory) || !/^[0-9a-f]{64}$/.test(plan.git.fingerprint) ||
+      !plan.targetGit || Object.keys(plan.targetGit).some((key) => !['gitDirectory', 'commonDirectory', 'fingerprint'].includes(key)) ||
+      !absolute(plan.targetGit.gitDirectory) || plan.targetGit.commonDirectory !== plan.git.commonDirectory || !/^[0-9a-f]{64}$/.test(plan.targetGit.fingerprint) ||
+      !binding || Object.keys(binding).some((key) => !['repoPath', 'path', 'branch', 'baseRef', 'createdByApp'].includes(key)) ||
+      binding.path !== row.worktreePath || binding.repoPath !== row.repoPath || binding.branch !== row.branch ||
+      typeof binding.baseRef !== 'string' || !isValidGitRef(binding.baseRef) || binding.createdByApp !== false ||
+      !validMembers(plan.members) || !validMembers(plan.staged)) throw new Error('worktree-journal-invalid-rebind')
   }
   return structuredClone(row)
 }
@@ -137,9 +167,11 @@ export class WorktreeRemovalJournal {
           next = []
         } else {
           const parsed = JSON.parse(raw)
-          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3].includes(parsed.version) ||
+          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3, 4].includes(parsed.version) ||
             !Array.isArray(parsed.records) || parsed.records.length > MAX_RECORDS) throw new Error('worktree-journal-invalid-envelope')
-          if (parsed.version === 3 && Object.keys(parsed).some((key) => !['kind', 'version', 'records'].includes(key)))
+          if (parsed.version >= 3 && Object.keys(parsed).some((key) => !['kind', 'version', 'records'].includes(key)))
+            throw new Error('worktree-journal-invalid-envelope')
+          if (parsed.version < 4 && parsed.records.some((row: WorktreeRemovalRecord) => row?.rebind !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version === 1 && parsed.records.some((row: WorktreeRemovalRecord) => row?.repair !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
@@ -169,16 +201,16 @@ export class WorktreeRemovalJournal {
     try { return !this.loaded || this.faulted || this.rows.length > 0 || !this.options.ownsFiles() }
     catch { return true }
   }
-  reservedPaths(): string[] { this.ready(); return this.rows.map((row) => row.worktreePath) }
+  reservedPaths(): string[] { this.ready(); return this.rows.filter((row) => row.rebind?.state !== 'bound').map((row) => row.worktreePath) }
   blocks(canonicalDirectory: string): boolean {
     this.ready()
     if (!path.isAbsolute(canonicalDirectory) || path.resolve(canonicalDirectory) !== canonicalDirectory)
       throw new Error('worktree-journal-canonical-path-required')
-    return this.rows.some((row) => isAncestorPath(row.worktreePath, canonicalDirectory))
+    return this.rows.some((row) => row.rebind?.state !== 'bound' && isAncestorPath(row.worktreePath, canonicalDirectory))
   }
   private async commit(next: WorktreeRemovalRecord[], assertCurrent?: () => void): Promise<void> {
     this.ready()
-    const data = JSON.stringify({ kind: 'worktree-removals', version: 3, records: next })
+    const data = JSON.stringify({ kind: 'worktree-removals', version: 4, records: next })
     if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('worktree-journal-capacity')
     try {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
@@ -247,6 +279,31 @@ export class WorktreeRemovalJournal {
       if (this.rows[index].phase === to) return structuredClone(this.rows[index])
       const next = structuredClone(this.rows); next[index].phase = to
       await this.commit(next); return structuredClone(next[index])
+    })
+  }
+  prepareRebind(id: string, plan: WorktreeRebindPlan, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    const captured = structuredClone(plan)
+    return this.serial(async () => {
+      this.ready(); assertCurrent()
+      const index = this.rows.findIndex((row) => row.id === id)
+      if (index < 0 || this.rows[index].phase !== 'recovered' || captured.state !== 'prepared') throw new Error('worktree-journal-recovery-required')
+      if (this.rows[index].rebind) {
+        if (JSON.stringify(this.rows[index].rebind) !== JSON.stringify(captured)) throw new Error('worktree-journal-rebind-changed')
+        return structuredClone(this.rows[index])
+      }
+      const next = structuredClone(this.rows); next[index] = record({ ...next[index], rebind: captured })
+      await this.commit(next, assertCurrent); return structuredClone(next[index])
+    })
+  }
+  /** Release only verified path restriction. Keep original evidence and per-node manual quarantine. */
+  markRebound(id: string, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    return this.serial(async () => {
+      this.ready(); assertCurrent()
+      const index = this.rows.findIndex((row) => row.id === id)
+      if (index < 0 || this.rows[index].phase !== 'recovered' || this.rows[index].rebind?.state !== 'prepared')
+        throw new Error('worktree-journal-recovery-required')
+      const next = structuredClone(this.rows); next[index].rebind!.state = 'bound'
+      await this.commit(next, assertCurrent); return structuredClone(next[index])
     })
   }
   /** Caller already proved a new binding; never use this to dismiss an uncertain deletion. */

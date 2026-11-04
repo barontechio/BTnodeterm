@@ -46,7 +46,7 @@
 //     caller, and retrying only delays a clearer error. `ENOSPC` will not improve by waiting.
 //   - It does not swallow the final failure. The last error is thrown with its original code.
 
-import { promises as fs, renameSync, constants as fsConstants } from 'fs'
+import { promises as fs, renameSync, lstatSync, constants as fsConstants } from 'fs'
 import { randomUUID } from 'crypto'
 import path from 'path'
 import { sleep } from '../shared/sleep'
@@ -413,7 +413,7 @@ export async function writeFileDurableAtomic(target: string, data: string, opts:
 /** Acknowledge bytes already published by an ordinary atomic writer. Recovery calls this under
  * its existing store FIFO before recording completion. No rewrite, symlink following or retry;
  * failed/unsupported flushes remain uncertain. It is not a lock against external writers. */
-export async function syncFileDurable(target: string): Promise<void> {
+export async function syncFileDurable(target: string): Promise<() => void> {
   const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   const parent = path.dirname(target)
   const directory = await fs.open(parent, flags)
@@ -431,5 +431,14 @@ export async function syncFileDurable(target: string): Promise<void> {
         throw new Error('durable-sync-file-changed')
     }
     await current(); await file.sync(); await directory.sync(); await current()
+    // A later authority publication must still refer to the exact acknowledged files. This
+    // receipt does not authorize writes; its caller retains the original host permit and FIFO.
+    return () => {
+      const named = lstatSync(target, { bigint: true }); const namedParent = lstatSync(parent, { bigint: true })
+      if (!named.isFile() || named.dev !== original.dev || named.ino !== original.ino || named.size !== original.size ||
+        named.mtimeNs !== original.mtimeNs || named.ctimeNs !== original.ctimeNs || !namedParent.isDirectory() ||
+        namedParent.dev !== parentStat.dev || namedParent.ino !== parentStat.ino)
+        throw new Error('durable-sync-file-changed')
+    }
   } finally { try { await file?.close() } finally { await directory.close() } }
 }

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { readRegularFileNoFollow } from './read-regular-file'
 import { captureWorktreeGitEvidence, assertWorktreeGitEvidence } from './worktree-git-evidence'
 import path from 'node:path'
 import { CanvasContentWriter } from './canvas-content-writer'
@@ -10,15 +11,15 @@ import type { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
 import type { OwnerConfirmationBroker, OwnerPermit } from './owner-confirmation'
 import type { WorkspaceStore } from './workspace-store'
 import type { CanvasNodeState, Workspace } from '../shared/types'
-import { descendantIds, isAncestorPath, isRemoteSessionNode } from '../shared/worktree'
+import { descendantIds, isAncestorPath, isRemoteSessionNode, isValidGitRef } from '../shared/worktree'
 import { worktreeRecoveryAdmission } from './worktree-recovery-admission'
 import { isSafeNodeId } from '../shared/safe-id'
-import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply, WorktreeMissingList } from '../shared/worktree-recovery'
+import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply, WorktreeMissingList, WorktreeRecoveryRebindReply } from '../shared/worktree-recovery'
 import type { AccountOwner } from './owner-lifetimes'
 import type { PtyManager } from './pty-manager'
 import type { GitService } from './git-service'
 import { withGitRemoteResolver } from './remote-ssh/remote-git'
-import type { WorktreeRemovalJournal, WorktreeRemovalRecord } from './worktree-removal-journal'
+import type { WorktreeRemovalJournal, WorktreeRemovalRecord, WorktreeRebindPlan } from './worktree-removal-journal'
 
 interface Dependencies {
   journal: WorktreeRemovalJournal
@@ -27,7 +28,7 @@ interface Dependencies {
   repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
 const item = (row: WorktreeRemovalRecord): WorktreeRecoveryItem => ({ id: row.id, createdAt: row.createdAt,
-  phase: row.phase, provenance: row.provenance.kind, projectId: row.projectId, groupId: row.groupId, repoPath: row.repoPath,
+  phase: row.phase, pathRestricted: row.rebind?.state !== 'bound', provenance: row.provenance.kind, projectId: row.projectId, groupId: row.groupId, repoPath: row.repoPath,
   path: row.worktreePath, branch: row.branch, fallbackCwd: row.fallbackCwd, memberIds: row.members.map((member) => member.nodeId), ...(row.repair?.manualStart.length ? { manualStartIds: row.repair.manualStart } : {}) })
 const refused = (error: string): WorktreeRecoveryKeepReply => ({ ok: false, outcome: 'refused', error })
 
@@ -164,7 +165,7 @@ export class WorktreeRecoveryService {
     if (!this.directoryMissing(row)) throw new Error('The checkout changed during Git inspection.')
   }
 
-  private repairSnapshot(workspace: Workspace, row: WorktreeRemovalRecord): { projectId: string; nodes: CanvasNodeState[] } {
+  private repairSnapshot(workspace: Workspace, row: WorktreeRemovalRecord, rebinding = false): { projectId: string; nodes: CanvasNodeState[] } {
     const ids = new Set(row.members.map((member) => member.nodeId))
     const projects = workspace.projects.filter((project) => project.id === row.projectId)
     if (projects.length !== 1 || projects[0].unavailable || projects[0].remote || projects[0].ssh || projects[0].handedOffTo)
@@ -182,8 +183,9 @@ export class WorktreeRecoveryService {
       const node = hits[0].node
       if (node.parentId && !ids.has(node.parentId)) throw new Error('A recovery ancestor is outside the recorded member set.')
       const binding = canvasExecutionBinding(project, node)
-      if (binding !== member.binding && binding !== row.repair?.members.find((entry) => entry.nodeId === node.id)?.binding &&
-        binding !== row.repair?.staged?.find((entry) => entry.nodeId === node.id)?.binding)
+      const accepted = rebinding ? [row.repair?.members, row.rebind?.members, row.rebind?.staged]
+        : [row.members, row.repair?.members, row.repair?.staged]
+      if (!accepted.some((members) => members?.find((entry) => entry.nodeId === node.id)?.binding === binding))
         throw new Error('A recorded execution identity changed. Keep the recovery facts for explicit reconciliation.')
       // Agent recovery needs a verified account/runtime conversation adapter, not a guessed resume.
       if (node.agentId || node.agentSessionId || node.accountId || !['group', 'terminal', 'editor', 'diff'].includes(node.kind))
@@ -340,6 +342,126 @@ export class WorktreeRecoveryService {
     } catch (error) {
       try { this.deps.journal.list() } catch { changed = true }
       return { ok: false, outcome: changed ? 'uncertain' : 'refused', error: `Recovery ${changed ? 'may be partially complete; inspect its status before another action' : 'was refused'}: ${error instanceof Error ? error.message : String(error)}` }
+    } finally { approval?.cancel(); this.pending.delete(id) }
+  }
+
+  /** Adopt only the newly verified same-path/same-branch checkout. No terminal/Git mutation
+   * and no manual admission release. All association evidence stays in the existing journal. */
+  async rebind(id: string, owner: AccountOwner): Promise<WorktreeRecoveryRebindReply> {
+    const refuse = (error: string): WorktreeRecoveryRebindReply => ({ ok: false, outcome: 'refused', error })
+    const domain = this.deps.repair
+    if (!owner.active() || !domain || !this.deps.pty.nodeExecutionIdentity || !this.deps.git.worktreeRecoveryDirectories)
+      return refuse('Verified rebinding is unavailable for this owner or host.')
+    if (this.pending.has(id) || this.pending.size >= 32) return refuse('Another recovery is still completing.')
+    this.pending.add(id); let changed = false
+    let approval: Extract<OwnerPermit, { ok: true }> | undefined
+    try {
+      let row = this.row(id)
+      if (row.phase !== 'recovered' || !row.repair || row.rebind?.state === 'bound') return refuse('Complete recovery before reviewing a new association; this record may already be rebound.')
+      const writer = new CanvasContentWriter({ workspaceStore: domain.workspace })
+      const workspace = structuredClone(await domain.workspace.load({ sideline: false }))
+      const before = this.repairSnapshot(workspace, row, true)
+      const physical = new Map(before.nodes.filter((node) => node.kind === 'terminal').map((node) => [node.id, this.deps.pty.nodeExecutionIdentity!(node.id)]))
+      const stat = fs.lstatSync(row.worktreePath, { bigint: true })
+      const directoryStamp = row.rebind?.directoryStamp ?? `${stat.dev}:${stat.ino}`
+      const repository = fs.lstatSync(row.repoPath, { bigint: true })
+      const repoStamp = row.rebind?.repoStamp ?? `${repository.dev}:${repository.ino}`
+      const gitEvidence = row.rebind?.git ?? captureWorktreeGitEvidence(row.repoPath)
+      const targetGit = row.rebind?.targetGit ?? captureWorktreeGitEvidence(row.worktreePath)
+      let expectedRecord = JSON.stringify(row)
+      const assertTarget = () => {
+        const current = fs.lstatSync(row.worktreePath, { bigint: true })
+        const repo = fs.lstatSync(row.repoPath, { bigint: true })
+        if (!repo.isDirectory() || !repo.ino || `${repo.dev}:${repo.ino}` !== repoStamp || !current.isDirectory() || !current.ino || fs.realpathSync.native(row.worktreePath) !== row.worktreePath ||
+          fs.realpathSync.native(row.repoPath) !== row.repoPath || `${current.dev}:${current.ino}` !== directoryStamp)
+          throw new Error('The approved new checkout identity changed.')
+        fs.accessSync(row.worktreePath, fs.constants.R_OK | fs.constants.X_OK)
+        assertWorktreeGitEvidence(row.repoPath, gitEvidence)
+        assertWorktreeGitEvidence(row.worktreePath, targetGit)
+      }
+      assertTarget()
+      const directories = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeRecoveryDirectories!(row.repoPath, assertTarget))
+      if (!directories || directories.gitDirectory !== gitEvidence.gitDirectory || directories.commonDirectory !== gitEvidence.commonDirectory)
+        return refuse('The actual Git route does not match the proposed association.')
+      const targetDirectories = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeRecoveryDirectories!(row.worktreePath, assertTarget))
+      const targetHead = await readRegularFileNoFollow(path.join(targetGit.gitDirectory, 'HEAD'), 4096)
+      const targetBacklink = await readRegularFileNoFollow(path.join(targetGit.gitDirectory, 'gitdir'), 4096)
+      assertTarget()
+      if (!targetDirectories || targetDirectories.gitDirectory !== targetGit.gitDirectory || targetDirectories.commonDirectory !== gitEvidence.commonDirectory ||
+        targetGit.commonDirectory !== gitEvidence.commonDirectory || targetHead?.trim() !== `ref: refs/heads/${row.branch}` ||
+        targetBacklink?.trim() !== path.join(row.worktreePath, '.git'))
+        return refuse('The new checkout marker, administrative backlink or branch does not match the proposed association.')
+      const listing = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeList(row.repoPath))
+      assertTarget()
+      const matches = listing.entries.filter((entry) => path.resolve(entry.path) === row.worktreePath)
+      const baseRef = listing.entries[0]?.branch
+      if (!listing.ok || matches.length !== 1 || matches[0] === listing.entries[0] || matches[0].isBare || matches[0].prunable ||
+        matches[0].branch !== row.branch || !baseRef || !isValidGitRef(baseRef))
+        return refuse('A healthy nonprimary linked checkout and a real merge-target branch are required.')
+      const project = workspace.projects.find((entry) => entry.id === row.projectId)!
+      const originals = structuredClone(before.nodes)
+      const binding = { repoPath: row.repoPath, path: row.worktreePath, branch: row.branch, baseRef, createdByApp: false }
+      const group = before.nodes.find((node) => node.id === row.groupId)!
+      group.worktree = binding; group.cwd = row.worktreePath
+      const plan: WorktreeRebindPlan = row.rebind ?? { state: 'prepared', directoryStamp, repoStamp, git: gitEvidence, targetGit, binding,
+        members: before.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })),
+        staged: before.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project,
+          carryLocalNodeExec(originals.find((old) => old.id === node.id), node, false)) })) }
+      if (JSON.stringify(plan.binding) !== JSON.stringify(binding) || before.nodes.some((node) =>
+        canvasExecutionBinding(project, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+        return refuse('The prepared association no longer matches the actual target.')
+      const current = () => {
+        try {
+          assertTarget()
+          return owner.active() && JSON.stringify(this.row(id)) === expectedRecord &&
+            [...physical].every(([nodeId, identity]) => this.deps.pty.nodeExecutionIdentity!(nodeId) === identity)
+        } catch { return false }
+      }
+      const answer = await domain.confirmations.request({ action: 'rebind-worktree',
+        requester: { nodeId: row.groupId, projectId: row.projectId, title: row.branch }, binding: { record: expectedRecord, plan },
+        message: `Associate the recovered group with ${row.branch} at ${row.worktreePath}?`,
+        details: `The new merge target is ${baseRef}. Only the group association and its cwd change. Terminal cwd, missing file notices and held commands stay unchanged; terminals remain manually blocked. No session or Git mutation is performed.`,
+        confirmLabel: 'Rebind verified checkout', danger: true,
+        checkCurrent: async () => {
+          if (!current()) return false
+          this.repairSnapshot(await domain.workspace.load({ sideline: false }), row, true)
+          return current()
+        }
+      })
+      if (!answer.ok) return refuse(`Owner confirmation ${answer.reason}. No association was changed.`)
+      approval = answer
+      if (!(await answer.consume())) return refuse('The approved association changed or expired.')
+      await this.deps.pty.runWorktreeAction(row.members.map((member) => member.nodeId), { owner, current: () => answer.current() && current(), timeoutMs: 120_000 }, async (permit) => {
+        const { value: hold } = await writer.edit((fresh) => {
+          permit.assertCurrent(); this.repairSnapshot(fresh, row, true)
+          return domain.admission.reservations.hold(fresh, row.members.map((member) => member.nodeId), permit)
+        })
+        try {
+          permit.assertCurrent()
+          row = await this.deps.journal.prepareRebind(id, plan, permit.assertCurrent)
+          expectedRecord = JSON.stringify(row); changed = true
+          await domain.admission.withVerifiedRebind(permit, row, () => writer.repairExecution(hold, (fresh) => {
+            permit.assertCurrent()
+            const captured = this.repairSnapshot(fresh, row, true)
+            const targetProject = fresh.projects.find((entry) => entry.id === row.projectId)!
+            const target = captured.nodes.find((node) => node.id === row.groupId)!
+            target.worktree = structuredClone(plan.binding); target.cwd = row.worktreePath
+            if (captured.nodes.some((node) => canvasExecutionBinding(targetProject, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+              throw new Error('The conditional rebind projection changed.')
+          }, async (durable, assertDurable) => {
+            permit.assertCurrent(); assertDurable()
+            const final = this.repairSnapshot(durable, row, true); const location = domain.workspace.projectExecutionLocation(row.projectId)!
+            if (final.nodes.some((node) => canvasExecutionBinding(location, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+              throw new Error('The new association was not acknowledged.')
+            row = await this.deps.journal.markRebound(id, () => { permit.assertCurrent(); assertDurable() })
+            expectedRecord = JSON.stringify(row)
+          }))
+        } finally { hold.release() }
+      })
+      return { ok: true, outcome: 'rebound', message: 'Verified checkout rebound. Terminal cwd and manual-start restrictions remain; no session was started or command replayed.' }
+    } catch (error) {
+      try { this.deps.journal.list() } catch { changed = true }
+      return { ok: false, outcome: changed ? 'uncertain' : 'refused', error: `Rebinding ${changed ? 'may be partially complete; inspect its recorded state' : 'was refused'}: ${error instanceof Error ? error.message : String(error)}` }
     } finally { approval?.cancel(); this.pending.delete(id) }
   }
 

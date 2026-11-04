@@ -1289,7 +1289,8 @@ export class WorkspaceStore {
   /** Recovery keeps its original execution hold; the temporary old-cache recognition begins
    * INSIDE this FIFO step and ends before the next queued writer can run. */
   updateWorkspaceForExecutionRepair(hold: CanvasExecutionHold, edit: (fresh: Workspace) => Workspace,
-    beforeSave?: (current: Workspace, next: Workspace) => void): Promise<{ saved: boolean; workspace: Workspace }> {
+    beforeSave?: (current: Workspace, next: Workspace) => void,
+    afterDurable?: (workspace: Workspace, assertDurable: () => void) => Promise<void>): Promise<{ saved: boolean; workspace: Workspace }> {
     const run = this.saveChain.then(() => hold.repair(async (transition) => {
       const result = await this.updateWorkspaceNow((fresh) => {
         const next = edit(fresh); transition(next); return next
@@ -1309,8 +1310,14 @@ export class WorkspaceStore {
           else if (!entry.project) throw new Error('workspace-repair-storage-unavailable')
         }
       }
-      for (const file of files) { this.executionAdmission?.assertCurrent(); await syncFileDurable(file) }
+      const receipts: Array<() => void> = []
+      for (const file of files) { this.executionAdmission?.assertCurrent(); receipts.push(await syncFileDurable(file)) }
       this.executionAdmission?.assertCurrent()
+      const assertDurable = () => { this.executionAdmission?.assertCurrent(); for (const current of receipts) current() }
+      assertDurable()
+      // Releasing a durable path restriction belongs to this same FIFO/repair scope. A queued
+      // visual save cannot move the acknowledged files between verification and journal publish.
+      await afterDurable?.(result.workspace, assertDurable)
       return result
     }))
     this.saveChain = run.catch(() => {})
