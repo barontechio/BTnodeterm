@@ -56,11 +56,28 @@ Chromium checks cover 504 layout cases, editing and external title updates, drag
 and a differential regression proving all four focused arrow keys leave canvas geometry unchanged.
 This is renderer verification on Linux, not a claim of a native device run or production deployment.
 
+The following reviewed candidates are composed locally and await a fresh aggregate gate:
+
+| Candidate | Reviewed source / integration | Scope and remaining gate |
+| --- | --- | --- |
+| First-observed missing-checkout recovery | `8d826dff`, `5877712d` / `59c0dc1c`, `7c709e43` | Strict v3 provenance without invented prior inode/deletion facts; original canonical Git metadata retained through consent and dispatch. Independent follow-up: 449 focused/contract checks and 57 artifact executions across documented runs, typecheck; no actionable findings. Manual-start quarantine remains. |
+| Opt-in live local development gateway | `2b737942`, `483f2784` / `c7d8ceac`, `1d00d462` | Linux/local tmux/IPv4 and exact operator-approved targets; actual attached tmux/socket/server/session/pane identity, reserved DNS aliases and exact argv. Independent 120 checks, typecheck and actual Chromium modules/fetch/preflight/HMR plus storage/worker refusal. See `development-preview-gateway.md`; deployment, SSH and isolated workers remain separate. |
+| Capsule single-line mirror compatibility | `09f955fa` | CR/LF removal matches the HTML text input, preventing newline-dependent capsule height. Actual Chromium newline/Unicode cases and the existing 504-case layout matrix pass; six existing tests, typecheck and both builds pass. |
+| Security/test compatibility | `624223bf`, `a92a1d95` | Harden three fixtures without CodeQL suppression; extend seven existing Kanban session mocks for the ports component's project lookup. 79 security-focused and 59 UI/host-focused checks pass; fresh aggregate and security results remain required. |
+
+Frozen candidate `7c709e43` passed 24,776 tests but failed 45 assertions because seven Kanban
+session mocks omitted `sessionForProject`, plus one unchanged session-host timeout. The mock-only
+correction is `a92a1d95`; all 59 targeted checks, including the unchanged timed-out fixture, pass.
+The earlier focused attempt also encountered local PTY exhaustion; availability recovered without
+changing system limits or terminating unrelated sessions. Neither failed run is a green aggregate
+certificate. The actual known-host file remained unchanged. The next frozen aggregate covers the
+corrected composition; remote CodeQL must also confirm the fixture corrections.
+
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
-| Worktrees and sessions | Missing-before-recording recovery, verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
+| Worktrees and sessions | Accept the composed first-observed recovery candidate, then verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
 | SSH | Reviewed connection-completion correction, continuous meters/tails, streaming transfers/media and additional readers where suitable shared parsers exist | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
-| Web and collaboration | Development gateway, optional isolated browser worker/control, browser team joining and supported notifications | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
+| Web and collaboration | Accept the composed opt-in local gateway, then optional isolated browser worker/control, browser team joining and supported notifications | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
 
 Removal must preserve sessions when Git refuses. A real Git fixture confirmed that ordinary
 `git worktree remove` can delete ignored files; consent must disclose that loss or refuse those

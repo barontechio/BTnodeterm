@@ -1,5 +1,26 @@
 # Server parity security review
 
+## Current candidate: four fixture findings (2026-11-04)
+
+CodeQL result check [126744604453](https://github.com/barontechio/BTnodeterm/runs/126744604453)
+on `4df5b36c` failed with one high and three medium findings. Linux/Windows quality, dependency
+review and the CodeQL analysis job itself succeeded; successful analysis is not a passing result
+gate. All four annotations point to test fixtures, and do not establish a production-service defect.
+
+| Severity | Fixture | Report and correction in `624223bf` |
+| --- | --- | --- |
+| High | `src/core/fs-atomic.test.ts` | Potential path-check/read race. Retain an original file handle and compare the post-operation handle's bytes and inode, preserving the same-file/no-rewrite assertion. |
+| Medium | `src/core/agents/hook-endpoint-file-sh.test.ts` | Environment-derived shell source path. Pass the real generated writer file as inherited descriptor 3 and use a fixed shell source command; the actual spaced-path quoting assertion remains and the descriptor closes in `finally`. |
+| Medium | `src/server/development-preview.test.ts` | Missing `HttpOnly` on a decoy upstream cookie. Add the flag; the gateway must still strip the cookie entirely. |
+| Medium | `src/server/development-preview.test.ts` | Missing `Secure` on the same decoy cookie. Add `Secure` and `SameSite=Strict`, retaining the credential-filtering assertion. |
+
+The corrected fixtures pass 79 focused checks and typecheck. A fresh remote CodeQL result is still
+required; no query, threshold or alert was suppressed/dismissed for these four reports. Earlier
+dependency-audit and individual-alert decisions below describe their specific snapshots, not a
+zero-alert claim about the current default branch.
+
+## Earlier reviewed findings and dependency patch
+
 Reviewed against fork integration PR #2, CodeQL check 123838127390 (2026-10-30).
 
 The preview-source report (`js/file-system-race`, alert 1) pointed to a path stat/access before
