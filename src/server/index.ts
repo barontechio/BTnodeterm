@@ -880,7 +880,8 @@ export async function startServer(
   const hookStartupWarning = await hookServer.startForApp()
   if (hookStartupWarning) console.error('[nodeterm-server]', hookStartupWarning)
   const worktreeRecovery = await initWorktreeRecovery(config.dataDir, ptyManager, () => hookStartupWarning === null, workspaceStore)
-  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService,
+    ...(worktreeRecovery.canvasAdmission ? { repair: { workspace: workspaceStore, admission: worktreeRecovery.canvasAdmission, dispatch: worktreeRecovery.dispatch, confirmations: ownerConfirmations } } : {}) }) : null
   const worktreeRecoveryOwners = registerWorktreeRecoveryIpc(platform, () => worktreeRecoveryService)
   // Safe default and rollback path. The opt-in runtime replaces this handler only after its
   // workspace-backed services are ready; a failed initialization therefore degrades to the same

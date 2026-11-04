@@ -70,4 +70,32 @@ describe('owner worktree recovery UI', () => {
     await act(async () => root.render(<WorktreeRecoveryHost api={recovered} />))
     expect(host.textContent).toBe('')
   })
+  it('offers explicit missing recovery, releases the dialog slot for host confirmation and never replays a lost answer', async () => {
+    const api = fixture()
+    api.inspect = async () => ({ ok: true, record: row, status: 'missing' })
+    api.recover = vi.fn(async () => {
+      expect(hasOwnerConfirmation()).toBe(false)
+      return { ok: false as const, outcome: 'uncertain' as const, error: 'Inspect recovery before continuing.' }
+    })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    await act(async () => button('Worktree recovery (1)').click())
+    expect(api.recover).not.toHaveBeenCalled()
+    await act(async () => button('Recover missing checkout').click())
+    expect(api.recover).toHaveBeenCalledExactlyOnceWith('record')
+    expect(document.body.textContent).toContain('Inspect recovery before continuing.')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.recover).toHaveBeenCalledOnce()
+  })
+
+  it('keeps recovered manual-start notices visible without exposing a start or replay button', async () => {
+    const api = fixture(); const manual: WorktreeRecoveryItem = { ...row, phase: 'recovered', manualStartIds: ['member'] }
+    api.list = async () => ({ ok: true, records: [manual] })
+    api.inspect = async () => ({ ok: true, record: manual, status: 'missing' })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    await act(async () => button('Worktree recovery (1)').click())
+    expect(document.body.textContent).toContain('Terminals remain blocked')
+    expect(button('Recover missing checkout')).toBeUndefined()
+    expect(api.keep).not.toHaveBeenCalled()
+  })
+
 })

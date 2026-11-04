@@ -240,3 +240,66 @@ describe('canvas metadata during a claimed host operation', () => {
     })
   })
 })
+
+
+describe('host execution repair retains the original FIFO reservation', () => {
+  for (const kind of ['folder', 'app-data', 'inline'] as const) {
+    it(`repairs ${kind} execution metadata without dropping layout or admitting stale saves`, async () => {
+      const { store, writer, reservations, coordinator } = await fixture(kind)
+      await coordinator.runMany([groupId, memberId], 'worktree', { current: () => true }, async (permit) => {
+        const { value: fence } = await writer.edit((fresh) => reservations.hold(fresh, [groupId, memberId], permit))
+        try {
+          const stale = await store.load()
+          await writer.edit((fresh) => { fresh.projects[0].nodes[1].position.x = 123 })
+          const result = await writer.repairExecution(fence, (fresh) => {
+            fresh.projects[0].nodes[0].cwd = root
+            fresh.projects[0].nodes[1].cwd = root
+          })
+          expect(result.saved).toBe(true)
+          expect(store.getNodeForHostAction(memberId)).toMatchObject({ cwd: root, position: { x: 123 }, accountId: 'account-a' })
+          expect(() => reservations.assertCurrent()).not.toThrow()
+          await expect(store.save(stale)).rejects.toThrow('reserved')
+          await expect(writer.edit((fresh) => { fresh.projects[0].nodes[1].accountId = 'account-b' })).rejects.toThrow('reserved')
+        } finally { fence.release() }
+      })
+    })
+  }
+
+  it('rejects expired, repeated and detached transitions without releasing the claimed set', async () => {
+    const { writer, reservations, coordinator } = await fixture()
+    let current = true
+    let detached: ((workspace: Workspace) => void) | undefined
+    await expect(coordinator.runMany([groupId, memberId], 'worktree', { current: () => current }, async (permit) => {
+      const { value: fence } = await writer.edit((fresh) => reservations.hold(fresh, [groupId, memberId], permit))
+      try {
+        await fence.repair((transition) => writer.edit((fresh) => {
+          detached = transition
+          fresh.projects[0].nodes[1].cwd = root; transition(fresh)
+          expect(() => transition(fresh)).toThrow('invalid-repair')
+          expect(() => fence.release()).toThrow('repair-in-flight')
+        }))
+        expect(() => detached!({ version: 2, activeProjectId: '', projects: [] })).toThrow('invalid-repair')
+        current = false
+        await expect(fence.repair(() => writer.edit(() => {}))).rejects.toThrow('expired')
+        expect(reservations.active()).toBe(true)
+      } finally { fence.release() }
+    })).rejects.toThrow('expired')
+  })
+  it('does not lend previous-cache recognition to a detached writer queued during the repair', async () => {
+    const { store, writer, reservations, coordinator } = await fixture()
+    await coordinator.runMany([groupId, memberId], 'worktree', { current: () => true }, async (permit) => {
+      const { value: fence } = await writer.edit((fresh) => reservations.hold(fresh, [groupId, memberId], permit))
+      let staleWrite: Promise<void> | undefined
+      try {
+        await writer.repairExecution(fence, (fresh) => {
+          const stale = structuredClone(fresh)
+          fresh.projects[0].nodes[1].cwd = root
+          queueMicrotask(() => { staleWrite = store.save(stale); void staleWrite.catch(() => {}) })
+        })
+        await expect(staleWrite).rejects.toThrow('reserved')
+        expect(store.getNodeForHostAction(memberId)?.cwd).toBe(root)
+      } finally { fence.release() }
+    })
+  })
+
+})

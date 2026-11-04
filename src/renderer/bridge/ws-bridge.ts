@@ -550,7 +550,8 @@ export function buildRealApi(
         catch (error) { if ([E_NO_HANDLER, E_UNAUTHORIZED].includes((error as { code?: string }).code ?? '')) return null; throw error }
       },
       inspect: (id) => client.request(IPC.worktreeRecoveryInspect, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryInspection>,
-      keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>
+      keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>,
+      recover: (id) => client.request(IPC.worktreeRecoveryRepair, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>
     },
     materializeShared: (projectId, worktreePath) =>
       client.request(IPC.worktreeMaterializeShared, projectId, worktreePath) as ReturnType<

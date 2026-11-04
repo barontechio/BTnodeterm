@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import type { WorktreeRecoveryApi, WorktreeRecoveryInspection, WorktreeRecoveryItem } from '../../shared/worktree-recovery'
 import { claimOwnerConfirmation, releaseOwnerConfirmation } from '../lib/ownerConfirmationSlot'
 import { ConfirmDialog } from './ConfirmDialog'
@@ -34,7 +35,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
         if (!live) return
         if (result == null) { unsupported = true; setRecords([]); setError(''); return }
         if (!result.ok) { setError(result.error); setRecords([]); return }
-        const pending = result.records.filter((row) => row.phase !== 'recovered')
+        const pending = result.records.filter((row) => row.phase !== 'recovered' || !!row.manualStartIds?.length)
         setError(''); setRecords(pending)
         setSelected((id) => pending.some((row) => row.id === id) ? id : pending[0]?.id ?? '')
       } catch { if (live) setError('Recovery status could not be read. Refresh before continuing.') }
@@ -60,30 +61,37 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
   const row = records.find((record) => record.id === selected)
   const canKeep = !message && !error && row?.phase === 'prepared' && inspection?.ok === true && inspection.status === 'kept' &&
     JSON.stringify(inspection.record) === JSON.stringify(row)
+  const canRepair = !message && !error && !!api?.recover && row?.phase !== 'recovered' && inspection?.ok === true &&
+    inspection.status === 'missing' && JSON.stringify(inspection.record) === JSON.stringify(row)
   const keep = async () => {
-    if (!api || !row || !canKeep || keeping.current) return
+    if (!api || !row || (!canKeep && !canRepair) || keeping.current) return
     keeping.current = true; setBusy(true); const started = epoch.current
     try {
-      const result = await api.keep(row.id)
+      if (canRepair) flushSync(close) // The existing owner broker owns the second, exact host-bound confirmation.
+      const result = canRepair ? await api.recover!(row.id) : await api.keep(row.id)
       if (started !== epoch.current) return
       setMessage(result.ok ? result.message : result.error); setInspection(null)
+      if (canRepair && claimOwnerConfirmation(TICKET)) setOpen(true)
       await reload.current?.()
     } catch {
       if (started === epoch.current) {
         setMessage('Recovery may have completed. Refresh its status before another action.'); setInspection(null)
+        if (canRepair && claimOwnerConfirmation(TICKET)) setOpen(true)
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
   if (!api || (!open && !records.length && !error)) return null
   const status = inspection?.ok ? inspection.status === 'kept'
     ? 'The original checkout and branch are present. Keep them to release this pending recovery.'
+    : inspection.status === 'missing' && row?.phase !== 'recovered' ? 'The checkout is missing. Recover the recorded plain terminals and file notices without retrying Git. Terminals remain blocked for explicit manual start or rebinding.'
+    : row?.manualStartIds?.length ? 'Metadata is recovered. Terminals remain blocked on this host until explicit manual start or verified rebinding.'
     : 'The original checkout could not be verified. Keep this recovery record while inspecting the files.'
     : inspection?.error ?? (selected ? 'Checking the existing checkout…' : 'No pending recovery records.')
   return <>
     <button className="confirm__btn" style={{ position: 'fixed', top: 52, right: 16, zIndex: 100 }} onClick={() => {
       if (claimOwnerConfirmation(TICKET)) { setMessage(''); setOpen(true) }
     }}>Worktree recovery{records.length ? ` (${records.length})` : ''}</button>
-    {open && <ConfirmDialog message={visible(busy ? 'Keeping the existing checkout…' : message || error || status)}
+    {open && <ConfirmDialog message={visible(busy ? 'Completing recovery…' : message || error || status)}
       body={row && <div className="confirm__msg space-y-2" style={{ overflowWrap: 'anywhere' }}>
         <p>Recovery on this host</p>
         <select aria-label="Pending recovery" value={selected} disabled={busy} onChange={(event) => {
@@ -103,8 +111,8 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
           }).catch(() => { if (current()) setInspection({ ok: false, error: 'The checkout could not be inspected. Refresh its status.' }) })
         }}>Refresh status</button>
       </div>}
-      alert={!canKeep || busy} confirmLabel={canKeep && !busy ? 'Keep existing checkout' : 'Close'} cancelLabel="Close"
+      alert={(!canKeep && !canRepair) || busy} confirmLabel={!busy && canRepair ? 'Recover missing checkout' : canKeep && !busy ? 'Keep existing checkout' : 'Close'} cancelLabel="Close"
       danger={false} enterConfirms={false} autoFocusButtons={false}
-      onConfirm={() => { if (busy) return; if (canKeep) void keep(); else close() }} onCancel={close} />}
+      onConfirm={() => { if (busy) return; if (canKeep || canRepair) void keep(); else close() }} onCancel={close} />}
   </>
 }

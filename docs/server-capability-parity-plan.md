@@ -499,7 +499,7 @@ Both owning shells now load recovery state before launches. Pending/recovered pa
 new physical starts before stale-cwd fallback, including missing descendants and dangling symlink
 aliases. Live co-attachments and unrelated directories retain their behavior; an empty journal adds
 no path-resolution IO. A real Server owner WebSocket fixture refuses a cold start inside a prepared
-removal. Confirmed removal and recovery of missing/changed checkouts remain pending.
+removal. Confirmed removal and agent/changed-checkout recovery remain pending. Recorded plain-node missing recovery is described below.
 
 The canvas execution reservation primitive now pairs an actual host batch claim with conditional
 workspace admission, acquired inside the store FIFO. Folder, app-data and inline content writers,
@@ -525,7 +525,7 @@ members while the effect is awaited. Owner input receives an addressed recovery-
 unrelated panes remain usable, and unknown corrupt facts invent no quarantine on existing panes.
 The storage adapter can release a prepared kept-checkout record, but its caller must first prove
 the original directory/Git identity and obtain fresh owner approval. The confirmed deletion and
-recovery of missing/changed checkouts remain pending; none of these guards enables a deletion command.
+agent/changed-checkout recovery remain pending; none of these guards enables a deletion command.
 
 The first complete owner recovery path now inspects pending facts and keeps a surviving original
 checkout through `WorktreeRecoveryService`, owner-lifetime RPCs and an app-global recovery UI in both
@@ -534,8 +534,17 @@ under the node/backend barrier, preserves dirty files, and performs no Git mutat
 teardown/input, archive or canvas change. Old/non-owning hosts negotiate absence and relay APIs omit
 the owner plane. UI lifecycle tests cover explicit review, double-click exclusion, stale replies and
 lost-response non-replay; a real authenticated Server WebSocket fixture keeps a real dirty checkout.
-This is kept-checkout recovery only. Confirmed deletion, missing-directory reconciliation and
-verified rebinding of retained path tombstones remain pending.
+That first owner path is kept-checkout recovery only. The later missing-checkout slice below adds
+recorded plain-node repair; confirmed deletion and verified rebinding remain pending.
+
+Recorded missing-checkout recovery now has an owner-broker-confirmed path for plain local
+terminals, groups and inert editor/diff notices. It re-proves absence, persists a bounded old/new
+binding plan, awaits the acknowledged recycler, repairs in the same reserved workspace FIFO and
+retains host-private manual-start quarantine after metadata recovery and restart. No Git deletion
+is retried and no replacement starts or receives input. Agent account/runtime identities,
+missing-before-recording provenance, verified rebinding/manual resume and new deletion remain
+pending; the recovery UI keeps the manual-start restriction visible. Journal v2 is required while
+these facts exist, with v1 readable and no unsafe downgrade fallback.
 
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.

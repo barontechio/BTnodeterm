@@ -197,8 +197,8 @@ Owner list/inspect/keep RPCs take only a host record id, bind actual document li
 host-only. Both roots cancel owners on departure/close and await journal IO during shutdown. The
 app-global `WorktreeRecoveryHost` exposes reviewed keep actions, reserves the common dialog slot,
 ignores stale responses, hides recovered tombstones and never repeats a lost action. Relay APIs
-omit this plane; old/non-owning hosts negotiate absence. Missing checkout recovery and confirmed
-deletion remain separate outstanding adapters.
+omit this plane; old/non-owning hosts negotiate absence. Recorded missing-checkout repair now supports plain local terminals and inert file notices. Agent
+recovery, missing-before-recording, verified rebinding and confirmed deletion remain outstanding.
 
 ## What this is
 
@@ -11494,3 +11494,22 @@ writer can still race the eventual Git operation; these observations are not OS-
 Once removal dispatch occurs, failed acknowledgement or unavailable absence verification reports
 `recoveryRequired`, never no-effect reassurance or retry permission. A failed stat is not absence;
 only verified absence sets `worktreeGone`. Retain the branch after an uncertain removal reply.
+
+Recorded missing-checkout recovery uses the existing owner broker before entering any queue.
+For now it supports recorded local plain terminals, groups and editor/diff notices; agent
+account/runtime identities explicitly refuse until their verified adapter is installed. It never
+retries Git deletion. A durable repair plan pins both original and repaired execution hashes, so
+lost metadata acknowledgements can be reconciled with fresh consent without accepting arbitrary
+identity changes. Teardown uses the real worktree permit and independent recovery dispatch grant.
+`CanvasContentWriter.repairExecution` keeps the original reservation inside the WorkspaceStore FIFO;
+old-cache recognition ends before the next queued writer and cannot survive the repair scope.
+Accepted visual edits and unrelated content survive the fresh conditional repair.
+
+Journal version 2 retains manual-start node quarantine after durable metadata repair and host
+restart, even when cwd is safe. Neither a client flag, renderer pause nor a recovered journal label
+is runtime authority. Held commands remain manual-only and no terminal is spawned or typed into by
+recovery. Explicit manual resume/verified rebinding adapters remain pending; the UI retains their
+notice. Keep v2-capable hosts while these records exist; older hosts reject v2 rather than ignoring
+manual restrictions. Downgrade requires offline operator reconciliation of the journal, including
+an empty v2 envelope. V1 facts remain readable and are upgraded only by an acknowledged mutation.
+Missing-before-recording provenance, agent recovery and confirmed deletion remain separate gates.

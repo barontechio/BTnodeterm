@@ -2400,7 +2400,8 @@ app.whenReady().then(async () => {
   }
   const worktreeRecovery = await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
   worktreeRecoveryRuntime = worktreeRecovery
-  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService }) : null
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService,
+    ...(worktreeRecovery.canvasAdmission ? { repair: { workspace: workspaceStore, admission: worktreeRecovery.canvasAdmission, dispatch: worktreeRecovery.dispatch, confirmations: ownerConfirmations } } : {}) }) : null
   worktreeRecoveryOwners = registerWorktreeRecoveryIpc(corePlatform, () => worktreeRecoveryService)
   // ---- Node identity (src/core/agents/node-auth-secret.ts) ------------------------------------
   // One secret does two jobs: it arms the hook server's per-node capability (closing the "shared

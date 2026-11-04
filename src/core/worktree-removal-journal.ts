@@ -21,7 +21,16 @@ export interface WorktreeRemovalIntent {
   /** Hashes of saved execution identities; no command text or credentials in the journal. */
   members: Array<{ nodeId: string; binding: string }>
 }
-export interface WorktreeRemovalRecord extends WorktreeRemovalIntent { id: string; createdAt: number; phase: Phase }
+export interface WorktreeRepairPlan {
+  /** Expected post-repair execution bindings, including account/session/model/held intent. */
+  members: Array<{ nodeId: string; binding: string }>
+  /** Retain host dispatch quarantine even after metadata repair; never a launch grant. */
+  manualStart: string[]
+}
+export interface WorktreeRemovalRecord extends WorktreeRemovalIntent {
+  id: string; createdAt: number; phase: Phase
+  repair?: WorktreeRepairPlan
+}
 interface Options {
   /** The existing hook/data-directory ownership verdict; a second app instance cannot write. */
   ownsFiles(): boolean
@@ -31,7 +40,7 @@ interface Options {
 function record(raw: unknown): WorktreeRemovalRecord {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('worktree-journal-invalid-record')
   const row = raw as WorktreeRemovalRecord
-  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members'])
+  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair'])
   const absolute = (value: unknown) => typeof value === 'string' && value.length <= 4096 && !value.includes('\0') &&
     path.isAbsolute(value) && path.resolve(value) === value && path.parse(value).root !== value
   if (Object.keys(row).some((key) => !fields.has(key)) ||
@@ -45,6 +54,18 @@ function record(raw: unknown): WorktreeRemovalRecord {
       typeof member.binding !== 'string' || !/^[0-9a-f]{64}$/.test(member.binding) || Object.keys(member).some((key) => key !== 'nodeId' && key !== 'binding')) ||
     new Set(row.members.map((member) => member.nodeId)).size !== row.members.length ||
     !row.members.some((member) => member.nodeId === row.groupId)) throw new Error('worktree-journal-invalid-record')
+  if (row.repair !== undefined) {
+    const repair = row.repair
+    if (!repair || row.phase === 'prepared' || Object.keys(repair).some((key) => !['members', 'manualStart'].includes(key)) ||
+      !Array.isArray(repair.members) || repair.members.length !== row.members.length ||
+      repair.members.some((member) => !member || !row.members.some((old) => old.nodeId === member.nodeId) ||
+        typeof member.binding !== 'string' || !/^[0-9a-f]{64}$/.test(member.binding) ||
+        Object.keys(member).some((key) => key !== 'nodeId' && key !== 'binding')) ||
+      new Set(repair.members.map((member) => member.nodeId)).size !== repair.members.length ||
+      !Array.isArray(repair.manualStart) || new Set(repair.manualStart).size !== repair.manualStart.length ||
+      repair.manualStart.some((id) => !row.members.some((member) => member.nodeId === id)))
+      throw new Error('worktree-journal-invalid-repair')
+  }
   return structuredClone(row)
 }
 const overlaps = (a: string, b: string) => isAncestorPath(a, b) || isAncestorPath(b, a)
@@ -94,8 +115,10 @@ export class WorktreeRemovalJournal {
           next = []
         } else {
           const parsed = JSON.parse(raw)
-          if (!parsed || parsed.kind !== 'worktree-removals' || parsed.version !== 1 ||
+          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2].includes(parsed.version) ||
             !Array.isArray(parsed.records) || parsed.records.length > MAX_RECORDS) throw new Error('worktree-journal-invalid-envelope')
+          if (parsed.version === 1 && parsed.records.some((row: WorktreeRemovalRecord) => row?.repair !== undefined))
+            throw new Error('worktree-journal-invalid-envelope')
           next = parsed.records.map(record)
           if (new Set(next.map((row) => row.id)).size !== next.length || next.some((row, index) =>
             next.slice(0, index).some((previous) => overlaps(row.worktreePath, previous.worktreePath))))
@@ -112,7 +135,7 @@ export class WorktreeRemovalJournal {
   isNodePending(nodeId: string): boolean { return this.quarantined.has(nodeId) }
   private publishRows(next: WorktreeRemovalRecord[]): void {
     this.rows = next
-    this.quarantined = new Set(next.filter((row) => row.phase !== 'recovered').flatMap((row) => row.members.map((member) => member.nodeId)))
+    this.quarantined = new Set(next.flatMap((row) => row.phase !== 'recovered' ? row.members.map((member) => member.nodeId) : row.repair?.manualStart ?? []))
   }
   /** A cheap host policy hint, including unavailable facts. It grants no read/write authority. */
   needsAdmission(): boolean {
@@ -128,7 +151,7 @@ export class WorktreeRemovalJournal {
   }
   private async commit(next: WorktreeRemovalRecord[], assertCurrent?: () => void): Promise<void> {
     this.ready()
-    const data = JSON.stringify({ kind: 'worktree-removals', version: 1, records: next })
+    const data = JSON.stringify({ kind: 'worktree-removals', version: 2, records: next })
     if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('worktree-journal-capacity')
     try {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
@@ -149,6 +172,24 @@ export class WorktreeRemovalJournal {
       return structuredClone(next)
     })
   }
+  /** Persist the bounded old/new binding plan before any terminal or metadata repair effect.
+   * This is host-private recovery evidence, not authorization to launch or send input. */
+  planRepair(id: string, plan: WorktreeRepairPlan, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    const captured = structuredClone(plan)
+    return this.serial(async () => {
+      this.ready(); assertCurrent()
+      const index = this.rows.findIndex((row) => row.id === id)
+      if (index < 0 || this.rows[index].phase !== 'removed') throw new Error('worktree-journal-recovery-required')
+      if (this.rows[index].repair) {
+        if (JSON.stringify(this.rows[index].repair) !== JSON.stringify(captured)) throw new Error('worktree-journal-repair-changed')
+        return structuredClone(this.rows[index])
+      }
+      const next = structuredClone(this.rows)
+      next[index] = record({ ...next[index], repair: captured })
+      await this.commit(next, assertCurrent)
+      return structuredClone(next[index])
+    })
+  }
   markRemoved(id: string): Promise<WorktreeRemovalRecord> { return this.advance(id, 'prepared', 'removed') }
   markRecovered(id: string): Promise<WorktreeRemovalRecord> { return this.advance(id, 'removed', 'recovered') }
   private advance(id: string, from: Phase, to: Phase): Promise<WorktreeRemovalRecord> {
@@ -166,7 +207,7 @@ export class WorktreeRemovalJournal {
     return this.serial(async () => {
       this.ready()
       const row = this.rows.find((candidate) => candidate.id === id)
-      if (!row || row.phase !== 'recovered') throw new Error('worktree-journal-recovery-required')
+      if (!row || row.phase !== 'recovered' || row.repair?.manualStart.length) throw new Error('worktree-journal-recovery-required')
       await this.commit(this.rows.filter((candidate) => candidate.id !== id))
     })
   }

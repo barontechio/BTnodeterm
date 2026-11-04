@@ -1,3 +1,4 @@
+import type { CanvasExecutionHold } from './canvas-execution-reservations'
 // Content writes shared by host-side canvas commands. The caller serializes its domain
 // transaction; WorkspaceStore owns disk serialization. Reflected ops precede authority overlays.
 import { publishCanvasMutation } from './canvas-sync'
@@ -25,7 +26,7 @@ export interface PatchSave {
 
 export interface CanvasContentWriterDeps {
   workspaceStore: Pick<WorkspaceStore, 'load' | 'save'> &
-    Partial<Pick<WorkspaceStore, 'saveChanges' | 'updateWorkspace'>>
+    Partial<Pick<WorkspaceStore, 'saveChanges' | 'updateWorkspace' | 'updateWorkspaceForExecutionRepair'>>
   isStopped?(): boolean
   publishMutation?(projectId: string, mutation: CanvasMutation): void
   publishProject?(project: Project): void
@@ -94,6 +95,17 @@ export class CanvasContentWriter {
     const fresh = await this.loadForEdit()
     const value = edit(fresh)
     return { value, saved: await this.castAndSave(fresh, { onlyIfChanged: true }) }
+  }
+
+  /** Exact execution-metadata transition in the real store FIFO. No legacy load/save fallback. */
+  async repairExecution<T>(hold: CanvasExecutionHold, edit: (workspace: Workspace) => T): Promise<{ value: T; saved: boolean }> {
+    if (!this.deps.workspaceStore.updateWorkspaceForExecutionRepair) throw new Error('canvas-execution-repair-unavailable')
+    let value!: T
+    const result = await this.deps.workspaceStore.updateWorkspaceForExecutionRepair(hold, (fresh) => {
+      if (this.deps.isStopped?.()) throw this.stoppedWrite
+      value = edit(fresh); return fresh
+    }, (current, next) => { this.publishChanges(current, next) })
+    return { value, saved: result.saved }
   }
 
   /**

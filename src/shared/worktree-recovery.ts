@@ -10,6 +10,7 @@ export interface WorktreeRecoveryItem {
   branch: string
   fallbackCwd: string
   memberIds: string[]
+  manualStartIds?: string[]
 }
 export type WorktreeRecoveryList = { ok: true; records: WorktreeRecoveryItem[] } | { ok: false; error: string }
 export type WorktreeRecoveryInspection = { ok: true; record: WorktreeRecoveryItem; status: 'kept' | 'missing' | 'changed' | 'unavailable' } |
@@ -21,4 +22,8 @@ export interface WorktreeRecoveryApi {
   list(): Promise<WorktreeRecoveryList | null>
   inspect(id: string): Promise<WorktreeRecoveryInspection>
   keep(id: string): Promise<WorktreeRecoveryKeepReply>
+  recover?(id: string): Promise<WorktreeRecoveryRepairReply>
 }
+
+export type WorktreeRecoveryRepairReply = { ok: true; outcome: 'recovered'; message: string } |
+  { ok: false; outcome: 'refused' | 'uncertain'; error: string }

@@ -1,3 +1,4 @@
+import type { CanvasExecutionHold } from './canvas-execution-reservations'
 import type { SshConnection } from '../shared/ssh'
 import { promises as fs } from 'fs'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1278,6 +1279,17 @@ export class WorkspaceStore {
     beforeSave?: (current: Workspace, next: Workspace) => void,
     opts: WorkspaceSaveOptions = {}): Promise<{ saved: boolean; workspace: Workspace }> {
     const run = this.saveChain.then(() => this.updateWorkspaceNow(edit, beforeSave, opts))
+    this.saveChain = run.catch(() => {})
+    return run
+  }
+
+  /** Recovery keeps its original execution hold; the temporary old-cache recognition begins
+   * INSIDE this FIFO step and ends before the next queued writer can run. */
+  updateWorkspaceForExecutionRepair(hold: CanvasExecutionHold, edit: (fresh: Workspace) => Workspace,
+    beforeSave?: (current: Workspace, next: Workspace) => void): Promise<{ saved: boolean; workspace: Workspace }> {
+    const run = this.saveChain.then(() => hold.repair((transition) => this.updateWorkspaceNow((fresh) => {
+      const next = edit(fresh); transition(next); return next
+    }, beforeSave, {})))
     this.saveChain = run.catch(() => {})
     return run
   }

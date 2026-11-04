@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash } from 'node:crypto'
 import { stableStringify } from '../shared/canvas-mutations'
 import { carryLocalNodeExec } from '../shared/node-exec'
@@ -20,7 +21,14 @@ interface Source {
   node(projectId: string, nodeId: string): CanvasNodeState | undefined
   project(projectId: string): Location | undefined
 }
-interface Held { project: Location; node: CanvasNodeState; binding: string; release: object }
+interface RepairScope { release: object; live: boolean; permit: NodeExecutionBatchPermit }
+interface Held { project: Location; node: CanvasNodeState; binding: string; release: object; previous?: string; repair?: RepairScope }
+export interface CanvasExecutionHold {
+  release(): void
+  /** The transition callback belongs inside the actual workspace writer FIFO. Await its complete
+   * persistence; previous-cache recognition cannot escape this live repair scope. */
+  repair<T>(write: (transition: (candidate: Workspace) => void) => Promise<T>): Promise<T>
+}
 const key = (projectId: string, nodeId: string) => `${projectId}\0${nodeId}`
 
 /** Execution-metadata exclusion for a real host node claim. This grants no actor rights and
@@ -29,18 +37,23 @@ const key = (projectId: string, nodeId: string) => `${projectId}\0${nodeId}`
  */
 export class CanvasExecutionReservations {
   private held = new Map<string, Held>()
+  private repairScope = new AsyncLocalStorage<RepairScope>()
   constructor(private readonly source: Source) {}
   active(): boolean { return this.held.size > 0 }
   assertCurrent(): void {
     for (const target of this.held.values()) {
       const project = this.source.project(target.project.id)
       const node = this.source.node(target.project.id, target.node.id)
-      if (!project || !node || canvasExecutionBinding(project, node) !== target.binding)
+      const scope = this.repairScope.getStore()
+      const repairing = target.repair && target.repair === scope && scope.live
+      if (repairing) scope.permit.assertCurrent()
+      const binding = project && node ? canvasExecutionBinding(project, node) : undefined
+      if (!binding || (binding !== target.binding && !(repairing && binding === target.previous)))
         throw new Error('canvas-execution-reserved: cached execution metadata changed')
     }
   }
 
-  hold(workspace: Workspace, nodeIds: readonly string[], permit: NodeExecutionBatchPermit): { release(): void } {
+  hold(workspace: Workspace, nodeIds: readonly string[], permit: NodeExecutionBatchPermit): CanvasExecutionHold {
     permit.assertCurrent()
     const ids = [...nodeIds]; const claimed = new Set(permit.nodeIds)
     if (!ids.length || new Set(ids).size !== ids.length || ids.length !== claimed.size || ids.some((id) => !claimed.has(id)))
@@ -64,7 +77,48 @@ export class CanvasExecutionReservations {
     permit.assertCurrent(); const release = {}
     for (const target of selected) this.held.set(key(target.project.id, target.node.id), {
       ...target, binding: canvasExecutionBinding(target.project, target.node), release })
-    return { release: () => { for (const [id, target] of this.held) if (target.release === release) this.held.delete(id) } }
+    let released = false; let repairing = false
+    return {
+      release: () => {
+        if (repairing) throw new Error('canvas-execution-repair-in-flight')
+        released = true
+        for (const [id, target] of this.held) if (target.release === release) this.held.delete(id)
+      },
+      repair: async (write) => {
+        if (released || repairing) throw new Error('canvas-execution-invalid-repair')
+        permit.assertCurrent(); this.assertCurrent(); repairing = true
+        const scope: RepairScope = { release, live: true, permit }
+        let transitioned = false
+        try {
+          return await this.repairScope.run(scope, () => write((candidate) => {
+            if (!scope.live || this.repairScope.getStore() !== scope || transitioned)
+              throw new Error('canvas-execution-invalid-repair')
+            permit.assertCurrent(); this.assertCurrent()
+            const targets = [...this.held.values()].filter((target) => target.release === release)
+            if (targets.length !== ids.length) throw new Error('canvas-execution-invalid-repair')
+            const replacements = targets.map((target) => {
+              const hits = candidate.projects.flatMap((project) => project.nodes.filter((node) => node.id === target.node.id)
+                .map((node) => ({ project, node })))
+              if (hits.length !== 1 || hits[0].project.id !== target.project.id || hits[0].project.unavailable ||
+                candidate.projects.filter((project) => project.id === target.project.id).length !== 1 ||
+                hits[0].node.kind !== target.node.kind || hits[0].node.parentId !== target.node.parentId ||
+                canvasExecutionBinding(hits[0].project, target.node) !== canvasExecutionBinding(target.project, target.node))
+                throw new Error('canvas-execution-repair-target-changed')
+              if (hits[0].node.kind === 'group' && [...descendantIds(hits[0].project.nodes, target.node.id)].some((id) => !claimed.has(id)))
+                throw new Error('canvas-execution-incomplete-group')
+              return { target, node: structuredClone(hits[0].node), binding: canvasExecutionBinding(hits[0].project, hits[0].node) }
+            })
+            permit.assertCurrent(); transitioned = true
+            for (const replacement of replacements) Object.assign(replacement.target, {
+              node: replacement.node, previous: replacement.target.binding, binding: replacement.binding, repair: scope
+            })
+          }))
+        } finally {
+          scope.live = false; repairing = false
+          for (const target of this.held.values()) if (target.repair === scope) { delete target.previous; delete target.repair }
+        }
+      }
+    }
   }
 
   assertProject(project: Location & Pick<Project, 'nodes' | 'unavailable'>): void {

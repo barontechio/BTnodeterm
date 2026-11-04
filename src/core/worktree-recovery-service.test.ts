@@ -121,4 +121,11 @@ describe.skipIf(process.platform === 'win32')('owner kept-checkout recovery agai
     expect(await f.service.keep(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
     expect(f.journal.list()).toEqual([f.row] satisfies WorktreeRemovalRecord[])
   })
+  it('does not report a present checkout as missing when only its repository becomes unavailable', async () => {
+    const f = await fixture(); fs.renameSync(repo, path.join(root, 'moved-repo'))
+    expect(await f.service.inspect(f.row.id, f.owner)).toMatchObject({ ok: true, status: 'unavailable' })
+    expect(f.journal.list()).toEqual([f.row])
+    expect(fs.existsSync(checkout)).toBe(true)
+  })
+
 })

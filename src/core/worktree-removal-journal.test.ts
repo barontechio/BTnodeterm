@@ -54,7 +54,7 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
     'preserves a journal with %s and refuses edits', async (issue) => {
       const f = fixture(); await f.journal.load(); const saved = await f.journal.prepare(f.intent)
       const envelope = { kind: 'worktree-removals', version: 1, records: [saved] }
-      if (issue === 'unknown version') envelope.version = 2
+      if (issue === 'unknown version') envelope.version = 99
       if (issue === 'invalid record') envelope.records[0].members[0].binding = 'invalid'
       if (issue === 'duplicate record') envelope.records.push(saved)
       if (issue === 'too many records') envelope.records = Array.from({ length: 129 }, () => saved)
@@ -150,4 +150,19 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
     expect(unknown.isNodePending(row.groupId)).toBe(false)
     expect(() => unknown.reservedPaths()).toThrow('unavailable')
   })
+})
+
+
+it('retains private manual-start quarantine after durable repair and host reconstruction', async () => {
+  const f = fixture(); await f.journal.load()
+  const row = await f.journal.prepare(f.intent)
+  await f.journal.markRemoved(row.id)
+  await f.journal.planRepair(row.id, { members: [{ nodeId: 'group', binding: 'b'.repeat(64) }], manualStart: ['group'] }, () => {})
+  await f.journal.markRecovered(row.id)
+  expect(f.journal.isNodePending('group')).toBe(true)
+  const restarted = new WorktreeRemovalJournal(f.file, f.config)
+  expect(await restarted.load()).toMatchObject([{ phase: 'recovered', repair: { manualStart: ['group'] } }])
+  expect(restarted.isNodePending('group')).toBe(true)
+  await expect(restarted.releaseRebound(row.id)).rejects.toThrow('recovery-required')
+  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(2)
 })

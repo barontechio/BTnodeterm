@@ -1,7 +1,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { CanvasContentWriter } from './canvas-content-writer'
+import { canvasExecutionBinding } from './canvas-execution-reservations'
+import type { WorktreeCanvasAdmission } from './worktree-canvas-admission'
+import type { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
+import type { OwnerConfirmationBroker, OwnerPermit } from './owner-confirmation'
+import type { WorkspaceStore } from './workspace-store'
+import type { CanvasNodeState, Workspace } from '../shared/types'
+import { isAncestorPath, isRemoteSessionNode } from '../shared/worktree'
+import { worktreeRecoveryAdmission } from './worktree-recovery-admission'
 import { isSafeNodeId } from '../shared/safe-id'
-import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList } from '../shared/worktree-recovery'
+import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply } from '../shared/worktree-recovery'
 import type { AccountOwner } from './owner-lifetimes'
 import type { PtyManager } from './pty-manager'
 import type { GitService } from './git-service'
@@ -10,12 +19,13 @@ import type { WorktreeRemovalJournal, WorktreeRemovalRecord } from './worktree-r
 
 interface Dependencies {
   journal: WorktreeRemovalJournal
-  pty: Pick<PtyManager, 'runWorktreeAction'>
+  pty: Pick<PtyManager, 'runWorktreeAction'> & Partial<Pick<PtyManager, 'recycleWorktreeMember' | 'nodeExecutionIdentity'>>
   git: Pick<GitService, 'worktreeList'>
+  repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
 const item = (row: WorktreeRemovalRecord): WorktreeRecoveryItem => ({ id: row.id, createdAt: row.createdAt,
   phase: row.phase, projectId: row.projectId, groupId: row.groupId, repoPath: row.repoPath,
-  path: row.worktreePath, branch: row.branch, fallbackCwd: row.fallbackCwd, memberIds: row.members.map((member) => member.nodeId) })
+  path: row.worktreePath, branch: row.branch, fallbackCwd: row.fallbackCwd, memberIds: row.members.map((member) => member.nodeId), ...(row.repair?.manualStart.length ? { manualStartIds: row.repair.manualStart } : {}) })
 const refused = (error: string): WorktreeRecoveryKeepReply => ({ ok: false, outcome: 'refused', error })
 
 /** Non-destructive owner recovery only. Keeping a checkout requires the original canonical inode
@@ -55,6 +65,183 @@ export class WorktreeRecoveryService {
     this.directoryIntact(row)
   }
 
+  /** ENOENT from another proof (repository, Git metadata) is not checkout absence. Refuse
+   * redirected/unsearchable ancestors and ENOTDIR rather than treating failed IO as absence. */
+  private directoryMissing(row: WorktreeRemovalRecord): boolean {
+    try { fs.lstatSync(row.worktreePath); return false }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    let parent = path.dirname(row.worktreePath)
+    for (let depth = 0; depth < 128; depth++) {
+      try {
+        const stat = fs.lstatSync(parent)
+        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(parent) !== parent)
+          throw new Error('The missing checkout ancestry changed.')
+        fs.accessSync(parent, fs.constants.R_OK | fs.constants.X_OK)
+        return true
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      }
+      const next = path.dirname(parent); if (next === parent) break; parent = next
+    }
+    throw new Error('Checkout absence could not be verified.')
+  }
+
+  private repairSnapshot(workspace: Workspace, row: WorktreeRemovalRecord): { projectId: string; nodes: CanvasNodeState[] } {
+    const ids = new Set(row.members.map((member) => member.nodeId))
+    const projects = workspace.projects.filter((project) => project.id === row.projectId)
+    if (projects.length !== 1 || projects[0].unavailable || projects[0].remote || projects[0].ssh || projects[0].handedOffTo)
+      throw new Error('Recovery requires one available local project.')
+    const project = projects[0]
+    if (fs.realpathSync.native(row.fallbackCwd) !== row.fallbackCwd || !fs.statSync(row.fallbackCwd).isDirectory() ||
+      isAncestorPath(row.worktreePath, row.fallbackCwd)) throw new Error('The recovery directory is unavailable.')
+    const admit = worktreeRecoveryAdmission({ reservedPaths: () => [row.worktreePath] })
+    const nodes = row.members.map((member) => {
+      const hits = workspace.projects.flatMap((candidate) => candidate.nodes.filter((node) => node.id === member.nodeId)
+        .map((node) => ({ project: candidate, node })))
+      if (hits.length !== 1 || hits[0].project.id !== row.projectId || isRemoteSessionNode(hits[0].node) || hits[0].node.sshFs)
+        throw new Error('A recorded recovery member changed project or route.')
+      const node = hits[0].node; const binding = canvasExecutionBinding(project, node)
+      if (binding !== member.binding && binding !== row.repair?.members.find((entry) => entry.nodeId === node.id)?.binding)
+        throw new Error('A recorded execution identity changed. Keep the recovery facts for explicit reconciliation.')
+      // Agent recovery needs a verified account/runtime conversation adapter, not a guessed resume.
+      if (node.agentId || node.agentSessionId || node.accountId || !['group', 'terminal', 'editor', 'diff'].includes(node.kind))
+        throw new Error('This recovery identity needs an account/runtime adapter. No session was changed.')
+      return node
+    })
+    const group = nodes.find((node) => node.id === row.groupId)
+    if (!group || group.kind !== 'group' || (!row.repair && (!group.worktree || group.worktree.path !== row.worktreePath ||
+      group.worktree.repoPath !== row.repoPath || group.worktree.branch !== row.branch)))
+      throw new Error('The recorded checkout binding changed.')
+    for (const candidate of workspace.projects) {
+      if (candidate.remote || candidate.ssh || candidate.handedOffTo) continue
+      for (const node of candidate.nodes) {
+        if (ids.has(node.id) || isRemoteSessionNode(node)) continue
+        const inert = (node.kind === 'editor' || node.kind === 'diff') && node.fileMissing
+        for (const reference of [candidate.cwd, inert ? undefined : node.cwd, node.worktree?.path,
+          node.worktree?.repoPath, node.runConfig?.projectDir, inert ? undefined : node.filePath]) {
+          if (!reference) continue
+          if (!path.isAbsolute(reference) && !candidate.cwd) throw new Error('An unrelated local reference cannot be resolved.')
+          admit(path.resolve(candidate.cwd ?? path.parse(reference).root, reference))
+        }
+      }
+    }
+    return { projectId: project.id, nodes }
+  }
+
+  private repairNodes(nodes: CanvasNodeState[], row: WorktreeRemovalRecord, projectCwd: string | undefined): void {
+    const inside = (reference: string, base: string | undefined) => {
+      if (!path.isAbsolute(reference) && !base) throw new Error('The recorded local reference is ambiguous.')
+      try { worktreeRecoveryAdmission({ reservedPaths: () => [row.worktreePath] })(path.resolve(base ?? path.parse(reference).root, reference)); return false }
+      catch (error) {
+        if (error instanceof Error && error.message.startsWith('worktree-recovery-required:')) return true
+        throw error
+      }
+    }
+    for (const node of nodes) {
+      if (node.kind === 'terminal' || node.kind === 'group') {
+        if (!node.cwd || inside(node.cwd, projectCwd)) node.cwd = row.fallbackCwd
+        if (node.pendingLaunch) node.pendingLaunch = { ...node.pendingLaunch, manualOnly: true }
+      } else if (node.filePath && inside(node.filePath, node.kind === 'diff' ? node.cwd ?? projectCwd : projectCwd)) node.fileMissing = true
+      if (node.worktree) {
+        if (node.worktree.path !== row.worktreePath || node.worktree.repoPath !== row.repoPath || node.worktree.branch !== row.branch)
+          throw new Error('A nested checkout binding requires separate recovery.')
+        delete node.worktree
+      }
+    }
+  }
+
+  /** Explicit physical-owner recovery of an already journaled missing checkout. Never invokes
+   * Git mutation, creates a terminal or submits held input. Unsupported agent identities refuse. */
+  async recover(id: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> {
+    const refusedRepair = (error: string): WorktreeRecoveryRepairReply => ({ ok: false, outcome: 'refused', error })
+    const domain = this.deps.repair
+    if (!owner.active()) return refusedRepair('worktree-recovery-owner-required')
+    if (!domain || !this.deps.pty.recycleWorktreeMember || !this.deps.pty.nodeExecutionIdentity)
+      return refusedRepair('Missing-checkout recovery is unavailable on this host.')
+    if (this.pending.has(id) || this.pending.size >= 32) return refusedRepair('Another recovery is still completing.')
+    this.pending.add(id)
+    let changed = false
+    let approval: Extract<OwnerPermit, { ok: true }> | undefined
+    try {
+      let row = this.row(id)
+      if (row.phase === 'recovered') return refusedRepair('Metadata is already recovered. Manual start/rebinding remains required.')
+      if (!this.directoryMissing(row)) return refusedRepair('The checkout is present or replaced. Inspect it before recovery.')
+      const writer = new CanvasContentWriter({ workspaceStore: domain.workspace })
+      const before = this.repairSnapshot(await domain.workspace.load({ sideline: false }), row)
+      const physical = new Map(before.nodes.filter((node) => node.kind === 'terminal')
+        .map((node) => [node.id, this.deps.pty.nodeExecutionIdentity!(node.id)]))
+      let expectedRecord = JSON.stringify(row)
+      const answer = await domain.confirmations.request({ action: 'recover-worktree',
+        requester: { nodeId: row.groupId, projectId: row.projectId, title: row.branch },
+        binding: { record: expectedRecord, members: row.members },
+        message: `Recover ${before.nodes.length} recorded nodes from the missing checkout ${row.worktreePath}?`,
+        details: 'This acknowledges terminal teardown and repairs the recorded paths. Terminals stay blocked for explicit manual start or verified rebinding. No Git deletion is retried and no command is replayed.',
+        confirmLabel: 'Recover recorded nodes', danger: true,
+        checkCurrent: async () => {
+          if (!owner.active() || !this.directoryMissing(row) || JSON.stringify(this.row(id)) !== expectedRecord) return false
+          this.repairSnapshot(await domain.workspace.load({ sideline: false }), row)
+          return before.nodes.filter((node) => node.kind === 'terminal').every((node) => this.deps.pty.nodeExecutionIdentity!(node.id) === physical.get(node.id))
+        }
+      })
+      if (!answer.ok) return refusedRepair(`Owner confirmation ${answer.reason}. No recovery action was dispatched.`)
+      approval = answer
+      if (!(await answer.consume())) return refusedRepair('The approved recovery identity changed or expired.')
+      const current = () => {
+        try { return owner.active() && answer.current() && this.directoryMissing(row) && JSON.stringify(this.row(id)) === expectedRecord }
+        catch { return false }
+      }
+      await this.deps.pty.runWorktreeAction(row.members.map((member) => member.nodeId), { owner, current, timeoutMs: 120_000 }, async (permit) => {
+        const { value: hold } = await writer.edit((fresh) => {
+          permit.assertCurrent(); this.repairSnapshot(fresh, row)
+          return domain.admission.reservations.hold(fresh, row.members.map((member) => member.nodeId), permit)
+        })
+        try {
+          permit.assertCurrent()
+          if (row.phase === 'prepared') {
+            // Actual observed absence, not a retry of the uncertain earlier deletion.
+            row = await this.deps.journal.markRemoved(id); expectedRecord = JSON.stringify(row); changed = true
+          }
+          permit.assertCurrent()
+          const candidate = await domain.workspace.load({ sideline: false })
+          const captured = this.repairSnapshot(candidate, row)
+          const project = candidate.projects.find((entry) => entry.id === row.projectId)!
+          this.repairNodes(captured.nodes, row, project.cwd)
+          const plan = { members: captured.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })),
+            manualStart: captured.nodes.filter((node) => node.kind === 'terminal').map((node) => node.id) }
+          row = await this.deps.journal.planRepair(id, plan, permit.assertCurrent)
+          expectedRecord = JSON.stringify(row); changed = true
+          await domain.dispatch.withRecovery(permit, async () => {
+            for (const node of captured.nodes.filter((node) => node.kind === 'terminal')) {
+              permit.assertCurrent()
+              if (this.deps.pty.nodeExecutionIdentity!(node.id) !== physical.get(node.id)) throw new Error('The terminal generation changed.')
+              await this.deps.pty.recycleWorktreeMember!(node.id, permit)
+            }
+          })
+          permit.assertCurrent()
+          await writer.repairExecution(hold, (fresh) => {
+            permit.assertCurrent()
+            const snapshot = this.repairSnapshot(fresh, row)
+            const project = fresh.projects.find((entry) => entry.id === row.projectId)!
+            this.repairNodes(snapshot.nodes, row, project.cwd)
+            if (snapshot.nodes.some((node) => canvasExecutionBinding(project, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+              throw new Error('The approved repair plan changed.')
+          })
+          permit.assertCurrent()
+          const durable = this.repairSnapshot(await domain.workspace.load({ sideline: false }), row)
+          const location = domain.workspace.projectExecutionLocation(row.projectId)!
+          if (durable.nodes.some((node) => canvasExecutionBinding(location, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+            throw new Error('The repaired metadata was not acknowledged.')
+          permit.assertCurrent()
+          row = await this.deps.journal.markRecovered(id); expectedRecord = JSON.stringify(row)
+        } finally { hold.release() }
+      })
+      return { ok: true, outcome: 'recovered', message: 'Missing-checkout metadata recovered. Terminals remain blocked for explicit manual start or rebinding; no command was replayed.' }
+    } catch (error) {
+      try { this.deps.journal.list() } catch { changed = true }
+      return { ok: false, outcome: changed ? 'uncertain' : 'refused', error: `Recovery ${changed ? 'may be partially complete; inspect its status before another action' : 'was refused'}: ${error instanceof Error ? error.message : String(error)}` }
+    } finally { approval?.cancel(); this.pending.delete(id) }
+  }
+
   async inspect(id: string, owner: AccountOwner): Promise<WorktreeRecoveryInspection> {
     if (!owner.active()) return { ok: false, error: 'worktree-recovery-owner-required' }
     let row: WorktreeRemovalRecord
@@ -63,7 +250,8 @@ export class WorktreeRecoveryService {
     try { await this.verifyKept(row); status = 'kept' }
     catch (error) {
       const code = (error as NodeJS.ErrnoException).code
-      status = code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : code ? 'unavailable' : 'changed'
+      try { status = this.directoryMissing(row) ? 'missing' : code ? 'unavailable' : 'changed' }
+      catch { status = 'unavailable' }
     }
     try {
       if (!owner.active() || JSON.stringify(this.row(id)) !== JSON.stringify(row)) return { ok: false, error: 'Recovery changed during inspection. Reload status.' }

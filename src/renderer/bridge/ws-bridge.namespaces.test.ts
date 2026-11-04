@@ -201,13 +201,13 @@ describe('buildControlApi', () => {
   it('routes owner recovery once, negotiates an old host and never replays a lost keep response', async () => {
     const request = vi.fn(async (_method: string, ..._args: unknown[]) => ({ ok: true, records: [] }))
     const api = buildRealApi({ request, subscribe: () => () => {} } as never).worktree.recovery!
-    await api.list(); await api.inspect('record'); await api.keep('record')
-    expect(request.mock.calls.map((call) => call[0])).toEqual([IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep])
+    await api.list(); await api.inspect('record'); await api.keep('record'); await api.recover!('record')
+    expect(request.mock.calls.map((call) => call[0])).toEqual([IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep, IPC.worktreeRecoveryRepair])
     request.mockRejectedValueOnce({ code: 'E_NO_HANDLER' })
     expect(await api.list()).toBeNull()
     request.mockRejectedValueOnce({ code: 'E_DISCONNECTED' })
     await expect(api.keep('record')).rejects.toMatchObject({ code: 'E_DISCONNECTED' })
-    expect(request).toHaveBeenCalledTimes(5)
+    expect(request).toHaveBeenCalledTimes(6)
   })
   it('branches once through the owner host RPC and never falls back after a missing or lost reply', async () => {
     const request = vi.fn(async () => ({ ok: true, newNodeId: 'copy' }))

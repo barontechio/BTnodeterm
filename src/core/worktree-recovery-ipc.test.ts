@@ -10,7 +10,7 @@ describe('physical owner worktree recovery RPC', () => {
     const platform = fakePlatform({ isOwnerClient: () => true }); platform.clients.push(1)
     const service = { list: vi.fn(), inspect: vi.fn(), keep: vi.fn() }
     const owners = registerWorktreeRecoveryIpc(platform, () => service)
-    for (const channel of [IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep]) {
+    for (const channel of [IPC.worktreeRecoveryList, IPC.worktreeRecoveryInspect, IPC.worktreeRecoveryKeep, IPC.worktreeRecoveryRepair]) {
       expect(isHostOnlyChannel(channel)).toBe(true)
       const answer = await platform.handlers[channel](2, 'record')
       if (channel === IPC.worktreeRecoveryList) expect(answer).toBeNull()
@@ -23,6 +23,7 @@ describe('physical owner worktree recovery RPC', () => {
     for (const bad of ['../record', '', {}, null, 'x'.repeat(129)]) {
       expect(await platform.handlers[IPC.worktreeRecoveryInspect](1, bad)).toMatchObject({ ok: false })
       expect(await platform.handlers[IPC.worktreeRecoveryKeep](1, bad)).toMatchObject({ ok: false, outcome: 'refused' })
+      expect(await platform.handlers[IPC.worktreeRecoveryRepair](1, bad)).toMatchObject({ ok: false, outcome: 'refused' })
     }
     expect(service.list).not.toHaveBeenCalled(); expect(service.inspect).not.toHaveBeenCalled(); expect(service.keep).not.toHaveBeenCalled()
     owners.dispose()
