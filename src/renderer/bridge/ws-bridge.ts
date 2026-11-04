@@ -561,7 +561,9 @@ export function buildRealApi(
       },
       inspect: (id) => client.request(IPC.worktreeRecoveryInspect, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryInspection>,
       keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>,
-      recover: (id) => client.request(IPC.worktreeRecoveryRepair, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>
+      recover: (id) => client.request(IPC.worktreeRecoveryRepair, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>,
+      discoverMissing: () => client.request(IPC.worktreeRecoveryDiscover) as Promise<import('@shared/worktree-recovery').WorktreeMissingList>,
+      recoverMissing: (id) => client.request(IPC.worktreeRecoveryMissing, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>
     },
     materializeShared: (projectId, worktreePath) =>
       client.request(IPC.worktreeMaterializeShared, projectId, worktreePath) as ReturnType<

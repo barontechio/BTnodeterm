@@ -549,9 +549,16 @@ terminals, groups and inert editor/diff notices. It re-proves absence, persists 
 binding plan, awaits the acknowledged recycler, repairs in the same reserved workspace FIFO and
 retains host-private manual-start quarantine after metadata recovery and restart. No Git deletion
 is retried and no replacement starts or receives input. Agent account/runtime identities,
-missing-before-recording provenance, verified rebinding/manual resume and new deletion remain
-pending; the recovery UI keeps the manual-start restriction visible. Journal v2 is required while
-these facts exist, with v1 readable and no unsafe downgrade fallback.
+verified rebinding/manual resume and new deletion remain
+pending; the recovery UI keeps the manual-start restriction visible. Journal v3 is required while
+these facts exist, with v1/v2 readable and no unsafe downgrade fallback.
+
+Observed-missing recovery also handles a saved plain-local group whose checkout disappeared before
+any journal intent. Owner discovery is read-only; a single broker approval repeats saved-node,
+canonical ancestry and real repository checks before writing explicit observed-absence provenance.
+No prior inode or Git dispatch is invented. The same acknowledged repair path retains manual-start
+restrictions; interrupted recording/repair is recovered through its durable record, never by retrying
+Git or silently replaying the owner action.
 
 - Extract create/bind/unbind/remove orchestration, using `GitService`, existing worktree target/reconciliation rules and shared-path materialization.
 - Preserve the meaning of base refs and station IDs. Create the directory and binding with an explicit recoverable outcome if either side fails; do not delete a successful Git result merely to hide a partial failure.

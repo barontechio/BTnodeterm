@@ -29,7 +29,12 @@ export interface WorktreeRepairPlan {
   /** Retain host dispatch quarantine even after metadata repair; never a launch grant. */
   manualStart: string[]
 }
-export interface WorktreeRemovalRecord extends WorktreeRemovalIntent {
+export type WorktreeProvenance = { kind: 'recorded-directory' } | {
+  kind: 'observed-missing'; observedAt: number; ancestor: string; ancestorStamp: string; repoStamp: string
+}
+export interface WorktreeRemovalRecord extends Omit<WorktreeRemovalIntent, 'directoryStamp'> {
+  directoryStamp?: string
+  provenance: WorktreeProvenance
   id: string; createdAt: number; phase: Phase
   repair?: WorktreeRepairPlan
 }
@@ -42,20 +47,30 @@ interface Options {
 function record(raw: unknown): WorktreeRemovalRecord {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('worktree-journal-invalid-record')
   const row = raw as WorktreeRemovalRecord
-  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair'])
+  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair', 'provenance'])
   const absolute = (value: unknown) => typeof value === 'string' && value.length <= 4096 && !value.includes('\0') &&
     path.isAbsolute(value) && path.resolve(value) === value && path.parse(value).root !== value
   if (Object.keys(row).some((key) => !fields.has(key)) ||
     ![row.id, row.projectId, row.groupId].every((id) => typeof id === 'string' && isSafeNodeId(id)) ||
     ![row.repoPath, row.worktreePath, row.fallbackCwd].every(absolute) || row.repoPath === row.worktreePath ||
     isAncestorPath(row.worktreePath, row.fallbackCwd) || typeof row.branch !== 'string' || !isValidGitRef(row.branch) ||
-    typeof row.directoryStamp !== 'string' || !/^\d+:[1-9]\d*$/.test(row.directoryStamp) ||
     !Number.isSafeInteger(row.createdAt) || row.createdAt <= 0 || !['prepared', 'removed', 'recovered'].includes(row.phase) ||
     !Array.isArray(row.members) || !row.members.length || row.members.length > 32 ||
     row.members.some((member) => !member || typeof member.nodeId !== 'string' || !isSafeNodeId(member.nodeId) ||
       typeof member.binding !== 'string' || !/^[0-9a-f]{64}$/.test(member.binding) || Object.keys(member).some((key) => key !== 'nodeId' && key !== 'binding')) ||
     new Set(row.members.map((member) => member.nodeId)).size !== row.members.length ||
     !row.members.some((member) => member.nodeId === row.groupId)) throw new Error('worktree-journal-invalid-record')
+  const stamp = (value: unknown) => typeof value === 'string' && /^\d+:[1-9]\d*$/.test(value)
+  const origin = row.provenance
+  if (!origin || (origin.kind !== 'recorded-directory' && origin.kind !== 'observed-missing'))
+    throw new Error('worktree-journal-invalid-provenance')
+  if (origin.kind === 'recorded-directory') {
+    if (Object.keys(origin).length !== 1 || !stamp(row.directoryStamp)) throw new Error('worktree-journal-invalid-provenance')
+  } else if (Object.keys(origin).some((key) => !['kind', 'observedAt', 'ancestor', 'ancestorStamp', 'repoStamp'].includes(key)) ||
+    row.directoryStamp !== undefined || row.phase === 'prepared' || !Number.isSafeInteger(origin.observedAt) || origin.observedAt <= 0 ||
+    typeof origin.ancestor !== 'string' || !path.isAbsolute(origin.ancestor) || path.resolve(origin.ancestor) !== origin.ancestor ||
+    !isAncestorPath(origin.ancestor, row.worktreePath) || origin.ancestor === row.worktreePath ||
+    !stamp(origin.ancestorStamp) || !stamp(origin.repoStamp)) throw new Error('worktree-journal-invalid-provenance')
   if (row.repair !== undefined) {
     const repair = row.repair
     const validMembers = (members: WorktreeRepairPlan['members']) => Array.isArray(members) && members.length === row.members.length &&
@@ -118,11 +133,14 @@ export class WorktreeRemovalJournal {
           next = []
         } else {
           const parsed = JSON.parse(raw)
-          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2].includes(parsed.version) ||
+          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3].includes(parsed.version) ||
             !Array.isArray(parsed.records) || parsed.records.length > MAX_RECORDS) throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version === 1 && parsed.records.some((row: WorktreeRemovalRecord) => row?.repair !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
-          next = parsed.records.map(record)
+          if (parsed.version < 3 && parsed.records.some((row: WorktreeRemovalRecord) => row?.provenance !== undefined))
+            throw new Error('worktree-journal-invalid-envelope')
+          next = parsed.records.map((row: WorktreeRemovalRecord) => record(parsed.version < 3
+            ? { ...row, provenance: { kind: 'recorded-directory' } } : row))
           if (new Set(next.map((row) => row.id)).size !== next.length || next.some((row, index) =>
             next.slice(0, index).some((previous) => overlaps(row.worktreePath, previous.worktreePath))))
             throw new Error('worktree-journal-conflicting-records')
@@ -154,25 +172,45 @@ export class WorktreeRemovalJournal {
   }
   private async commit(next: WorktreeRemovalRecord[], assertCurrent?: () => void): Promise<void> {
     this.ready()
-    const data = JSON.stringify({ kind: 'worktree-removals', version: 2, records: next })
+    const data = JSON.stringify({ kind: 'worktree-removals', version: 3, records: next })
     if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('worktree-journal-capacity')
     try {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
       this.ready()
       assertCurrent?.()
-      await (this.options.persist ?? ((file, text) => writeFileDurableAtomic(file, text, { mode: 0o600 })))(this.file, data)
+      await (this.options.persist ?? ((file, text) => writeFileDurableAtomic(file, text, { mode: 0o600, assertDispatch: assertCurrent })))(this.file, data)
       this.owner(); assertCurrent?.(); this.publishRows(next); this.persisted = data
-    } catch (error) { this.faulted = true; throw error }
+    } catch (error) {
+      // A first record may have reached disk even though publication was not acknowledged.
+      // Retain its known members in memory too; a later verified load reconciles the facts.
+      for (const row of next) for (const id of row.phase !== 'recovered' ? row.members.map((member) => member.nodeId) : row.repair?.manualStart ?? [])
+        this.quarantined.add(id)
+      this.faulted = true; throw error
+    }
   }
   prepare(intent: WorktreeRemovalIntent): Promise<WorktreeRemovalRecord> {
     const captured = structuredClone(intent)
     return this.serial(async () => {
       this.ready()
-      const next = record({ ...captured, id: randomUUID(), createdAt: Date.now(), phase: 'prepared' })
+      const next = record({ ...captured, id: randomUUID(), createdAt: Date.now(), phase: 'prepared', provenance: { kind: 'recorded-directory' } })
       if (this.rows.length >= MAX_RECORDS) throw new Error('worktree-journal-capacity')
       if (this.rows.some((row) => overlaps(row.worktreePath, next.worktreePath))) throw new Error('worktree-journal-path-reserved')
       await this.commit([...this.rows, next])
       return structuredClone(next)
+    })
+  }
+  /** A host-observed missing checkout, never a prior inode or a claim that Git was dispatched. */
+  observeMissing(proposed: WorktreeRemovalRecord, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    const captured = record(proposed)
+    if (captured.provenance.kind !== 'observed-missing' || captured.phase !== 'removed' || captured.repair)
+      return Promise.reject(new Error('worktree-journal-invalid-provenance'))
+    return this.serial(async () => {
+      this.ready(); assertCurrent()
+      if (this.rows.length >= MAX_RECORDS) throw new Error('worktree-journal-capacity')
+      if (this.rows.some((row) => row.id === captured.id || overlaps(row.worktreePath, captured.worktreePath)))
+        throw new Error('worktree-journal-path-reserved')
+      await this.commit([...this.rows, captured], assertCurrent)
+      return structuredClone(captured)
     })
   }
   /** Persist the bounded old/new binding plan before any terminal or metadata repair effect.

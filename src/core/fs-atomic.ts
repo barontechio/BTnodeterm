@@ -398,9 +398,11 @@ export async function writeFileAtomic(
  * publication: the new file can already exist, so callers must stop and reload before proceeding.
  * This strengthens acknowledgement only; it is not an inter-process lock or an effect permit.
  */
-export async function writeFileDurableAtomic(target: string, data: string, opts: { mode?: number } = {}): Promise<void> {
+export async function writeFileDurableAtomic(target: string, data: string, opts: { mode?: number; assertDispatch?: () => void } = {}): Promise<void> {
+  opts.assertDispatch?.()
   const directory = await fs.open(path.dirname(target), 'r')
   try {
+    opts.assertDispatch?.()
     await directory.sync()
     await writeFileAtomic(target, data, { ...opts, flush: true })
     await directory.sync()

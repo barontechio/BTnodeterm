@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { GitService } from './git-service'
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 import { testTmpDir } from './test-tmp'
 import { initPlatform, resetPlatformForTests } from './platform'
@@ -29,7 +31,7 @@ function deferred() {
   let resolve!: () => void
   return { promise: new Promise<void>((done) => { resolve = done }), resolve: () => resolve() }
 }
-async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' = 'folder') {
+async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' = 'folder', recorded = true) {
   const repo = path.join(root, 'repo'); const checkout = path.join(root, 'checkout'); fs.mkdirSync(repo); fs.mkdirSync(checkout)
   const stat = fs.lstatSync(checkout, { bigint: true })
   const project: Project = { id: 'project', name: 'Project', color: '#fff', cwd: repo, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [
@@ -44,9 +46,9 @@ async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' =
   const persisted = (await store.load({ sideline: false })).projects[0]
   const journal = new WorktreeRemovalJournal(path.join(root, 'data', 'worktree-removals.json'), { ownsFiles: () => true })
   await journal.load()
-  const row = await journal.prepare({ projectId: project.id, groupId: 'group', repoPath: repo, worktreePath: checkout,
+  const row = recorded ? await journal.prepare({ projectId: project.id, groupId: 'group', repoPath: repo, worktreePath: checkout,
     branch: 'feature', fallbackCwd: repo, directoryStamp: `${stat.dev}:${stat.ino}`,
-    members: persisted.nodes.filter((n) => n.id !== 'outside').map((n) => ({ nodeId: n.id, binding: canvasExecutionBinding(persisted, n) })) })
+    members: persisted.nodes.filter((n) => n.id !== 'outside').map((n) => ({ nodeId: n.id, binding: canvasExecutionBinding(persisted, n) })) }) : undefined
   fs.rmdirSync(checkout)
   const admission = installWorktreeCanvasAdmission(store, journal); const dispatch = new WorktreeRecoveryDispatch(journal)
   const coordinator = new NodeExecutionCoordinator(); coordinator.setDispatchAdmission((id, permit) => dispatch.assertAllowed(id, permit))
@@ -57,12 +59,12 @@ async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' =
   const pty = { nodeExecutionIdentity: () => live,
     runWorktreeAction: <T>(ids: readonly string[], options: NodeExecutionOptions, work: (permit: NodeExecutionBatchPermit) => Promise<T> | T) =>
       coordinator.runMany(ids, 'worktree', options, work), recycleWorktreeMember: recycle }
-  const git = { worktreeList: vi.fn(async () => ({ ok: true, entries: [] })) }
+  const git = { worktreeList: vi.fn<GitService['worktreeList']>(async () => ({ ok: true, entries: [] })) }
   const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
   const confirmations = { request: vi.fn(async () => ({ ok: true as const, consume: async () => true, current: () => owner.active(), cancel() {} })) }
   const service = new WorktreeRecoveryService({ journal, pty, git, repair: { workspace: store, admission, dispatch, confirmations } })
   const writer = new CanvasContentWriter({ workspaceStore: store })
-  return { store, writer, journal, row, admission, dispatch, coordinator, recycle, service, owners, owner, git, repo, checkout, confirmations }
+  return { store, writer, journal, row: row!, admission, dispatch, coordinator, recycle, service, owners, owner, git, repo, checkout, confirmations }
 }
 
 describe.skipIf(process.platform === 'win32')('recorded missing-checkout recovery', () => {
@@ -253,4 +255,81 @@ it.each((['folder', 'appdata', 'inline'] as const).flatMap((storage) => ['conten
   expect(fs.readFileSync(target, 'utf8')).toBe(before)
   expect(f.journal.list()[0].phase).toBe('removed')
   expect(f.journal.isNodePending('terminal')).toBe(true)
+})
+
+async function missingFixture(storage: 'folder' | 'appdata' | 'inline' = 'folder') {
+  const f = await fixture(false, storage, false)
+  const git = (...args: string[]) => execFileSync('git', ['-C', f.repo, ...args], { stdio: 'pipe' })
+  git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
+  git('commit', '--allow-empty', '-m', 'base')
+  const backend = new GitService()
+  f.git.worktreeList.mockImplementation((...args) => backend.worktreeList(...args))
+  return f
+}
+it.each(['folder', 'appdata', 'inline'] as const)('recovers an already missing %s checkout without inventing a prior inode or deletion', async (storage) => {
+  const f = await missingFixture(storage)
+  expect(f.journal.list()).toEqual([])
+  expect(fs.existsSync(f.journal.file)).toBe(false)
+  expect(await f.service.discoverMissing(f.owner)).toMatchObject({ ok: true, candidates: [{ groupId: 'group', path: f.checkout }] })
+  expect(fs.existsSync(f.journal.file)).toBe(false)
+  const recycle = f.recycle.getMockImplementation()!
+  f.recycle.mockImplementationOnce(async (...args) => {
+    const row = f.journal.list()[0]
+    expect(row).toMatchObject({ phase: 'removed', provenance: { kind: 'observed-missing', ancestor: root } })
+    expect(row.directoryStamp).toBeUndefined()
+    expect(JSON.parse(fs.readFileSync(f.journal.file, 'utf8')).version).toBe(3)
+    return recycle(...args)
+  })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
+  expect(f.confirmations.request).toHaveBeenCalledOnce()
+  expect(f.recycle).toHaveBeenCalledOnce()
+  expect((await new WorkspaceStore().load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'terminal')?.cwd).toBe(f.repo)
+  const restart = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await restart.load()
+  expect(restart.isNodePending('terminal')).toBe(true)
+  expect(await f.service.discoverMissing(f.owner)).toEqual({ ok: true, candidates: [] })
+  expect(await f.service.keep(restart.list()[0].id, f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+})
+it.each(['recreated', 'metadata', 'owner', 'repository', 'symlink'] as const)('refuses changed %s before recording observed absence or teardown', async (change) => {
+  const f = await missingFixture()
+  const request = f.confirmations.request.getMockImplementation()!
+  f.confirmations.request.mockImplementationOnce(async (...args) => {
+    if (change === 'recreated') fs.mkdirSync(f.checkout)
+    if (change === 'metadata') await f.writer.edit((fresh) => { fresh.projects[0].nodes.find((node) => node.id === 'terminal')!.cwd = f.repo })
+    if (change === 'owner') f.owners.forget(1)
+    if (change === 'repository') { fs.renameSync(f.repo, f.repo + '-old'); fs.mkdirSync(f.repo) }
+    if (change === 'symlink') fs.symlinkSync(f.repo, f.checkout)
+    return request(...args)
+  })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+  expect(f.recycle).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([])
+})
+it('retains observed absence on a later teardown failure and reconciles only via its durable record', async () => {
+  const f = await missingFixture()
+  f.recycle.mockRejectedValueOnce(new Error('teardown acknowledgement lost'))
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  const row = f.journal.list()[0]
+  expect(row.provenance.kind).toBe('observed-missing'); expect(row.directoryStamp).toBeUndefined()
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+  expect(await f.service.recover(row.id, f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
+  expect(f.confirmations.request).toHaveBeenCalledTimes(2)
+})
+
+it('accepts real prunable linked metadata without pruning or claiming a Git deletion', async () => {
+  const f = await missingFixture()
+  const git = (...args: string[]) => execFileSync('git', ['-C', f.repo, ...args], { encoding: 'utf8', stdio: 'pipe' })
+  git('worktree', 'add', '-b', 'feature', f.checkout)
+  fs.rmSync(f.checkout, { recursive: true }) // fixture models external deletion before any host record
+  const before = git('worktree', 'list', '--porcelain')
+  expect(before).toContain('prunable')
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
+  expect(git('worktree', 'list', '--porcelain')).toBe(before)
+  expect(f.journal.list()[0]).not.toHaveProperty('directoryStamp')
+})
+it('refuses a missing checkout with changed linked branch metadata before journal or terminal effects', async () => {
+  const f = await missingFixture()
+  const git = (...args: string[]) => execFileSync('git', ['-C', f.repo, ...args], { stdio: 'pipe' })
+  git('worktree', 'add', '-b', 'other', f.checkout)
+  fs.rmSync(f.checkout, { recursive: true })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+  expect(f.confirmations.request).not.toHaveBeenCalled(); expect(f.recycle).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([])
 })

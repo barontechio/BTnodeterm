@@ -211,7 +211,7 @@ host-only. Both roots cancel owners on departure/close and await journal IO duri
 app-global `WorktreeRecoveryHost` exposes reviewed keep actions, reserves the common dialog slot,
 ignores stale responses, hides recovered tombstones and never repeats a lost action. Relay APIs
 omit this plane; old/non-owning hosts negotiate absence. Recorded missing-checkout repair now supports plain local terminals and inert file notices. Agent
-recovery, missing-before-recording, verified rebinding and confirmed deletion remain outstanding.
+recovery, verified rebinding and confirmed deletion remain outstanding; observed-missing recovery is described below.
 
 ## What this is
 
@@ -11518,14 +11518,14 @@ identity changes. Teardown uses the real worktree permit and independent recover
 old-cache recognition ends before the next queued writer and cannot survive the repair scope.
 Accepted visual edits and unrelated content survive the fresh conditional repair.
 
-Journal version 2 retains manual-start node quarantine after durable metadata repair and host
+Journal version 3 retains manual-start node quarantine after durable metadata repair and host
 restart, even when cwd is safe. Neither a client flag, renderer pause nor a recovered journal label
 is runtime authority. Held commands remain manual-only and no terminal is spawned or typed into by
 recovery. Explicit manual resume/verified rebinding adapters remain pending; the UI retains their
-notice. Keep v2-capable hosts while these records exist; older hosts reject v2 rather than ignoring
+notice. Keep v3-capable hosts while these records exist; older hosts reject v3 rather than ignoring
 manual restrictions. Downgrade requires offline operator reconciliation of the journal, including
-an empty v2 envelope. V1 facts remain readable and are upgraded only by an acknowledged mutation.
-Missing-before-recording provenance, agent recovery and confirmed deletion remain separate gates.
+an empty v3 envelope. V1/v2 facts remain readable and are upgraded only by an acknowledged mutation.
+Agent recovery, verified rebinding/manual resume and confirmed deletion remain separate gates.
 
 Recovery's reserved FIFO write explicitly fsyncs the affected local content files, the private
 execution index and their parent directories. An ordinary atomic save is not that acknowledgement.
@@ -11548,3 +11548,17 @@ cached nodes. Split-save data-file admission uses the planned private overlay in
 not the previous index overlay. Folder, app-data and cwd-less paths must all prove content/index
 publication and file/directory durability. Recovery dispatch guards also cover the atomic writer's
 temporary write and every rename attempt, including retries after transient sharing failures.
+
+Observed-missing recovery is a distinct v3 provenance, never a fabricated prior checkout inode or
+an assertion that this host dispatched Git. Read-only owner discovery offers bounded saved local
+groups; no journal write or teardown occurs on refresh. One real owner-broker approval pins the
+saved members, actual repository identity and canonical searchable existing ancestor. Re-prove
+checkout absence and local Git repository evidence before durably recording observed absence, then
+use the same acknowledged teardown and held metadata repair. Changed/prunable Git metadata is not
+permission to retry deletion; a surviving mismatched association refuses. Observed-missing records
+cannot take the keep-original path. Lost first publication acknowledgement retains known node
+quarantine in memory as well as on restart. Legacy v1/v2 records retain their real recorded inode
+provenance and upgrade only on a durable mutation. Old binaries reject v3, including empty journals.
+The durable journal writer carries a live dispatch guard through asynchronous file preparation and
+each publication attempt when new owner-bound facts are being authorized; observed completed effect
+facts remain separate from new action authority.

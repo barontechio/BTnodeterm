@@ -586,3 +586,20 @@ it('rechecks dispatch after a transient rename refusal before another publicatio
   expect(await fs.readFile(target, 'utf8')).toBe('original')
   expect(await fs.readdir(dir)).toEqual(['guarded.json'])
 })
+
+it('does not publish new durable authority after expiry during directory preparation', async () => {
+  const target = join(dir, 'durable-authority.json'); const open = fs.open
+  let active = true
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === dir) {
+      const sync = handle.sync.bind(handle)
+      vi.spyOn(handle, 'sync').mockImplementation(async () => { await sync(); active = false })
+    }
+    return handle
+  })
+  await expect(writeFileDurableAtomic(target, 'authority', { assertDispatch: () => {
+    if (!active) throw new Error('owner expired')
+  } })).rejects.toThrow('owner expired')
+  expect(await fs.readdir(dir)).toEqual([])
+})

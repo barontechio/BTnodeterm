@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 import { CanvasContentWriter } from './canvas-content-writer'
 import { carryLocalNodeExec } from '../shared/node-exec'
@@ -8,10 +9,10 @@ import type { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
 import type { OwnerConfirmationBroker, OwnerPermit } from './owner-confirmation'
 import type { WorkspaceStore } from './workspace-store'
 import type { CanvasNodeState, Workspace } from '../shared/types'
-import { isAncestorPath, isRemoteSessionNode } from '../shared/worktree'
+import { descendantIds, isAncestorPath, isRemoteSessionNode } from '../shared/worktree'
 import { worktreeRecoveryAdmission } from './worktree-recovery-admission'
 import { isSafeNodeId } from '../shared/safe-id'
-import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply } from '../shared/worktree-recovery'
+import type { WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply, WorktreeMissingList } from '../shared/worktree-recovery'
 import type { AccountOwner } from './owner-lifetimes'
 import type { PtyManager } from './pty-manager'
 import type { GitService } from './git-service'
@@ -25,13 +26,13 @@ interface Dependencies {
   repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
 const item = (row: WorktreeRemovalRecord): WorktreeRecoveryItem => ({ id: row.id, createdAt: row.createdAt,
-  phase: row.phase, projectId: row.projectId, groupId: row.groupId, repoPath: row.repoPath,
+  phase: row.phase, provenance: row.provenance.kind, projectId: row.projectId, groupId: row.groupId, repoPath: row.repoPath,
   path: row.worktreePath, branch: row.branch, fallbackCwd: row.fallbackCwd, memberIds: row.members.map((member) => member.nodeId), ...(row.repair?.manualStart.length ? { manualStartIds: row.repair.manualStart } : {}) })
 const refused = (error: string): WorktreeRecoveryKeepReply => ({ ok: false, outcome: 'refused', error })
 
-/** Non-destructive owner recovery only. Keeping a checkout requires the original canonical inode
- * and linked Git branch, rechecked inside the journal FIFO under the actual host node barrier.
- * There is no Git mutation, session input, teardown, canvas edit or replay of the old removal.
+/** Owner recovery without Git mutation or command replay. Keeping requires the original inode
+ * and linked branch; missing recovery requires absence, acknowledged teardown and durable repair.
+ * Observation before any record never invents prior directory or Git-dispatch evidence.
  */
 export class WorktreeRecoveryService {
   private pending = new Set<string>()
@@ -50,6 +51,7 @@ export class WorktreeRecoveryService {
     return row
   }
   private directoryIntact(row: WorktreeRemovalRecord): void {
+    if (row.provenance.kind !== 'recorded-directory') throw new Error('No prior checkout identity was recorded.')
     const stat = fs.lstatSync(row.worktreePath, { bigint: true })
     if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0n || `${stat.dev}:${stat.ino}` !== row.directoryStamp ||
       fs.realpathSync.native(row.worktreePath) !== row.worktreePath || fs.realpathSync.native(row.repoPath) !== row.repoPath ||
@@ -68,23 +70,89 @@ export class WorktreeRecoveryService {
 
   /** ENOENT from another proof (repository, Git metadata) is not checkout absence. Refuse
    * redirected/unsearchable ancestors and ENOTDIR rather than treating failed IO as absence. */
-  private directoryMissing(row: WorktreeRemovalRecord): boolean {
-    try { fs.lstatSync(row.worktreePath); return false }
+  private missingAncestry(worktreePath: string): { ancestor: string; ancestorStamp: string } | null {
+    if (!path.isAbsolute(worktreePath) || path.resolve(worktreePath) !== worktreePath) throw new Error('The checkout path is not canonical.')
+    try { fs.lstatSync(worktreePath); return null }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
-    let parent = path.dirname(row.worktreePath)
+    let parent = path.dirname(worktreePath)
     for (let depth = 0; depth < 128; depth++) {
       try {
-        const stat = fs.lstatSync(parent)
-        if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(parent) !== parent)
+        const stat = fs.lstatSync(parent, { bigint: true })
+        if (!stat.ino || !stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(parent) !== parent)
           throw new Error('The missing checkout ancestry changed.')
         fs.accessSync(parent, fs.constants.R_OK | fs.constants.X_OK)
-        return true
+        return { ancestor: parent, ancestorStamp: `${stat.dev}:${stat.ino}` }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       }
       const next = path.dirname(parent); if (next === parent) break; parent = next
     }
     throw new Error('Checkout absence could not be verified.')
+  }
+
+  private directoryMissing(row: WorktreeRemovalRecord): boolean {
+    const ancestry = this.missingAncestry(row.worktreePath)
+    if (!ancestry) return false
+    if (row.provenance.kind === 'observed-missing') {
+      const stat = fs.lstatSync(row.repoPath, { bigint: true })
+      if (!stat.isDirectory() || fs.realpathSync.native(row.repoPath) !== row.repoPath ||
+        `${stat.dev}:${stat.ino}` !== row.provenance.repoStamp || ancestry.ancestor !== row.provenance.ancestor ||
+        ancestry.ancestorStamp !== row.provenance.ancestorStamp) throw new Error('The observed missing-checkout ancestry or repository changed.')
+    }
+    return true
+  }
+
+  private proposeMissing(workspace: Workspace, groupId: string): WorktreeRemovalRecord {
+    if (!isSafeNodeId(groupId)) throw new Error('Invalid saved group reference.')
+    const hits = workspace.projects.flatMap((project) => project.nodes.filter((node) => node.id === groupId).map((node) => ({ project, node })))
+    if (hits.length !== 1 || hits[0].node.kind !== 'group' || !hits[0].node.worktree) throw new Error('One saved worktree group is required.')
+    const { project, node: group } = hits[0]; const binding = group.worktree!
+    const ancestry = this.missingAncestry(binding.path)
+    if (!ancestry) throw new Error('The checkout is present. No missing-checkout recovery was recorded.')
+    const repo = fs.lstatSync(binding.repoPath, { bigint: true })
+    if (!repo.isDirectory() || !repo.ino || fs.realpathSync.native(binding.repoPath) !== binding.repoPath)
+      throw new Error('The local repository is unavailable or redirected.')
+    fs.accessSync(binding.repoPath, fs.constants.R_OK | fs.constants.X_OK)
+    if (this.deps.journal.reservedPaths().some((reserved) => isAncestorPath(reserved, binding.path) || isAncestorPath(binding.path, reserved)))
+      throw new Error('This checkout already has recovery facts. Inspect that record.')
+    const ids = new Set([groupId, ...descendantIds(project.nodes, groupId)])
+    if (ids.size > 32) throw new Error('The affected group exceeds recovery capacity.')
+    const observedAt = Date.now()
+    const row: WorktreeRemovalRecord = { id: randomUUID(), createdAt: observedAt, phase: 'removed', projectId: project.id, groupId,
+      repoPath: binding.repoPath, worktreePath: binding.path, branch: binding.branch, fallbackCwd: binding.repoPath,
+      provenance: { kind: 'observed-missing', observedAt, ...ancestry, repoStamp: `${repo.dev}:${repo.ino}` },
+      members: project.nodes.filter((node) => ids.has(node.id)).map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })) }
+    this.repairSnapshot(workspace, row)
+    return row
+  }
+
+  /** Read-only candidates, never auto-recorded facts. The actual action repeats every proof. */
+  async discoverMissing(owner: AccountOwner): Promise<WorktreeMissingList> {
+    if (!owner.active() || !this.deps.repair) return { ok: false, error: 'Missing-checkout discovery is unavailable.' }
+    try {
+      const workspace = await this.deps.repair.workspace.load({ sideline: false })
+      const candidates: Extract<WorktreeMissingList, { ok: true }>['candidates'] = []
+      for (const project of workspace.projects) for (const node of project.nodes) {
+        if (candidates.length >= 128) break
+        if (node.kind !== 'group' || !node.worktree) continue
+        try {
+          const row = this.proposeMissing(workspace, node.id)
+          candidates.push({ groupId: row.groupId, projectId: row.projectId, branch: row.branch, path: row.worktreePath })
+        } catch { /* Unsupported/unavailable identities are never offered as recoverable. */ }
+      }
+      if (!owner.active()) return { ok: false, error: 'worktree-recovery-owner-required' }
+      return { ok: true, candidates }
+    } catch { return { ok: false, error: 'Missing-checkout candidates could not be read.' } }
+  }
+
+  private async verifyMissingRepository(row: WorktreeRemovalRecord): Promise<void> {
+    if (!this.directoryMissing(row)) throw new Error('The checkout is no longer absent.')
+    const result = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeList(row.repoPath))
+    if (!result.ok || !result.entries.length) throw new Error('The local Git repository cannot be verified.')
+    const matches = result.entries.filter((entry) => path.resolve(entry.path) === row.worktreePath)
+    if (matches.length > 1 || matches.some((entry) => entry === result.entries[0] || entry.isBare || entry.branch !== row.branch))
+      throw new Error('The saved missing-checkout Git association changed.')
+    if (!this.directoryMissing(row)) throw new Error('The checkout changed during Git inspection.')
   }
 
   private repairSnapshot(workspace: Workspace, row: WorktreeRemovalRecord): { projectId: string; nodes: CanvasNodeState[] } {
@@ -95,6 +163,7 @@ export class WorktreeRecoveryService {
     const project = projects[0]
     if (fs.realpathSync.native(row.fallbackCwd) !== row.fallbackCwd || !fs.statSync(row.fallbackCwd).isDirectory() ||
       isAncestorPath(row.worktreePath, row.fallbackCwd)) throw new Error('The recovery directory is unavailable.')
+    worktreeRecoveryAdmission(this.deps.journal)(row.fallbackCwd)
     const admit = worktreeRecoveryAdmission({ reservedPaths: () => [row.worktreePath] })
     const nodes = row.members.map((member) => {
       const hits = workspace.projects.flatMap((candidate) => candidate.nodes.filter((node) => node.id === member.nodeId)
@@ -156,7 +225,10 @@ export class WorktreeRecoveryService {
 
   /** Explicit physical-owner recovery of an already journaled missing checkout. Never invokes
    * Git mutation, creates a terminal or submits held input. Unsupported agent identities refuse. */
-  async recover(id: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> {
+  recover(id: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> { return this.recoverTarget(id, owner, false) }
+  recoverMissing(groupId: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> { return this.recoverTarget(groupId, owner, true) }
+
+  private async recoverTarget(id: string, owner: AccountOwner, unrecorded: boolean): Promise<WorktreeRecoveryRepairReply> {
     const refusedRepair = (error: string): WorktreeRecoveryRepairReply => ({ ok: false, outcome: 'refused', error })
     const domain = this.deps.repair
     if (!owner.active()) return refusedRepair('worktree-recovery-owner-required')
@@ -167,7 +239,9 @@ export class WorktreeRecoveryService {
     let changed = false
     let approval: Extract<OwnerPermit, { ok: true }> | undefined
     try {
-      let row = this.row(id)
+      let row = unrecorded ? this.proposeMissing(await domain.workspace.load({ sideline: false }), id) : this.row(id)
+      const initialJournal = JSON.stringify(this.deps.journal.list())
+      if (unrecorded) await this.verifyMissingRepository(row)
       if (row.phase === 'recovered') return refusedRepair('Metadata is already recovered. Manual start/rebinding remains required.')
       if (!this.directoryMissing(row)) return refusedRepair('The checkout is present or replaced. Inspect it before recovery.')
       const writer = new CanvasContentWriter({ workspaceStore: domain.workspace })
@@ -175,14 +249,16 @@ export class WorktreeRecoveryService {
       const physical = new Map(before.nodes.filter((node) => node.kind === 'terminal')
         .map((node) => [node.id, this.deps.pty.nodeExecutionIdentity!(node.id)]))
       let expectedRecord = JSON.stringify(row)
+      const recordCurrent = () => unrecorded ? JSON.stringify(this.deps.journal.list()) === initialJournal : JSON.stringify(this.row(row.id)) === expectedRecord
       const answer = await domain.confirmations.request({ action: 'recover-worktree',
         requester: { nodeId: row.groupId, projectId: row.projectId, title: row.branch },
         binding: { record: expectedRecord, members: row.members },
-        message: `Recover ${before.nodes.length} recorded nodes from the missing checkout ${row.worktreePath}?`,
-        details: 'This acknowledges terminal teardown and repairs the recorded paths. Terminals stay blocked for explicit manual start or verified rebinding. No Git deletion is retried and no command is replayed.',
+        message: `Recover ${before.nodes.length} saved nodes from the missing checkout ${row.worktreePath}?`,
+        details: (unrecorded ? 'This checkout was already missing; no prior directory identity or Git deletion is claimed. ' : '') + 'This acknowledges terminal teardown and repairs the recorded paths. Terminals stay blocked for explicit manual start or verified rebinding. No Git deletion is retried and no command is replayed.',
         confirmLabel: 'Recover recorded nodes', danger: true,
         checkCurrent: async () => {
-          if (!owner.active() || !this.directoryMissing(row) || JSON.stringify(this.row(id)) !== expectedRecord) return false
+          if (!owner.active() || !this.directoryMissing(row) || !recordCurrent()) return false
+          if (unrecorded) await this.verifyMissingRepository(row)
           this.repairSnapshot(await domain.workspace.load({ sideline: false }), row)
           return before.nodes.filter((node) => node.kind === 'terminal').every((node) => this.deps.pty.nodeExecutionIdentity!(node.id) === physical.get(node.id))
         }
@@ -191,7 +267,7 @@ export class WorktreeRecoveryService {
       approval = answer
       if (!(await answer.consume())) return refusedRepair('The approved recovery identity changed or expired.')
       const current = () => {
-        try { return owner.active() && answer.current() && this.directoryMissing(row) && JSON.stringify(this.row(id)) === expectedRecord }
+        try { return owner.active() && answer.current() && this.directoryMissing(row) && recordCurrent() }
         catch { return false }
       }
       await this.deps.pty.runWorktreeAction(row.members.map((member) => member.nodeId), { owner, current, timeoutMs: 120_000 }, async (permit) => {
@@ -201,9 +277,14 @@ export class WorktreeRecoveryService {
         })
         try {
           permit.assertCurrent()
+          if (unrecorded) {
+            await this.verifyMissingRepository(row); permit.assertCurrent()
+            row = await this.deps.journal.observeMissing(row, permit.assertCurrent)
+            unrecorded = false; expectedRecord = JSON.stringify(row); changed = true
+          }
           if (row.phase === 'prepared') {
             // Actual observed absence, not a retry of the uncertain earlier deletion.
-            row = await this.deps.journal.markRemoved(id); expectedRecord = JSON.stringify(row); changed = true
+            row = await this.deps.journal.markRemoved(row.id); expectedRecord = JSON.stringify(row); changed = true
           }
           permit.assertCurrent()
           const candidate = structuredClone(await domain.workspace.load({ sideline: false }))
@@ -219,7 +300,7 @@ export class WorktreeRecoveryService {
           if (plan.manualStart.length !== terminals.length || plan.manualStart.some((id) => !terminals.includes(id)) ||
             captured.nodes.some((node) => canvasExecutionBinding(project, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
             throw new Error('The recorded repair plan no longer matches its target identities.')
-          row = await this.deps.journal.planRepair(id, plan, permit.assertCurrent)
+          row = await this.deps.journal.planRepair(row.id, plan, permit.assertCurrent)
           expectedRecord = JSON.stringify(row); changed = true
           await domain.dispatch.withRecovery(permit, async () => {
             for (const node of captured.nodes.filter((node) => node.kind === 'terminal')) {
@@ -243,7 +324,7 @@ export class WorktreeRecoveryService {
           if (durable.nodes.some((node) => canvasExecutionBinding(location, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
             throw new Error('The repaired metadata was not acknowledged.')
           permit.assertCurrent()
-          row = await this.deps.journal.markRecovered(id); expectedRecord = JSON.stringify(row)
+          row = await this.deps.journal.markRecovered(row.id); expectedRecord = JSON.stringify(row)
         } finally { hold.release() }
       })
       return { ok: true, outcome: 'recovered', message: 'Missing-checkout metadata recovered. Terminals remain blocked for explicit manual start or rebinding; no command was replayed.' }

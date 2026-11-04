@@ -70,10 +70,12 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
       socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs()
     }
   })
-  it('recovers a recorded missing binding only after the real owner broker approves its immutable plan', async () => {
+  it.each([true, false])('recovers a recorded missing binding only after the real owner broker approves its immutable plan', async (recorded) => {
     const root = fs.realpathSync(testTmpDir('worktree-repair-e2e-'))
     const dataDir = path.join(root, 'data'); const repo = path.join(root, 'repo'); const checkout = path.join(root, 'checkout')
     fs.mkdirSync(dataDir); fs.mkdirSync(repo); fs.mkdirSync(checkout)
+    const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' })
+    git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid'); git('commit', '--allow-empty', '-m', 'base')
     vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     initPlatform(fakePlatform({ userDataDir: dataDir }))
     const store = new WorkspaceStore()
@@ -87,9 +89,9 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
     const persisted = (await store.load()).projects[0]
     const journal = new WorktreeRemovalJournal(path.join(dataDir, 'worktree-removals.json'), { ownsFiles: () => true })
     await journal.load(); const stat = fs.lstatSync(checkout, { bigint: true })
-    const row = await journal.prepare({ projectId: project.id, groupId: 'group', repoPath: repo, worktreePath: checkout, branch: 'feature',
+    const row = recorded ? await journal.prepare({ projectId: project.id, groupId: 'group', repoPath: repo, worktreePath: checkout, branch: 'feature',
       fallbackCwd: repo, directoryStamp: `${stat.dev}:${stat.ino}`,
-      members: persisted.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(persisted, node) })) })
+      members: persisted.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(persisted, node) })) }) : undefined
     fs.rmdirSync(checkout)
     const auth = new Auth(dataDir); auth.setPassword('fixture-password'); const cookie = auth.createSession()
     const server = await startServer({ dataDir, rendererDir: path.join(root, 'no-renderer'), host: '127.0.0.1', port: 0,
@@ -113,10 +115,12 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
         socket!.send(JSON.stringify({ t: 'req', id, method, args } satisfies RpcRequest))
       })
       await request(IPC.ownerConfirmationConnect)
-      const recovering = request(IPC.worktreeRecoveryRepair, row.id)
+      if (!recorded) expect(await request(IPC.worktreeRecoveryDiscover)).toMatchObject({ ok: true, candidates: [{ groupId: 'group' }] })
+      const recovering = recorded ? request(IPC.worktreeRecoveryRepair, row!.id) : request(IPC.worktreeRecoveryMissing, 'group')
       await vi.waitFor(() => expect(prompts).toHaveLength(1))
       expect(prompts[0].action).toBe('recover-worktree')
-      expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0].phase).toBe('prepared')
+      if (recorded) expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0].phase).toBe('prepared')
+      else expect(fs.existsSync(journal.file)).toBe(false)
       const prompt = prompts[0]
       await request(IPC.ownerConfirmationDecide, { id: prompt.id, token: prompt.token, proof: prompt.proof, answer: 'approve' })
       expect(await recovering).toMatchObject({ ok: true, outcome: 'recovered' })
@@ -124,7 +128,10 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
       expect(saved.projects[0].nodes.find((node) => node.id === 'group')?.worktree).toBeUndefined()
       expect(saved.projects[0].nodes.find((node) => node.id === 'editor')).toMatchObject({ fileMissing: true, filePath: path.join(checkout, 'file') })
       await expect(request(IPC.ptyCreate, { persistKey: 'new-node', cwd: checkout, cols: 80, rows: 24 })).rejects.toThrow('worktree-recovery-required')
-      expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0].phase).toBe('recovered')
+      const facts = JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0]
+      expect(facts.phase).toBe('recovered')
+      expect(facts.provenance.kind).toBe(recorded ? 'recorded-directory' : 'observed-missing')
+      if (!recorded) expect(facts.directoryStamp).toBeUndefined()
     } finally { socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs() }
   })
 

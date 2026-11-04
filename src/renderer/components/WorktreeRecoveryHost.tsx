@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
-import type { WorktreeRecoveryApi, WorktreeRecoveryInspection, WorktreeRecoveryItem } from '../../shared/worktree-recovery'
+import type { WorktreeRecoveryApi, WorktreeRecoveryInspection, WorktreeRecoveryItem, WorktreeMissingCandidate } from '../../shared/worktree-recovery'
 import { claimOwnerConfirmation, releaseOwnerConfirmation } from '../lib/ownerConfirmationSlot'
 import { ConfirmDialog } from './ConfirmDialog'
 
@@ -15,6 +15,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
   const api = candidate && typeof candidate.list === 'function' && typeof candidate.inspect === 'function' && typeof candidate.keep === 'function'
     ? candidate : undefined
   const [records, setRecords] = useState<WorktreeRecoveryItem[]>([])
+  const [missing, setMissing] = useState<WorktreeMissingCandidate[]>([])
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState('')
@@ -26,7 +27,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
   const reload = useRef<(() => Promise<void>) | null>(null)
   useEffect(() => {
     epoch.current++; let live = true; let reading = false; let unsupported = false
-    setOpen(false); setRecords([]); setError(''); setMessage(''); setSelected('')
+    setOpen(false); setRecords([]); setMissing([]); setError(''); setMessage(''); setSelected('')
     const refresh = async () => {
       if (!api || !live || reading || unsupported) return
       reading = true
@@ -35,6 +36,12 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
         if (!live) return
         if (result == null) { unsupported = true; setRecords([]); setError(''); return }
         if (!result.ok) { setError(result.error); setRecords([]); return }
+        let discovered: WorktreeMissingCandidate[] = []
+        if (api.discoverMissing && api.recoverMissing) {
+          try { const found = await api.discoverMissing(); if (found.ok) discovered = found.candidates } catch { /* Older hosts omit discovery. */ }
+        }
+        if (!live) return
+        setMissing(discovered)
         const pending = result.records.filter((row) => row.phase !== 'recovered' || !!row.manualStartIds?.length)
         setError(''); setRecords(pending)
         setSelected((id) => pending.some((row) => row.id === id) ? id : pending[0]?.id ?? '')
@@ -80,20 +87,38 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
-  if (!api || (!open && !records.length && !error)) return null
+  const recoverMissing = async (candidate: WorktreeMissingCandidate) => {
+    if (!api?.recoverMissing || keeping.current) return
+    keeping.current = true; setBusy(true); const started = epoch.current
+    flushSync(close)
+    try {
+      const result = await api.recoverMissing(candidate.groupId)
+      if (started !== epoch.current) return
+      setMessage(result.ok ? result.message : result.error); setInspection(null)
+      if (claimOwnerConfirmation(TICKET)) setOpen(true)
+      await reload.current?.()
+    } catch {
+      if (started === epoch.current) {
+        setMessage('Recovery may have partially completed. Refresh its status before another action.')
+        if (claimOwnerConfirmation(TICKET)) setOpen(true)
+      }
+    } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
+  }
+  if (!api || (!open && !records.length && !missing.length && !error)) return null
   const status = inspection?.ok ? inspection.status === 'kept'
     ? 'The original checkout and branch are present. Keep them to release this pending recovery.'
     : inspection.status === 'missing' && row?.phase !== 'recovered' ? 'The checkout is missing. Recover the recorded plain terminals and file notices without retrying Git. Terminals remain blocked for explicit manual start or rebinding.'
     : row?.manualStartIds?.length ? 'Metadata is recovered. Terminals remain blocked on this host until explicit manual start or verified rebinding.'
     : 'The original checkout could not be verified. Keep this recovery record while inspecting the files.'
-    : inspection?.error ?? (selected ? 'Checking the existing checkout…' : 'No pending recovery records.')
+    : inspection?.error ?? (selected ? 'Checking the existing checkout…' : missing.length ? 'These saved checkouts are missing. Recovery requires confirmation on this host; no prior deletion is assumed.' : 'No pending recovery records.')
   return <>
     <button className="confirm__btn" style={{ position: 'fixed', top: 52, right: 16, zIndex: 100 }} onClick={() => {
       if (claimOwnerConfirmation(TICKET)) { setMessage(''); setOpen(true) }
-    }}>Worktree recovery{records.length ? ` (${records.length})` : ''}</button>
+    }}>Worktree recovery{(records.length + missing.length) ? ` (${records.length + missing.length})` : ''}</button>
     {open && <ConfirmDialog message={visible(busy ? 'Completing recovery…' : message || error || status)}
-      body={row && <div className="confirm__msg space-y-2" style={{ overflowWrap: 'anywhere' }}>
+      body={<div className="confirm__msg space-y-2" style={{ overflowWrap: 'anywhere' }}>
         <p>Recovery on this host</p>
+        {row && <>
         <select aria-label="Pending recovery" value={selected} disabled={busy} onChange={(event) => {
           setMessage(''); setSelected(event.target.value)
         }} style={{ width: '100%' }}>
@@ -110,6 +135,17 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
             if (current()) setInspection(result)
           }).catch(() => { if (current()) setInspection({ ok: false, error: 'The checkout could not be inspected. Refresh its status.' }) })
         }}>Refresh status</button>
+        {row.provenance === 'observed-missing' && <p>Recorded as already missing. No earlier directory identity or app deletion is claimed.</p>}
+        </>}
+        {!!missing.length && <div>
+          <p>Missing saved checkouts without a recovery record</p>
+          {missing.map((candidate) => <div key={`${candidate.projectId}:${candidate.groupId}`}>
+            <p>{visible(candidate.path)}</p>
+            <button className="confirm__btn" disabled={busy || !!message} onClick={() => { void recoverMissing(candidate) }}>
+              Recover {visible(candidate.branch)}
+            </button>
+          </div>)}
+        </div>}
       </div>}
       alert={(!canKeep && !canRepair) || busy} confirmLabel={!busy && canRepair ? 'Recover missing checkout' : canKeep && !busy ? 'Keep existing checkout' : 'Close'} cancelLabel="Close"
       danger={false} enterConfirms={false} autoFocusButtons={false}

@@ -98,4 +98,23 @@ describe('owner worktree recovery UI', () => {
     expect(api.keep).not.toHaveBeenCalled()
   })
 
+  it('discovers without recording and requests one host-confirmed missing recovery with no replay', async () => {
+    const api = fixture(); api.list = async () => ({ ok: true, records: [] })
+    api.discoverMissing = vi.fn(async () => ({ ok: true as const, candidates: [{ groupId: 'group', projectId: 'p', branch: 'feature', path: '/missing' }] }))
+    api.recoverMissing = vi.fn(async () => {
+      expect(hasOwnerConfirmation()).toBe(false)
+      throw new Error('lost reply')
+    })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    expect(api.recoverMissing).not.toHaveBeenCalled()
+    await act(async () => button('Worktree recovery (1)').click())
+    expect(document.body.textContent).toContain('no prior deletion is assumed')
+    await act(async () => button('Recover feature').click())
+    expect(api.recoverMissing).toHaveBeenCalledExactlyOnceWith('group')
+    expect(document.body.textContent).toContain('partially completed')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.recoverMissing).toHaveBeenCalledOnce()
+    expect(button('Recover feature').disabled).toBe(true)
+  })
+
 })

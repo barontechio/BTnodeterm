@@ -3,6 +3,7 @@ export interface WorktreeRecoveryItem {
   id: string
   createdAt: number
   phase: 'prepared' | 'removed' | 'recovered'
+  provenance?: 'recorded-directory' | 'observed-missing'
   projectId: string
   groupId: string
   repoPath: string
@@ -22,8 +23,13 @@ export interface WorktreeRecoveryApi {
   list(): Promise<WorktreeRecoveryList | null>
   inspect(id: string): Promise<WorktreeRecoveryInspection>
   keep(id: string): Promise<WorktreeRecoveryKeepReply>
+  discoverMissing?(): Promise<WorktreeMissingList>
+  recoverMissing?(groupId: string): Promise<WorktreeRecoveryRepairReply>
   recover?(id: string): Promise<WorktreeRecoveryRepairReply>
 }
 
 export type WorktreeRecoveryRepairReply = { ok: true; outcome: 'recovered'; message: string } |
   { ok: false; outcome: 'refused' | 'uncertain'; error: string }
+
+export interface WorktreeMissingCandidate { groupId: string; projectId: string; branch: string; path: string }
+export type WorktreeMissingList = { ok: true; candidates: WorktreeMissingCandidate[] } | { ok: false; error: string }

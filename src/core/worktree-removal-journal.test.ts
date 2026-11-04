@@ -90,7 +90,7 @@ describe.skipIf(process.platform === 'win32')('strict write-ahead worktree recov
     const persist = vi.fn(); const f = fixture({ persist }); await f.journal.load()
     for (const bad of [{ branch: '--force' }, { fallbackCwd: f.intent.worktreePath }, { directoryStamp: '1:0' }, { members: [] },
       { members: [{ nodeId: 'group', binding: 'a'.repeat(64), command: 'must not be journaled' }] }]) {
-      await expect(f.journal.prepare({ ...f.intent, ...bad })).rejects.toThrow('invalid-record')
+      await expect(f.journal.prepare({ ...f.intent, ...bad })).rejects.toThrow(/invalid-(record|provenance)/)
     }
     expect(persist).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([])
   })
@@ -164,5 +164,34 @@ it('retains private manual-start quarantine after durable repair and host recons
   expect(await restarted.load()).toMatchObject([{ phase: 'recovered', repair: { manualStart: ['group'] } }])
   expect(restarted.isNodePending('group')).toBe(true)
   await expect(restarted.releaseRebound(row.id)).rejects.toThrow('recovery-required')
-  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(2)
+  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(3)
+})
+
+it.each([1, 2])('reads historical version %s without inventing missing provenance and upgrades only on mutation', async (version) => {
+  const f = fixture(); await f.journal.load(); const row = await f.journal.prepare(f.intent)
+  const { provenance: _origin, ...legacy } = row
+  const raw = JSON.stringify({ kind: 'worktree-removals', version, records: [legacy] })
+  fs.writeFileSync(f.file, raw)
+  const fresh = new WorktreeRemovalJournal(f.file, f.config)
+  expect(await fresh.load()).toMatchObject([{ directoryStamp: '1:2', provenance: { kind: 'recorded-directory' } }])
+  expect(fs.readFileSync(f.file, 'utf8')).toBe(raw)
+  await fresh.markRemoved(row.id)
+  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(3)
+})
+it('strictly distinguishes observed absence from recorded inode evidence and retains quarantine after lost first acknowledgement', async () => {
+  const f = fixture({ persist: async (file, text) => { await writeFileDurableAtomic(file, text, { mode: 0o600 }); throw new Error('ack lost') } })
+  await f.journal.load()
+  const { directoryStamp: _stamp, ...intent } = f.intent
+  const proposed = { ...intent, id: 'observed', createdAt: Date.now(), phase: 'removed' as const,
+    provenance: { kind: 'observed-missing' as const, observedAt: Date.now(), ancestor: f.root, ancestorStamp: '1:2', repoStamp: '1:3' } }
+  expect(() => f.journal.observeMissing({ ...proposed, directoryStamp: '1:9' }, () => {})).toThrow('invalid-provenance')
+  await expect(f.journal.observeMissing(proposed, () => {})).rejects.toThrow('ack lost')
+  expect(f.journal.isNodePending('group')).toBe(true)
+  const fresh = new WorktreeRemovalJournal(f.file, { ownsFiles: () => true }); await fresh.load()
+  expect(fresh.list()[0]).not.toHaveProperty('directoryStamp')
+  expect(fresh.list()[0].provenance.kind).toBe('observed-missing')
+  await expect(fresh.releaseKept('observed', { verify: async () => {}, assertCurrent() {} })).rejects.toThrow('recovery-required')
+  const oldVersion = JSON.parse(fs.readFileSync(f.file, 'utf8')); oldVersion.version = 2
+  fs.writeFileSync(f.file, JSON.stringify(oldVersion))
+  await expect(fresh.load()).rejects.toThrow('invalid-envelope')
 })
