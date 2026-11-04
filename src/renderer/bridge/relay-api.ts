@@ -1,3 +1,5 @@
+import { isBrowserTeamConnection } from './browser-team/connections'
+import { DEFAULT_SETTINGS } from '../../shared/types'
 // buildRelayApi — assemble a full `NodeTerminalApi` for a remote-desktop (relay) project tab.
 //
 // A relay tab is a client of ANOTHER desktop's core, exactly as the browser is a client of the
@@ -46,7 +48,7 @@ import {
   buildClaudeApi,
   buildGitHubApi
 } from './ws-bridge'
-import { buildStubApi } from './stubs'
+import { buildStubApi, unsupported } from './stubs'
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { projectIdsBoundToApi } from '../session/session'
@@ -96,16 +98,23 @@ export function buildRelayApi(
   const files = buildFilesApi(client) // { fs, git, files, context }
   const github = buildGitHubApi(client)
   const stub = buildStubApi()
+  const browser = isBrowserTeamConnection(connectionId)
+  const refuse = () => unsupported('Joined browser local administration')
 
   const api: NodeTerminalApi = {
-    // ── Base: every APP-GLOBAL namespace stays LOCAL. Spreading the whole preload gives the real
-    //    desktop implementations (updates/license/clipboard/shell/dialog/media/settings/pairing/
-    //    announcements/usage/ssh*/remote*/relay*/notifications/menu events). The core-bound spreads
-    //    below override the handful that must hit the remote core.
-    ...local,
+    // Native tabs retain their app-global desktop services. Browser team tabs start from inert
+    // stubs so no administrative member can inherit the owning Server connection. Remote core
+    // builders below explicitly add the team surface.
+    ...(browser ? {
+      ...stub,
+      settings: { load: async () => structuredClone(DEFAULT_SETTINGS), save: refuse, patch: refuse, onChanged: () => () => {} },
+      integrations: { status: async () => ({ enabled: [], declined: [], retained: [], vetoed: true }) },
+      logs: { snapshot: async () => [], clear: () => {}, onBatch: () => () => {} },
+      speech: { transcribe: refuse, models: async () => [], downloadModel: refuse, deleteModel: refuse, onProgress: () => () => {}, micConsent: async () => false }
+    } : local),
     // Host owner actions must never fall through to the viewer's local desktop under a remote id.
     control: { capabilities: async () => null },
-    worktree: { ...local.worktree, recovery: undefined },
+    worktree: { ...(browser ? stub.worktree : local.worktree), recovery: undefined },
 
     // ── CORE-BOUND: route to the REMOTE core over the relay RpcClient. ──
     workspace: real.workspace, // the host's canvas/project files
@@ -115,14 +124,14 @@ export function buildRelayApi(
     files: files.files,
     context: { ...files.context, watchRemote: undefined },
     githubIssues: github.githubIssues,
-    githubControl: local.githubControl,
+    githubControl: browser ? { status: refuse, approve: refuse, revoke: refuse, selectProvider: refuse, saveToken: refuse, clearToken: refuse } : local.githubControl,
     ...buildAgentApi(client), // onAgentStatus / onSubagentActivity — the host's agent hooks
     ...buildCanvasApi(client), // canvas sync against the host's reflector
     ...buildPresenceApi(client), // the host's presence hub
     // `cliCaps` is REAL over the relay so the --permission-mode auto version gate probes the HOST's
     // claude CLI (a remote node launches on the host); `readTranscript` stays LOCAL (v1 degrade —
     // transcripts aren't relayed, so it reads this machine's; the only consumer reads the global api).
-    claude: buildClaudeApi(client, local.claude),
+    claude: buildClaudeApi(client, browser ? stub.claude : local.claude),
 
     // pty is core-bound EXCEPT `onData` (gotcha 1): its output arrives on the LOCAL per-session
     // channel, so subscribe on the local preload, same shape as a local pty.

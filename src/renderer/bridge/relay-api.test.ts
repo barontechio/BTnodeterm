@@ -406,3 +406,30 @@ describe('buildRelayApi — canvasAuthority (which projects publish even when al
     expect(t.sent).toEqual([])
   })
 })
+
+it('browser joined API cannot fall through to the owning local Server administration', async () => {
+  const { markBrowserTeamConnection, forgetBrowserTeamConnection } = await import('./browser-team/connections')
+  const { local } = fakeLocalApi()
+  const saved = (globalThis as Record<string, unknown>).window
+  const admin = vi.fn(() => Promise.reject(new Error('local administration reached')))
+  Object.assign(local, {
+    ssh: { list: admin }, media: { allow: admin }, developmentPreviews: { list: admin },
+    settings: { load: admin, save: admin }, worktree: { create: admin, recovery: {} },
+    githubControl: { status: admin }, transcripts: { search: admin }
+  })
+  ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+  markBrowserTeamConnection('browser-isolation')
+  try {
+    const handle = buildRelayApi('browser-isolation', new FakeTransport(), { hosted: true })
+    expect(await handle.api.control!.capabilities()).toBeNull()
+    await expect(handle.api.ssh.list()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(handle.api.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(handle.api.githubControl.status()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(handle.api.worktree.recovery).toBeUndefined()
+    expect(await handle.api.settings.load()).toHaveProperty('fontSize')
+    expect(admin).not.toHaveBeenCalled()
+  } finally {
+    forgetBrowserTeamConnection('browser-isolation')
+    ;(globalThis as Record<string, unknown>).window = saved
+  }
+})

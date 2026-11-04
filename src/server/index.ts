@@ -1,3 +1,4 @@
+import { registerBrowserJoin } from './browser-join'
 import { registerDevelopmentPreviewService } from './development-preview-service'
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
@@ -434,6 +435,7 @@ export async function startServer(
   const webPreviews = config.previewOrigin && config.publicOrigin ?
     new WebPreviews(config.previewOrigin, config.publicOrigin, workspaceStore, platform.userDataDir) : undefined
   registerWebPreviewIpc(platform, webPreviews)
+  registerBrowserJoin(platform)
   const developmentPreviews = registerDevelopmentPreviewService({
     platform, workspace: workspaceStore, pty: ptyManager, config: config.developmentPreviews,
     appOrigin: config.publicOrigin, managementPorts: () => [config.port, hookServer.getPort()]

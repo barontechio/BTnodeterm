@@ -1,4 +1,5 @@
 import { withRemoteMeters } from './remote-meters'
+import { createBrowserTeamJoin } from './browser-team/join'
 import type { ChatCatalog } from '@shared/chat-catalog'
 import type { HostLaunchReply } from '@shared/headless-launch'
 import { E_NO_HANDLER, E_UNSUPPORTED, E_UNAUTHORIZED } from '@shared/rpc'
@@ -1653,6 +1654,9 @@ export async function installWsBridge(): Promise<boolean> {
   }
   client.onClose(() => startReconnect())
   const stubApi = buildStubApi()
+  const browserTeams = createBrowserTeamJoin(client)
+  client.onClose(() => browserTeams.dispose())
+  window.addEventListener('pagehide', () => browserTeams.dispose(), { once: true })
   const api: NodeTerminalApi = {
     ...stubApi,
     ...buildControlApi(client),
@@ -1663,6 +1667,8 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildTranscriptSearchApi(client),
     ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),
     ...buildRealApi(client),
+    relayClient: browserTeams.relayClient,
+    relayHosted: browserTeams.relayHosted,
     ...buildFilesApi(client),
     ...buildAgentApi(client),
     ...buildStationNoticeApi(client),
@@ -1717,6 +1723,8 @@ export async function installWsBridge(): Promise<boolean> {
       }
     })()
   }
+  const ownerPtyData = api.pty.onData
+  api.pty.onData = (key, listener) => key.startsWith('relay:browser-team-') ? browserTeams.onPtyData(key, listener) : ownerPtyData(key, listener)
   ;(window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal = api
   return true
 }

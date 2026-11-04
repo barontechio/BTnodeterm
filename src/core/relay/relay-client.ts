@@ -80,6 +80,7 @@ export interface ConnectRelayClientOptions {
   onClose(): void
   /** Where to record the host key after mutual approval (desktop: approved-devices). Absent = nowhere. */
   pins?: PinStore
+  requireDurablePin?: boolean
   /** The host key is bookmarked AND this device was approved before: latch our confirm at once. */
   autoApprove?: boolean
   /** The host refused us over the encrypted tunnel ('denied' | 'removed' | 'expired'). */
@@ -133,7 +134,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
       ptyGate.noteOutbound(json)
       return socket.sendTunnelText(json)
     },
-    isOpen: () => opened,
+    isOpen: () => opened && !closed,
     close() {
       if (closed) return
       closed = true
@@ -170,7 +171,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     // OBLIGATION (b) — before advancing approval or forwarding a frame: the session key must still
     // belong to the ORIGINAL host. A frame that decrypted under a swapped key must not reach the gate
     // or the renderer.
-    if (!peerKeyIntact()) return
+    if (closed || !peerKeyIntact()) return
     if (kind === 'binary') {
       // Binary is pty output only (mirrors the ws-bridge binary path). Anything undecodable is dropped.
       const decoded = decodePtyData(payload)
@@ -189,6 +190,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
     }
     // Trust frames are consumed here and NEVER forwarded to the renderer's RPC client.
     if (gate?.onTunnelText(json)) return
+    if (opts.requireDurablePin && !opened) return
     ptyGate.noteInbound(json)
     opts.onFrame(json)
   }
@@ -216,6 +218,8 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
         },
         onOpen: open,
         pins: opts.pins,
+        requirePin: opts.requireDurablePin,
+        onPinFailure: () => { session.close(); opts.onClose() },
         // Never let the gate send its confirm while it is being built: `socket` may not exist yet.
         autoApprove: false
       })
@@ -238,6 +242,7 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
       onTunnel(kind, payload)
     },
     onClose: () => {
+      closed = true
       if (!socket) {
         early.push(() => opts.onClose())
         return

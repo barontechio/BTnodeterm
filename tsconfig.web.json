@@ -20,6 +20,19 @@
   },
   "include": [
     "src/renderer/**/*",
+    "src/core/relay/bytes.ts",
+    "src/core/relay/e2ee.ts",
+    "src/core/relay/relay-id.ts",
+    "src/core/relay/join-code.ts",
+    "src/core/relay/join-token.ts",
+    "src/core/relay/relay-client.ts",
+    "src/core/relay/relay-socket.ts",
+    "src/core/relay/relay-trust.ts",
+    "src/core/relay/mutual-approval-core.ts",
+    "src/core/relay/approved-devices-core.ts",
+    "src/core/relay/framing.ts",
+    "src/core/relay/browser-transport.ts",
+
     "src/shared/**/*",
     "src/preload/index.d.ts"
   ]

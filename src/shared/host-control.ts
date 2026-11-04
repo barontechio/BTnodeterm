@@ -49,6 +49,7 @@ export const HOST_ONLY_CHANNEL_PREFIXES: readonly string[] = [
   'ssh-project:',
   'owner-confirmation:',
   'development-preview:',
+  'browser-join:',
   'githubControl:',
   // The host's credential and identity planes. None of these crosses the relay for a legitimate
   // tab (relay-api.ts keeps license/accounts/usage LOCAL), and each is something the invite never
