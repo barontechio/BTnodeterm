@@ -215,7 +215,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
             tabIndex={0}
             onKeyDown={(e) => {
               // Let the browser scroll this row instead of moving the selected frame.
-              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.stopPropagation()
+              if (e.key.startsWith('Arrow')) e.stopPropagation()
             }}
           >
             {stale ? (
