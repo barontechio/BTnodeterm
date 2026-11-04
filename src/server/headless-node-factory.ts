@@ -1139,7 +1139,14 @@ export class HeadlessNodeFactory {
       if (!id) return { ok: false, error: 'ungroup requires --group <id>' }
       const workspace = await this.loadForEdit()
       const source = sourceProject(workspace, sourceNodeId)
-      if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+      // Existing project policy plus occurrence counts: a cloned saved ID cannot borrow a
+      // current-run creator proof, even when both copies are in the caller's project.
+      const uniqueInSource = (nodeId: string): boolean => !!source &&
+        nodeProjects(workspace, nodeId).length === 1 &&
+        source.project.nodes.filter(node => node.id === nodeId).length === 1
+      if (!source || !uniqueInSource(sourceNodeId)) {
+        return { ok: false, error: 'ungroup: source node must have exactly one saved occurrence' }
+      }
       if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
         return { ok: false, error: 'source node is not a control-capable agent' }
       }
@@ -1150,11 +1157,14 @@ export class HeadlessNodeFactory {
       if (owner.projectId !== source.project.id) return { ok: false, error: 'ungroup: group is not in the caller project' }
       const project = source.project
       const matches = project.nodes.filter(node => node.id === id)
-      if (matches.length !== 1 || matches[0].kind !== 'group') {
+      if (!uniqueInSource(id) || matches[0]?.kind !== 'group') {
         return { ok: false, error: 'ungroup: target must be an existing group' }
       }
       const children = project.nodes.filter(node => node.parentId === id)
       for (const child of children) {
+        if (!uniqueInSource(child.id)) {
+          return { ok: false, error: 'ungroup: child must be uniquely in the caller project' }
+        }
         const proof = this.ownership.ownerOf(child.id)
         if (!proof || proof.sourceNodeId !== sourceNodeId || proof.projectId !== project.id) {
           return this.ownershipRefusal('ungroup', sourceNodeId, child.id)
@@ -1163,9 +1173,18 @@ export class HeadlessNodeFactory {
       project.nodes = ungroupPersistedNodes(project.nodes, id).nodes
       project.ropes = project.ropes?.filter(edge => edge.source !== id && edge.target !== id)
       project.bridges = project.bridges?.filter(edge => edge.source !== id && edge.target !== id)
-      if (!await this.castAndSave(workspace)) return { ok: false, error: 'ungroup-not-saved: canvas control is stopping' }
-      this.ownership.forget(id)
-      await this.publishPersisted([project.id])
+      let saved = false
+      try {
+        if (!await this.castAndSave(workspace)) return { ok: false, error: 'ungroup-not-saved: canvas control is stopping' }
+        saved = true
+        this.ownership.forget(id)
+        await this.publishPersisted([project.id])
+      } catch {
+        // Ops are dispatched before persistence; an exception is not proof of no effect.
+        return { ok: false, error: saved
+          ? 'ungroup-publication-failed: canvas saved, but publication failed; inspect before retrying'
+          : 'ungroup-effect-uncertain: canvas metadata may have changed before save completed; inspect before retrying' }
+      }
       return { ok: true, message: `ungrouped ${id}; promoted ${children.length} child node(s)`,
         result: { groupId: id, promoted: children.map(node => node.id) } }
     })

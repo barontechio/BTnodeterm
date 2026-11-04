@@ -4876,6 +4876,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   world positions, nested parents and metadata; only the frame and its incident edges are removed.
   Unsupported flags/project targets and absent action adapters refuse explicitly; restart never
   reconstructs creator proof. No terminal lifecycle or filesystem deletion participates.
+  The source, frame and moved direct children must each have one saved occurrence, exclusively in
+  the caller project; unchanged descendants need no new proof. Cast/save exceptions report possible
+  metadata effects; publication failures after save report that persistence already completed.
   **Windows hosts**: a PowerShell/cmd-run agent cannot type `sh "<shim>"`, so a win32 core also
   writes `nodeterm.cmd` / `context.cmd` beside the shims (`syncWindowsShLauncher` — finds Git for
   Windows' `sh.exe`, passes `%*` through, fails LOUDLY without it) and the skills, the connect-time

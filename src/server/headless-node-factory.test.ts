@@ -171,6 +171,8 @@ describe('HeadlessNodeFactory', () => {
   let published: CanvasNodeState[]
   let removed: string[]
   let publishedProjects: Workspace['projects']
+  let failPublication: boolean
+  let failMutation: boolean
   let factory: HeadlessNodeFactory
   let ownership: HeadlessNodeOwnership
   let codexSharedIdentity: boolean
@@ -190,6 +192,8 @@ describe('HeadlessNodeFactory', () => {
 
   beforeEach(async () => {
     settingsOverride = {}
+    failPublication = false
+    failMutation = false
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-headless-factory-'))
     projectDir = path.join(dataDir, 'project')
     fs.mkdirSync(projectDir, { recursive: true })
@@ -266,8 +270,12 @@ describe('HeadlessNodeFactory', () => {
       publishMutation: (_projectId, m) => {
         if (m.op === 'upsert') published.push(structuredClone(m.node))
         else if (m.op === 'remove') removed.push(m.id)
+        if (failMutation) throw new Error('cast failed after dispatch')
       },
-      publishProject: (project) => publishedProjects.push(structuredClone(project))
+      publishProject: (project) => {
+        publishedProjects.push(structuredClone(project))
+        if (failPublication) throw new Error('publication failure')
+      }
     })
   })
 
@@ -786,6 +794,31 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
   })
 
+  it.each(['source', 'target', 'child'].flatMap(role => [false, true].map(elsewhere => ({ role, elsewhere }))))('ungroup refuses ambiguous saved $role IDs (elsewhere=$elsewhere)', async ({ role, elsewhere }) => {
+    const id = await makeFrame()
+    const original = await store.load({ sideline: false })
+    const duplicateId = role === 'source' ? 'term-source' : role === 'target' ? id : 'term-upstream'
+    const workspace = structuredClone(original)
+    const duplicate = structuredClone(workspace.projects[0].nodes.find(n => n.id === duplicateId)!)
+    if (elsewhere) {
+      const cwd = path.join(dataDir, 'ambiguous-project')
+      fs.mkdirSync(cwd, { recursive: true })
+      workspace.projects.push({ ...structuredClone(workspace.projects[0]), id: 'project-duplicate', cwd, nodes: [duplicate] })
+    } else {
+      workspace.projects[0].nodes.push(duplicate)
+    }
+    await store.save(workspace)
+    const before = await store.load({ sideline: false })
+    publishedProjects.length = 0
+    published.length = 0; removed.length = 0
+    await expect(ungroup({ group: id })).resolves.toMatchObject({ ok: false })
+    expect(await new WorkspaceStore().load({ sideline: false })).toEqual(before)
+    expect(ownership.ownerOf(id)).toBeDefined()
+    expect(publishedProjects).toEqual([])
+    expect(published).toEqual([]); expect(removed).toEqual([])
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
   it('ungroup removes an empty owned frame without a terminal lifecycle call', async () => {
     const id = await makeFrame()
     const workspace = await store.load({ sideline: false })
@@ -800,9 +833,31 @@ describe('HeadlessNodeFactory', () => {
     const id = await makeFrame()
     const before = await store.load({ sideline: false })
     vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk failure'))
-    await expect(ungroup({ group: id })).rejects.toThrow('disk failure')
+    await expect(ungroup({ group: id })).resolves.toMatchObject({ ok: false, error: expect.stringContaining('ungroup-effect-uncertain') })
+    expect(removed).toContain(id)
     expect(await new WorkspaceStore().load({ sideline: false })).toEqual(before)
     expect(ownership.ownerOf(id)).toBeDefined()
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
+  it.each(['mutation', 'publication'])('ungroup reports possible effects after %s failure', async (phase) => {
+    const id = await makeFrame()
+    const before = await store.load({ sideline: false })
+    published.length = 0; removed.length = 0
+    failMutation = phase === 'mutation'
+    failPublication = phase === 'publication'
+    await expect(ungroup({ group: id })).resolves.toMatchObject({
+      ok: false, error: expect.stringContaining(phase === 'mutation' ? 'ungroup-effect-uncertain' : 'ungroup-publication-failed')
+    })
+    const after = await new WorkspaceStore().load({ sideline: false })
+    if (phase === 'mutation') {
+      expect(published.length + removed.length).toBeGreaterThan(0)
+      expect(after).toEqual(before)
+      expect(ownership.ownerOf(id)).toBeDefined()
+    } else {
+      expect(after.projects[0].nodes.some(n => n.id === id)).toBe(false)
+      expect(ownership.ownerOf(id)).toBeUndefined()
+    }
     expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
   })
 

@@ -942,6 +942,9 @@ an explicit operator action, never a test or an automatic repair step.
 `ungroup --group <id>` removes only a frame: inside the serialized mutation it verifies the
 current group kind and same-project creator proof for the frame and every direct child. It never
 calls terminal close/kill; child world positions and metadata survive, and only frame edges are removed.
+The source, frame and moved direct children must each have one saved occurrence, exclusively in
+the caller project; unchanged descendants need no new proof. Cast/save exceptions report possible
+metadata effects; publication failures after save report that persistence already completed.
 
 **A canvas-control verb you add in `Canvas.tsx` does not exist on the Server Edition.** The verbs
 run in the DESKTOP renderer's dispatch; the browser bridge never subscribes to `onAgentControl`, and
