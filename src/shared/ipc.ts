@@ -447,6 +447,10 @@ export const IPC = {
   triggersDisarm: 'triggers:disarm',
   triggersStatus: 'triggers:status',
   triggersRunNow: 'triggers:run-now',
+  contextRemoteStart: 'context:remote-start',
+  contextRemoteRenew: 'context:remote-renew',
+  contextRemoteRelease: 'context:remote-release',
+  contextRemoteUpdate: 'context:remote-update',
   contextUpdate: 'context:update',
   contextEnsure: 'context:ensure',
   // Team presence (docs/team-presence.md). `presence:hello` is a REQUEST: its response tells the

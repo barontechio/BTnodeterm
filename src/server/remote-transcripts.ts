@@ -1,3 +1,4 @@
+import { REMOTE_METER_BYTES, type RemoteMeterSource } from '../core/remote-meters'
 import { stableStringify } from '../shared/canvas-mutations'
 import type { ContextLinkInfo } from '../shared/types'
 import type { RemoteContextReadScope } from '../core/context-link'
@@ -21,6 +22,8 @@ interface Dependencies {
   pty: Pick<PtyManager, 'sshRemoteForNode'>
   settings(): Settings
   sessionOf(nodeId: string): string | undefined
+  /** Actual host runtime object, never a client-supplied generation. Required for meters. */
+  runtimeIdentity?(nodeId: string): object | undefined
   /** Current directed edge in this host's saved canvases; absent means no agent permission. */
   contextPermission?(callerId: string, targetId: string): boolean
   ssh: {
@@ -38,7 +41,7 @@ interface Dependencies {
 /** Machine-local routing/registry adapter. The core reader owns bounds, IO and stale-result rules. */
 export function createServerRemoteTranscripts(deps: Dependencies) {
   const owners = new OwnerLifetimes()
-  const requests = new AsyncLocalStorage<{ owner: AccountOwner; signal: AbortSignal } | null>()
+  const requests = new AsyncLocalStorage<{ owner: AccountOwner; signal: AbortSignal; current?(): boolean } | null>()
   const rpcScope = async <T>(clientId: number, operation: () => Promise<T>): Promise<T> => {
     const eligible = () => deps.platform.clientIds().includes(clientId) && deps.platform.isOwnerClient?.(clientId) === true
     if (!eligible()) return requests.run(null, operation)
@@ -80,7 +83,7 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
   }
   const makeReader = (expected: 'claude' | 'codex') => new RemoteClaudeTranscripts({ targetFor: (id) => targetFor(id, expected), allowed: () => {
     const request = requests.getStore()
-    return request?.owner.active() === true && !request.signal.aborted
+    return request?.owner.active() === true && !request.signal.aborted && (!request.current || request.current())
   },
     run: (target, command) => deps.ssh.manager.sshRun(childArgs(target.conn, target.controlPath, command)),
     withQueuedExecutionCheck: (current, work, options) => {
@@ -147,6 +150,32 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
       })
     } finally { abort.abort() }
   }
-  return { reader, codexReader, readLinkedTranscript, isRemoteNode, supported, rpcScope, forgetClient: (id: number) => owners.forget(id),
+  const runtimeKeys = new WeakMap<object, number>()
+  let nextRuntime = 0
+  const captureMeter = (nodeId: string): RemoteMeterSource | null | undefined => {
+    if (!isRemoteNode(nodeId)) return undefined
+    const target = targetFor(nodeId)
+    const runtime = deps.runtimeIdentity?.(nodeId)
+    if (!target?.sessionId || !runtime) return null
+    // Capture full saved/effective account and endpoint identity, selected model and actual PTY generation.
+    const identity = () => stableStringify({ target: targetFor(nodeId), caller: callerIdentity(nodeId),
+      model: deps.workspace.getNodeForHostAction(nodeId)?.agentModel })
+    const binding = identity()
+    let key = runtimeKeys.get(runtime)
+    if (!key) { key = ++nextRuntime; runtimeKeys.set(runtime, key) }
+    const current = () => {
+      try { return deps.runtimeIdentity?.(nodeId) === runtime && identity() === binding } catch { return false }
+    }
+    return { key: `${key}:${binding}`, nodeId, sessionId: target.sessionId, harness: target.agentId!, current,
+      read: async (owner, demandCurrent, signal) => {
+        const valid = () => current() && demandCurrent() && owner.active() && !signal.aborted
+        if (!valid()) return null
+        const result = await requests.run({ owner, signal, current: valid }, () =>
+          (target.agentId === 'codex' ? codexReader : reader).readPage({ nodeId, sessionId: target.sessionId,
+            accountId: target.accountId, cwd: target.cwd, remoteOnly: true }, { before: null, maxBytes: REMOTE_METER_BYTES }))
+        return valid() && result?.ok ? result : null
+      } }
+  }
+  return { reader, codexReader, readLinkedTranscript, isRemoteNode, supported, rpcScope, captureMeter, forgetClient: (id: number) => owners.forget(id),
     dispose: () => { reader.dispose(); codexReader.dispose(); linkedReader.dispose(); owners.dispose() } }
 }

@@ -3514,6 +3514,8 @@ export interface ContextWindowUsage {
 }
 
 export interface ContextApi {
+  /** Optional owner demand; emits node-scoped observations through onUpdate. Unsubscribe releases it. */
+  watchRemote?(nodeId: string): () => void
   /** Fires whenever a session's context fill changes. Returns unsubscribe. */
   onUpdate(listener: (usage: ContextWindowUsage) => void): () => void
   /**

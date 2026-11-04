@@ -113,7 +113,7 @@ export function buildRelayApi(
     fs: files.fs,
     git: files.git,
     files: files.files,
-    context: files.context,
+    context: { ...files.context, watchRemote: undefined },
     githubIssues: github.githubIssues,
     githubControl: local.githubControl,
     ...buildAgentApi(client), // onAgentStatus / onSubagentActivity — the host's agent hooks

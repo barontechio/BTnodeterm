@@ -1,3 +1,4 @@
+import { withRemoteMeters } from './remote-meters'
 import type { ChatCatalog } from '@shared/chat-catalog'
 import type { HostLaunchReply } from '@shared/headless-launch'
 import { E_NO_HANDLER, E_UNSUPPORTED, E_UNAUTHORIZED } from '@shared/rpc'
@@ -168,8 +169,9 @@ export class RpcClient {
   }
 
   /** Register a connection-loss hook (used by the reconnect overlay). */
-  onClose(cb: () => void): void {
+  onClose(cb: () => void): () => void {
     this.closeCbs.add(cb)
+    return () => { this.closeCbs.delete(cb) }
   }
 
   private onMessage(data: string | Uint8Array): void {
@@ -825,11 +827,11 @@ export function buildFilesApi(
     clearAlertSound: (kind) => client.request(IPC.filesClearAlertSound, kind) as Promise<boolean>
   }
 
-  const context: ContextApi = {
+  const context: ContextApi = withRemoteMeters(client, {
     onUpdate: (listener) => client.subscribe(IPC.contextUpdate, listener as Listener),
     ensure: (sessionId, cwd, accountId, nodeId, agentId) =>
       client.cast(IPC.contextEnsure, sessionId, cwd, accountId, nodeId, agentId)
-  }
+  })
 
   // Board-log: REAL over the bridge for local projects (the server routes local; SSH projects on the
   // server answer `unsupported`). `onChanged` is `.on` → subscribe, plus the ref-counted cast pair the

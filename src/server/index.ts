@@ -3,6 +3,7 @@ import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
 import { ServerSessionNames } from './session-names'
+import { createServerRemoteMeters } from './remote-meters'
 import { createServerRemoteTranscripts } from './remote-transcripts'
 import { isRemoteSessionNode } from '../shared/worktree'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
@@ -682,12 +683,14 @@ export async function startServer(
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
     workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
+    runtimeIdentity: (id) => ptyManager.nodeExecutionIdentity(id),
     sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects,
     contextPermission: (callerId, targetId) => {
       const map = deriveLinkMap({ canvases: () => workspaceStore.persistedCanvases(),
         agentSessions: () => sessionNameSweepEntries() })
       return (map[callerId] ?? []).filter((entry) => entry.id === targetId).length === 1
     } })
+  const remoteMeters = createServerRemoteMeters(platform, remoteTranscripts.captureMeter)
   const {
     contextTail,
     geminiContextTail,
@@ -1157,6 +1160,7 @@ export async function startServer(
     licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
     sshProjects?.forgetClient(uiId)
+    remoteMeters.forgetClient(uiId)
     remoteTranscripts.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
@@ -1289,6 +1293,7 @@ export async function startServer(
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     stopSessionNameSweep()
+    remoteMeters.dispose()
     remoteTranscripts.dispose()
     return { close: async (): Promise<void> => {} }
   })
@@ -1381,6 +1386,7 @@ export async function startServer(
       port: 0, // nothing bound
       async close() {
         stopSessionNameSweep()
+        remoteMeters.dispose()
         remoteTranscripts.dispose()
         mediaReferences.dispose()
         ownerConfirmations.dispose()
@@ -1450,6 +1456,7 @@ export async function startServer(
     platform,
     auth,
     onClientGone: dropUiClient,
+    onClientRevoked: (id) => remoteMeters.forgetClient(id),
     trustProxy: config.trustProxy,
     publicOrigin: config.publicOrigin
   })
@@ -1469,6 +1476,7 @@ export async function startServer(
     port,
     async close() {
       stopSessionNameSweep()
+      remoteMeters.dispose()
       remoteTranscripts.dispose()
       mediaReferences.dispose()
       ownerConfirmations.dispose()

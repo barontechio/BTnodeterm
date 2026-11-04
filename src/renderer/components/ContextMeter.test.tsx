@@ -64,3 +64,25 @@ it('renders nothing when the context meter is hidden in Appearance', async () =>
     await act(async () => root.unmount())
   }
 })
+
+it('uses node-scoped Server Claude observations and clears without falling back to local history', async () => {
+  const { SessionContext } = await import('../session/session')
+  const session = { api: { context: { watchRemote: () => () => {} } } } as unknown as import('../session/session').WorkspaceSession
+  useSettings.setState(s => ({ settings: { ...s.settings, hiddenHeaderButtons: [], usagePercentMode: 'used' } }))
+  useContextWindow.setState({ bySessionId: {}, byNodeId: {} })
+  const usage = { sessionId: 'claude-copy', usedTokens: 10, windowTokens: 100, usedPercent: 10, model: 'claude', updatedAt: Date.now() }
+  useContextWindow.getState().set(usage)
+  useContextWindow.getState().set({ ...usage, nodeId: 'remote', usedPercent: 60 })
+  const el = document.createElement('div'), root = createRoot(el)
+  try {
+    await act(async () => root.render(<SessionContext.Provider value={session}>
+      <ContextMeter sessionId="claude-copy" nodeId="remote" remote agentId="claude" />
+    </SessionContext.Provider>))
+    expect(el.querySelector('button')?.title).toContain('60%')
+    await act(async () => useContextWindow.getState().set({ ...usage, nodeId: 'remote', cleared: true }))
+    expect(el.querySelector('button')).toBeNull()
+    // Desktop has no owner demand API and retains its existing session-scoped Claude meter.
+    await act(async () => root.render(<ContextMeter sessionId="claude-copy" nodeId="remote" remote agentId="claude" />))
+    expect(el.querySelector('button')?.title).toContain('10%')
+  } finally { await act(async () => root.unmount()) }
+})

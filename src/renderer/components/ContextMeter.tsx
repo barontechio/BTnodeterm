@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { SessionContext } from '../session/session'
 import { useContextUsage } from '../state/contextWindow'
 import { useSettings } from '../state/settings'
 import { capabilityAgentId } from '@shared/agents/config'
@@ -18,7 +19,8 @@ export function ContextMeter({ sessionId, nodeId, remote = false, agentId, fromL
    *  (lib/transcriptSession.ts): the popover says so, since it may be an older session. */
   fromLaunchId?: boolean
 }): JSX.Element | null {
-  const scoped = remote && !!agentId && capabilityAgentId(agentId) === 'codex'
+  const session = useContext(SessionContext)
+  const scoped = remote && (!!session?.api.context.watchRemote || (!!agentId && capabilityAgentId(agentId) === 'codex'))
   // A copied rollout has the same session id on two hosts. SSH Codex observations belong
   // to the node that requested them; never fall back to a local/session-only snapshot.
   const usage = useContextUsage({ sessionId, nodeId, scoped })

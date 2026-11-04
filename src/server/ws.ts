@@ -75,6 +75,8 @@ export interface WsServerOpts {
    * know about `ws`.
    */
   onClientGone?: (uiId: number) => void
+  /** Revoke owner leases immediately, before the socket close handshake completes. */
+  onClientRevoked?: (uiId: number) => void
   /** TEST ONLY: shorten the heartbeat period. Production always uses WS_HEARTBEAT_MS. */
   heartbeatMs?: number
   /** Reverse-proxy SSO trust (issue #29) — same object the HTTP handler gets. */
@@ -120,6 +122,7 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
   // connected. Now a revoke closes the affected sockets at once, and the heartbeat re-checks the
   // rest every round (that is what catches the 30-day expiry, which emits nothing).
   const tokenOf = new Map<WebSocket, string>()
+  const uiIdOf = new WeakMap<WebSocket, number>()
   const signedOut = new WeakSet<WebSocket>()
   const endIfSignedOut = (ws: WebSocket): boolean => {
     const token = tokenOf.get(ws)
@@ -128,6 +131,8 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
     // Drop anything it sends from here on — the close handshake can take a moment, and a frame
     // that arrives in it must not reach dispatch.
     signedOut.add(ws)
+    const uiId = uiIdOf.get(ws)
+    if (uiId !== undefined) opts.onClientRevoked?.(uiId)
     ws.close(WS_CLOSE_SIGNED_OUT, 'signed out')
     return true
   }
@@ -222,6 +227,7 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
       },
       { owner: true }
     )
+    uiIdOf.set(ws, uiId)
     // Team presence: each authenticated socket is one peer. Joining AFTER attach means the hub's
     // `presence:sync` sendTo lands on a live sink; the browser bridge buffers it until the app
     // subscribes. The peer stays nameless ("Someone") until it sends `presence:hello`.
