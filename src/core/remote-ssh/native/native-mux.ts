@@ -109,6 +109,8 @@ interface Conn {
   client: Client
   ready: Promise<void>
   alive: boolean
+  /** Usability after the real handshake; alive also covers pending physical custody. */
+  authenticated: boolean
   closed: Promise<string>
   forwards: Map<string, ReverseForward>
   /** `-L` listeners this connection holds, by spec (see `localForwardKey`). They close with it,
@@ -225,9 +227,10 @@ export class NativeMux {
 
   constructor(private deps: NativeMuxDeps) {}
 
-  /** Is there a live shared connection on this path (`-O check`)? */
+  /** Is the current shared connection authenticated and usable (`-O check`)? */
   check(controlPath: string): boolean {
-    return this.conns.get(controlPath)?.alive === true
+    const conn = this.conns.get(controlPath)
+    return conn?.alive === true && conn.authenticated
   }
 
   /** Registry presence, including an authenticating connection; false confirms mux absence. */
@@ -672,6 +675,7 @@ export class NativeMux {
       client,
       ready: Promise.resolve(),
       alive: true,
+      authenticated: false,
       closed,
       forwards: new Map(),
       localForwards: new Map(),
@@ -713,7 +717,10 @@ export class NativeMux {
       ch.on('error', () => local.destroy())
       ch.pipe(local).pipe(ch)
     })
-    conn.ready = this.connect(conn, target, options, mode, via).catch((e: Error) => {
+    conn.ready = this.connect(conn, target, options, mode, via).then(() => {
+      // A late handshake belongs only to this captured connection, never its replacement.
+      if (conn.alive) conn.authenticated = true
+    }).catch((e: Error) => {
       conn.alive = false
       client.end()
       throw e
