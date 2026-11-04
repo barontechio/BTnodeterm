@@ -18647,7 +18647,8 @@ export function Canvas() {
       focus: (current) => {
         if (!current()) return
         const store = useProjects.getState()
-        if (store.activeProjectId === target.projectId && nodesProjectIdRef.current === target.projectId) {
+        if (store.activeProjectId === target.projectId && nodesProjectIdRef.current === target.projectId &&
+            flowLanding.holds(target.projectId)) {
           focusNodeById(target.nodeId)
           return
         }
