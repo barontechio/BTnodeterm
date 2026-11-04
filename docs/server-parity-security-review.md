@@ -2,6 +2,10 @@
 
 ## Confirmed follow-up result and gateway redirect guard
 
+Frozen `f6532fd9`, including the redirect guard and corrected fixtures, passes 24,911 tests
+(109 skipped), typecheck and both production builds. Actual known-host contents remain unchanged.
+The next documentation-only pushed head still requires its own remote quality/security checks.
+
 CodeQL result [126793739074](https://github.com/barontechio/BTnodeterm/runs/126793739074) on
 `c3cacbf7` succeeds: the five preceding annotations are absent. Windows quality and dependency
 review also succeed. This result retains one medium warning in `core/agent-env-ipc.ts` for a stored

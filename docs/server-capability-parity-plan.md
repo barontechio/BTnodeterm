@@ -6,6 +6,13 @@ This is an implementation proposal. Work proceeds by the acceptance gates below,
 
 ## Resumed implementation (2026-11-04)
 
+Latest local acceptance: frozen `f6532fd9` passes 24,911 tests (109 skipped), typecheck and Desktop/
+Server builds. The actual user known-host file is unchanged. This accepts the composed connection
+lifetime correction, owner-lived SSH context meters and descriptor-bounded transcript index, in
+addition to the previously accepted recovery/gateway/capsule deliveries. Fresh remote CI is still
+required for the documentation-only head. Rebinding, streaming transfers and browser joining remain
+outside this accepted snapshot while their independent findings and follow-ups are resolved.
+
 The owner has authorized completing the unfinished useful parity work. The current delivery is
 split into isolated worktree/session, SSH, and web/collaboration tracks. Shared contracts and
 composition-root changes are integrated sequentially; no track writes another track's checkout.
