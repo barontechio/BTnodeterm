@@ -45,8 +45,8 @@ describe.skipIf(process.platform !== 'linux' || !hasTmux)('real local tmux devel
       if (free) break
     }
     const wsPath = require.resolve('ws')
-    fs.writeFileSync(script, `const http=require('node:http');const fs=require('node:fs');const {WebSocketServer}=require(${JSON.stringify(wsPath)}); const s=http.createServer((q,r)=>r.end('real app'));const w=new WebSocketServer({server:s});w.on('connection',c=>c.on('message',d=>c.send(d)));s.listen(${port},'127.0.0.1',()=>fs.writeFileSync(${JSON.stringify(ready)},JSON.stringify({pid:process.pid})));`)
-    execFileSync('tmux', ['-L', tmuxSocket, '-f', '/dev/null', 'new-session', '-d', '-s', 'nt-web', `${process.execPath} ${script}`])
+    fs.writeFileSync(script, "const http=require('node:http');const fs=require('node:fs');const [ready,port]=process.argv.slice(2);const {WebSocketServer}=require(process.env.NODETERM_TEST_PREVIEW_WS);const s=http.createServer((q,r)=>r.end('real app'));const w=new WebSocketServer({server:s});w.on('connection',c=>c.on('message',d=>c.send(d)));s.listen(Number(port),'127.0.0.1',()=>fs.writeFileSync(ready,JSON.stringify({pid:process.pid})));")
+    execFileSync('tmux', ['-L', tmuxSocket, '-f', '/dev/null', 'new-session', '-d', '-s', 'nt-web', '-e', `NODETERM_TEST_PREVIEW_WS=${wsPath}`, process.execPath, script, ready, String(port)])
     for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
     expect(fs.existsSync(ready)).toBe(true)
     const { pid } = JSON.parse(fs.readFileSync(ready, 'utf8'))

@@ -40,7 +40,7 @@ it.skipIf(!supported).each(['tmux', 'zellij', 'raw', 'argv', 'argv-middle', 'arg
       })
       if (free) break
     }
-    fs.writeFileSync(script, `const fs=require('fs');require('http').createServer((q,r)=>r.end('fixture-service')).listen(${port},'127.0.0.1',()=>fs.writeFileSync(${JSON.stringify(ready)},String(process.pid)))`)
+    fs.writeFileSync(script, "const fs=require('fs');const [ready,port]=process.argv.slice(2);require('http').createServer((q,r)=>r.end('fixture-service')).listen(Number(port),'127.0.0.1',()=>fs.writeFileSync(ready,String(process.pid)))")
     const node = `identity-${process.pid}`, session = `nt-${node}`
     const run = (socket: string, args: string[]) => execFileSync('tmux', ['-L', socket, ...args], { stdio: 'pipe' })
     let service: ReturnType<typeof registerDevelopmentPreviewService> | undefined
@@ -48,8 +48,8 @@ it.skipIf(!supported).each(['tmux', 'zellij', 'raw', 'argv', 'argv-middle', 'arg
     let client: ReturnType<typeof spawn> | undefined
     try {
       if (!emptyArgs) run('node-terminal', ['new-session', '-d', '-s', session, 'sleep 60'])
-      const suffix = backend === 'argv-middle' ? " '' middle" : backend === 'argv-two-empty' ? " '' ''" : emptyArgs ? " ''" : ''
-      run(emptyArgs ? 'node-terminal' : 'nodeterm-rmt', ['new-session', '-d', '-s', session, `${process.execPath} ${script}${suffix}`])
+      const suffix = backend === 'argv-middle' ? ['', 'middle'] : backend === 'argv-two-empty' ? ['', ''] : emptyArgs ? [''] : []
+      run(emptyArgs ? 'node-terminal' : 'nodeterm-rmt', ['new-session', '-d', '-s', session, process.execPath, script, ready, String(port), ...suffix])
       for (let i = 0; i < 100 && (!fs.existsSync(ready) || !fs.readFileSync(ready, 'utf8')); i++) {
         await new Promise(resolve => setTimeout(resolve, 20))
       }
