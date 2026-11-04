@@ -1,6 +1,48 @@
 # Server parity security review
 
-## Current transfer composition and pending aggregate (2026-11-04)
+## Native/notification candidate and dedicated base CI (2026-11-04)
+
+Dedicated base `1603bb51` passes Linux default tests (25,030 passed, 82 skipped), types, both
+builds, the Windows relevant subset and Dependency review. CodeQL analysis
+[126850140247](https://github.com/barontechio/BTnodeterm/runs/126850140247) AND result gate
+[126853989743](https://github.com/barontechio/BTnodeterm/runs/126853989743) succeed on security run
+[41908689323](https://github.com/barontechio/BTnodeterm/actions/runs/41908689323). Success is not a
+zero-alert claim: two warnings remain, with these reviewed data flows:
+
+- `core/agent-env-ipc.ts:80`: file-backed gateway credentials intentionally authenticate discovery
+  against the configured gateway. `redirect: 'error'` prevents following a credential-bearing
+  redirect; real 302/307 negative cases retain the configured authority and make no request to the
+  redirect destination. This remains a reported authentication-flow warning, not suppressed debt.
+- `server/worktree-recovery.e2e.test.ts:115`: generic owner RPC serializes file-derived synthetic
+  fixture metadata to its explicitly created `ws://127.0.0.1:<server.port>` WebSocket. The fixture
+  uses its own temporary data directory, `Auth` session and loopback-bound server, not real user
+  files, an external destination or a redirect. This reviewed fixture flow remains an annotation;
+  no query, severity, threshold or test assertion was weakened to remove it.
+
+The six moderate Minimatch packaging-chain audit entries remain unchanged debt. No new audit or
+zero-warning conclusion is asserted. Historical failed local runs below remain recorded: the
+original empty-reader cause is still unproved despite the dedicated base CI passing its four SSH
+protocol cases and real transfer fixtures.
+
+The new composition adds accepted native `28a5fb38` (integration `2b280d2a`, exact tree equality
+before the next changes) and notifications `87b72f19`/`67825b4f`/`d2ab0fd8` (integrations
+`b3350e60`/`d1fc5d80`/`196b6360`). Native readiness requires alive plus authenticated on the
+captured connection; it is not a demonstrated auth escape or an asserted reader-causality fix.
+Browser notifications are bounded open-page effects, tied to actual API/project/session and fresh
+unique placement; real user activation plus explicit force gates permission, and actual Flow
+landing gates focus. The initial navigation P2 is fixed with independent 159+11 checks and types.
+Early transport close, disposal, stale/rebound/offline source refusal, native Desktop behavior and
+joined/offline administration/transfer isolation are preserved. No new permission, role or license
+bypass is introduced. The merged product composition `196b6360` passes 208 focused checks, node/web
+types and sequential Desktop/Server builds. New merged quality/security CI is still required; base
+success is not inherited.
+
+No Worktree C code is included; its project/profile-binding P2 remains under correction/review.
+D/E, external worker isolation, private mobile/backend behavior and production activation remain
+pending. No Service Worker/Web Push/closed-page notification claim. Legacy ungroup `17bf6ade` is
+code-accepted but not activated; canonical ungroup already uses shared geometry.
+
+## Transfer composition history before dedicated base CI (2026-11-04)
 
 Reviewed transfer sources `922e0755`, `526b05f3`, `ee6702c4`, `81b9bfd6` are integrated as
 `7f2f4063`, `9f7b1de4`, `41a17ed1`, `e7ad991f`. Component review supports integration, not release
@@ -35,13 +77,14 @@ timeouts and a worker termination timeout; no final aggregate counts or causal f
 Observed load 151 on 32 CPUs is context, not proof of the earlier failure's cause. Dedicated fresh
 CI and coordinator review remain necessary for the merged candidate; production is not activated.
 
-The last remote `4c3c9c67` quality/security runs pass with one medium gateway authentication-flow
+At that earlier snapshot, remote `4c3c9c67` quality/security runs passed with one medium gateway authentication-flow
 warning. The six moderate minimatch packaging-chain audit entries below remain debt. No new scan,
 zero-alert conclusion or remediation of native pre-auth readiness is claimed here. The separate legacy Server v1 ungroup correction `17bf6ade` is now accepted in code after 158
 focused and nine independent checks, typecheck and the Server build; its original report and four
 predecessor failures remain evidence. The duplicate-ID gap is fixed, but installation/activation
 is pending. It is not imported here: canonical ungroup already uses shared geometry. Worktree C
-and notifications remain in progress; external worker/mobile verification remains pending.
+and notifications were then in progress; current component status is recorded above. External
+worker/mobile verification remains pending.
 
 ## Confirmed follow-up result and gateway redirect guard
 

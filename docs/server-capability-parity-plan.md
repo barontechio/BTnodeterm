@@ -4,9 +4,53 @@ Extend Server Edition with useful Desktop automation and browser equivalents whi
 
 This is an implementation proposal. Work proceeds by the acceptance gates below, rather than by enabling every currently stubbed API. Server automation must work without an open browser tab. Interactive actions may require an authenticated owner, and native features retain their platform-specific implementations.
 
-## Resumed implementation (2026-11-04)
+## Native readiness and browser notifications composition (2026-11-04)
 
-Latest accepted local aggregate remains `f6532fd9`: 24,911 tests (109 skipped), typecheck and
+Base `1603bb51` passed dedicated CI at default settings: Linux 25,030 tests (82 skipped;
+1,789 files passed, eight skipped; 460.51 seconds), types and Desktop/Server builds. The Windows
+relevant subset, Dependency review, CodeQL analysis and CodeQL result gate also passed.
+[Linux evidence](https://github.com/barontechio/BTnodeterm/actions/runs/41908689784/job/126850141533),
+[Windows evidence](https://github.com/barontechio/BTnodeterm/actions/runs/41908689784/job/126850142167)
+and [security result](https://github.com/barontechio/BTnodeterm/runs/126853989743) belong to that base,
+not to the new composition. All four SSH protocol cases and actual transfer fixtures passed there;
+the cause of the earlier local empty-reader result remains unproved.
+
+Accepted native source `28a5fb38` is integrated as `2b280d2a`. Its entire Git tree equals the
+reviewed source tree `4e00cd7c4cb8c096d3036771ea4fec4c50bcbb43` before further integration. Native
+master checks now require an alive, authenticated captured connection rather than pending registry
+presence. This corrects readiness/results, not a demonstrated authentication escape or the earlier
+empty-reader cause. Author 61 focused checks/types/Server build and independent 37 focused plus
+two adversarial checks support the component.
+
+Accepted notification sources `87b72f19`, `67825b4f`, `d2ab0fd8` are integrated as `b3350e60`,
+`d1fc5d80`, `196b6360`. Browser open-page notifications require explicit force plus real user
+activation to request permission. Clicks retain exact API/project/workspace-session and known CLI
+session identity, fresh unique placement and actual React Flow landing. Disposal, early carrier
+close, offline/rebound sources and stale membership refuse; a pending click is consumed once.
+Native Desktop notification behavior, owner-only SSH/meter/principal APIs and the inert joined/
+offline administration boundary remain intact; relay APIs still expose no remote transfer API.
+The initial review's Flow-landing P2 is preserved and corrected. Final independent validation is
+159 focused checks, 11 adversarial cases and types; author Desktop/Server builds pass. Earlier
+independent real Chromium evidence covers the unchanged DOM adapter with a trusted input gesture,
+CDP permission grant and a synthetic click on a native Notification, not physical OS-center delivery.
+
+Integration conflicts were additive documentation appendices and the WS bridge import list; both
+remote meters and notification imports were retained. No native or notification behavior was
+rewritten during composition. The merged product
+composition `196b6360` passes 208 focused checks in 19 files, node/web typecheck and sequential
+Desktop/Server builds; this documentation-only update does not change those product bytes. A fresh
+merged CI gate and coordinator review remain required before release.
+No local full run is repeated under the loaded host, no timeout is increased, and no standalone
+legacy ungroup factory is imported into this shared-geometry implementation.
+
+Worktree C's project/profile-binding P2 is under correction/review and is not integrated here;
+D/E remain pending. Development-worker runtime isolation, private mobile/backend behavior and
+production activation remain external limits. Notifications do not provide Service Worker,
+Web Push or closed-page delivery. Standalone ungroup `17bf6ade` is code-accepted but not installed.
+
+## Earlier local snapshots and transfer composition (2026-11-04)
+
+Before dedicated CI on `1603bb51`, the accepted local aggregate was `f6532fd9`: 24,911 tests (109 skipped), typecheck and
 Desktop/Server builds. The subsequent `8ea31d98` composition includes independently reviewed
 recovered-checkout rebinding (integration `a727ad39`, `173887a6`, `7fb89952`)
 and browser team joining (integration `a855ef46`, `994972d0`, `31d754cd`,
@@ -70,8 +114,9 @@ The standalone Server v1 ungroup correction `17bf6ade` is accepted in code after
 nine independent checks, typecheck and the Server build. Its duplicate-ID policy gap is fixed;
 installation/activation remains pending. It is a separate minimal legacy upstream backport: this
 canonical branch already implements ungroup through shared geometry and does not import it.
-C-phase worktree composition and notifications remain in progress; native pre-auth readiness is
-pending. External worker deployment, mobile behavior and production activation remain unverified.
+At that transfer snapshot, C-phase worktree composition, notifications and native readiness were
+pending. Native/notification component acceptance and new composition are recorded above; external
+worker deployment, mobile behavior and production activation remain unverified.
 
 The owner has authorized completing the unfinished useful parity work. The current delivery is
 split into isolated worktree/session, SSH, and web/collaboration tracks. Shared contracts and
