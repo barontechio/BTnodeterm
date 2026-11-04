@@ -34,9 +34,10 @@ afterEach(() => {
   resetPlatformForTests(); vi.restoreAllMocks()
 })
 async function fixture(tmux = false) {
+  const caseRoot = root
   expect(process.env.TMUX_TMPDIR).toBe(process.env[SANDBOX_ENV]); expect(process.env[SANDBOX_ENV]).toBeTruthy()
-  const repo = path.join(root, 'repo'); fs.mkdirSync(repo)
-  const checkout = path.join(root, 'missing')
+  const repo = path.join(caseRoot, 'repo'); fs.mkdirSync(repo)
+  const checkout = path.join(caseRoot, 'missing')
   const key = `resume-${process.pid}-${Date.now()}-${keys.length}`; keys.push(key)
   const node = (id: string, kind: CanvasNodeState['kind'], extra = {}): CanvasNodeState => ({ id, kind, title: id, color: '#fff', group: null,
     position: { x: 0, y: 0 }, size: { width: 300, height: 200 }, ...extra })
@@ -46,7 +47,7 @@ async function fixture(tmux = false) {
   const store = new WorkspaceStore(); await store.save({ version: 2, activeProjectId: project.id, projects: [project] })
   const saved = (await store.load({ sideline: false })).projects[0]
   const members = saved.nodes.map((entry) => ({ nodeId: entry.id, binding: canvasExecutionBinding(saved, entry) }))
-  const journal = new WorktreeRemovalJournal(path.join(root, 'journal.json'), { ownsFiles: () => true }); await journal.load()
+  const journal = new WorktreeRemovalJournal(path.join(caseRoot, 'journal.json'), { ownsFiles: () => true }); await journal.load()
   const row = await journal.prepare({ projectId: 'project', groupId: 'group', repoPath: repo, worktreePath: checkout,
     branch: 'feature', fallbackCwd: repo, directoryStamp: '1:2', members })
   await journal.markRemoved(row.id); await journal.planRepair(row.id, { members, manualStart: [key] }, () => {}); await journal.markRecovered(row.id)
@@ -129,17 +130,22 @@ describe.skipIf(process.platform !== 'linux')('manual recovery with real local p
   })
 
   it.skipIf(!fs.existsSync('/usr/bin/tmux'))('the actual new-only tmux command refuses a name created after an absence probe', async () => {
-    const f = await fixture(true)
-    const args = ['-L', TMUX_SOCKET, 'new-session', '-A', '-D', '-s', sessionName(f.key), '-c', f.repo, '/bin/bash']
-    const first = createManualTmux('/usr/bin/tmux', args, randomUUID(), { ...process.env } as Record<string, string>, f.repo, () => {})
-    expect(() => createManualTmux('/usr/bin/tmux', args, randomUUID(), { ...process.env } as Record<string, string>, f.repo, () => {})).toThrow()
+    // This tests the native new-only command, so no asynchronous workspace/journal setup is
+    // needed. A timed-out setup must not resume into the following case's platform/root.
+    expect(process.env.TMUX_TMPDIR).toBe(process.env[SANDBOX_ENV]); expect(process.env[SANDBOX_ENV]).toBeTruthy()
+    const cwd = root
+    const key = `resume-collision-${randomUUID()}`; keys.push(key)
+    const args = ['-L', TMUX_SOCKET, 'new-session', '-A', '-D', '-s', sessionName(key), '-c', cwd, '/bin/bash']
+    const first = createManualTmux('/usr/bin/tmux', args, randomUUID(), { ...process.env } as Record<string, string>, cwd, () => {})
+    expect(() => createManualTmux('/usr/bin/tmux', args, randomUUID(), { ...process.env } as Record<string, string>, cwd, () => {})).toThrow()
     const actual = execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', first.paneId, '#{session_id}|#{pane_pid}'], { encoding: 'utf8' }).trim()
     expect(actual).toBe(`${first.sessionId}|${first.panePid}`)
   })
 
   it.skipIf(!fs.existsSync('/usr/bin/tmux'))('invalidates input when the real tmux pane is replaced under the same Session', async () => {
     const f = await fixture(true)
-    expect(await f.service.resume(f.row.id, f.key, f.owner)).toMatchObject({ ok: true })
+    const result = await f.service.resume(f.row.id, f.key, f.owner)
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true })
     const proof = f.journal.list()[0].manualResume![0].evidence!
     if (proof.backend !== 'tmux') throw new Error('expected tmux evidence')
     const target = f.manager.nodeExecutionIdentity(f.key)
