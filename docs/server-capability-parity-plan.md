@@ -32,8 +32,13 @@ backend cases independently, preserving original assertions and committed limits
 10-second hooks, with the existing two happy paths at 20 seconds). The author four-file parallel run
 still had 38 passes and eight timeouts; older tmux refusal/timeout causes remain unclassified.
 An observed fixture directory crossover is not proof of the historical refusal's cause. Extended
-60-second diagnostic runs are not acceptance evidence. New candidate composition checks and
-integrated CI are required; component review does not establish an aggregate release gate.
+60-second diagnostic runs are not acceptance evidence. The staged product `0d4c0ba6` (documentation snapshot `e1f4f0f5`) passes 192 composition cases in
+20 files at default deadlines with `--maxWorkers=4`, node/web typecheck and sequential Desktop/Server
+builds. This includes real backend/profile recovery, owner WS/IPC, journal/coordinator, notification,
+offline/relay and SSH namespace isolation. Core recovery/profile/PTY/trust/workspace source bytes
+match reviewed `741a1558`; this subsequent documentation update does not change product bytes.
+New integrated CI and coordinator acceptance remain required before release; component and focused
+composition evidence do not establish a full aggregate gate.
 
 Base `6b2607a4` Windows and CodeQL results were reported successful by the coordinator; Linux was
 pending at this handoff. The accepted `1603bb51` base's 25,030 passes and 82 skips below remain
