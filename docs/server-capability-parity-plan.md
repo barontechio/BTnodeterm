@@ -29,16 +29,23 @@ Additional accepted deliveries are integrated independently:
 | Shared project-scope safety | `b7c7bf5a` | `bb90eade` | Creator and unique placement checks, whole-close validation and current agent run capability; explicit owner plain-terminal run remains supported; 179 independently checked cases |
 | Conservative clean Git removal | `3cb69c9d`, `60093574` | `f6f053d2`, `2c7d4210` | Refuses every ignored entry, rechecks Git/checkout identity at dispatch and preserves possible-effect recovery facts; 59 existing and 24 independent real-Git/fault cases; no deletion RPC |
 | Disabled preview transport foundation | `be773620`, `de74f022` | `f9e19119`, `53638b0d` | Bounded HTTP/WS grants, revocation and cleanup; invalid DNS bases and grant collisions refused; 22 existing and 17 independent protocol scenarios; no live routing or advertised capability |
+| Recorded missing-checkout recovery | `f43e4d52`, `52181464`, `5a95835b`, `306ce3f3` | `23cc23fe`, `a6d093b7`, `9ca4d4db`, `3121bc65` | Owner-approved plain local members; held FIFO repair, file/directory durability and persistent manual-start quarantine; 457 independent checks, including complete folder/app-data/inline recovery and expiry/partial-write faults |
+| Remote agent context links | `46b1a20e`, `f85613d3` | `79389a95`, `d1c45507` | Separately verified agent proof, original edge revision and full caller/target identity retained through final HTTP publication; 106 independent checks and differential disclosure regressions |
+| SSH protocol fixture isolation | `77094cfd`, `e2cdc90d`, `c878b835` | `00d93d2a`, `599a77d6`, `c878b835` | Real executable-level temporary configuration for both clients, pinned host checks, partial-setup cleanup and primary-error preservation; no production transport policy change |
 
-The frozen integration at `bb90eade` passes 24,667 tests (109 skipped), typecheck and both
-production builds. One preceding full run timed out waiting for an SSH passphrase prompt;
-three isolated runs and the complete unchanged-snapshot rerun passed. The cause is not established.
-The later frozen Git and disabled-gateway integration `1a2a57a9` passes 24,691 tests
-(109 skipped), typecheck, 90 focused checks and both production builds on Linux. Documentation-only
-delivery updates preserve that source snapshot. Fresh remote CI is required for the pushed head.
-The separately reviewed remote agent context-link phase is not integrated: a publication-boundary
-revocation defect must be fixed and independently re-reviewed first. Owner history access remains
-a separate accepted permission path.
+The latest frozen integration `c878b835` passes 24,769 tests (109 skipped), typecheck, 73 focused
+checks and both production builds on Linux. Documentation-only delivery updates preserve this
+source snapshot. Fresh remote CI is required for its pushed head. Earlier snapshots `bb90eade`
+and `1a2a57a9` passed 24,667 and 24,691 tests respectively, with 109 skipped each.
+
+An earlier SSH fixture did not forward its temporary `-F` configuration at the executable boundary;
+HOME alone does not isolate OpenSSH's passwd-derived configuration paths. Corrected fixtures now
+pin temporary known-host files for both clients and retain true connection errors. The full
+`c878b835` run leaves the actual user's known-host file unchanged. Existing host entries were not
+removed. This demonstrated isolation defect does not establish the cause of every earlier sporadic
+connect/reconnect timeout. A separate connection-completion change is still under review and is
+excluded from this snapshot. Remote context publication's prior revocation defect and recovery's
+owner-expiry/cache defects were corrected and independently re-reviewed before integration.
 
 The owner-reported group-title clipping is also corrected in the shared renderer. Reviewed
 commits `0154e751`, `363c1245` and `868beaab` are integrated as `a427f1b4`, `891f1113` and
@@ -51,8 +58,8 @@ This is renderer verification on Linux, not a claim of a native device run or pr
 
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
-| Worktrees and sessions | Confirmed clean removal, missing-checkout recovery, verified rebinding, coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
-| SSH | Additional supported readers, continuous meters/tails, separately authorized context links, streaming transfers/media | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
+| Worktrees and sessions | Missing-before-recording recovery, verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
+| SSH | Reviewed connection-completion correction, continuous meters/tails, streaming transfers/media and additional readers where suitable shared parsers exist | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
 | Web and collaboration | Development gateway, optional isolated browser worker/control, browser team joining and supported notifications | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
 
 Removal must preserve sessions when Git refuses. A real Git fixture confirmed that ordinary
