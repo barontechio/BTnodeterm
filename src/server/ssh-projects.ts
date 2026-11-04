@@ -178,16 +178,23 @@ export function registerServerSshProjects(deps: {
     target.execTrusted = inventory.list().some((saved) => sshEndpointKey(saved) === sshEndpointKey(target))
     checkTarget(project, target, cwd)
     if (connecting >= 8 || (!manager.refForProject(project) && manager.connectedHosts().length + connecting >= 32)) throw new Error('ssh-connect-busy')
+    const owner = owners.get(id, () => eligible(id))
+    let active = true
+    const current = () => {
+      if (!active || !owner.active()) return false
+      try { checkTarget(project, target, cwd); return true } catch { return false }
+    }
     connecting++
     try {
       await start()
       if (!eligible(id)) throw new Error('ssh-owner-departed')
       checkTarget(project, target, cwd)
-      const result = await initiatingOwner.run(recipient(id), () => manager.connect(project, target, cwd))
+      const result = await initiatingOwner.run(recipient(id), () => manager.connect(project, target, cwd, { current }))
       try { checkTarget(project, target, cwd) } catch (error) { manager.disconnect(project, { final: true }); throw error }
+      if (!current()) throw new Error('ssh-owner-departed')
       await deps.onConnected(project)
       return result
-    } finally { connecting-- }
+    } finally { active = false; connecting-- }
   })
   handle(IPC.sshDisconnectProject, (_id, project: string) => manager.disconnect(project, { final: true }))
   handle(IPC.sshKillSessions, (_id, project: string, nodes: string[], options?: { everySocket?: boolean }) => manager.killSessions(project, nodes, options))

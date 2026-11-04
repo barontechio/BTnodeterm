@@ -57,7 +57,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
         const realSsh = (await vi.importActual<typeof import('../core/exec-path')>('../core/exec-path'))
           .findExecutableSync('ssh', ['/usr/bin/ssh', '/usr/local/bin/ssh'])
         if (!realSsh) throw new Error('OpenSSH client required for protocol fixture')
-        fs.writeFileSync(sshFixture.executable, `#!/bin/sh\nset -eu\n: "\${NODETERM_TEST_SSH_CONFIG:?}" "\${NODETERM_TEST_SSH_CALLS:?}"\nprintf '%s\\n' "$1" >> "$NODETERM_TEST_SSH_CALLS"\nexec ${posixQuote(realSsh)} -F "$NODETERM_TEST_SSH_CONFIG" "$@"\n`, { mode: 0o700 })
+      fs.writeFileSync(sshFixture.executable, `#!/bin/sh\nset -eu\n: "\${NODETERM_TEST_SSH_CONFIG:?}" "\${NODETERM_TEST_SSH_CALLS:?}"\nprintf '%s\\n' "$1" >> "$NODETERM_TEST_SSH_CALLS"\nif [ "$1" = "-O" ] && [ "$2" = "exit" ] && [ -p "$NODETERM_TEST_SSH_CONFIG.release" ]; then\n  touch "$NODETERM_TEST_SSH_CONFIG.waiting"\n  read nt_release < "$NODETERM_TEST_SSH_CONFIG.release"\nfi\nexec ${posixQuote(realSsh)} -F "$NODETERM_TEST_SSH_CONFIG" "$@"\n`, { mode: 0o700 })
       }
       const key = ed25519KeyPair({ passphrase: 'fixture-only', cipher: 'aes256-cbc', rounds: 1 }); const host = ed25519KeyPair()
       const identityFile = path.join(root, 'identity'); fs.writeFileSync(identityFile, key.private, { mode: 0o600 })
@@ -224,7 +224,25 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       savedTarget = { server: { ...connection, identityFile: '/different-key' }, remoteCwd: remote }
       expect(service.refForProject('fixture')).toBeUndefined()
       savedTarget = { server: connection, remoteCwd: remote }
-      await call(IPC.sshDisconnectProject, 'fixture')
+      if (native === '0') {
+        // Hold the actual mux exit, without a timing sleep. An awaited disconnect must not
+        // publish completion while this old socket can still be adopted by a reconnect.
+        const release = `${config}.release`
+        execFileSync('mkfifo', [release])
+        let settled = false
+        const closing = (call(IPC.sshDisconnectProject, 'fixture') as Promise<void>).then(() => { settled = true })
+        try {
+          await vi.waitFor(() => expect(fs.existsSync(`${config}.waiting`)).toBe(true))
+          expect(settled).toBe(false)
+        } finally {
+          try {
+            if (fs.existsSync(`${config}.waiting`)) {
+              execFileSync('/bin/sh', ['-c', `printf 'release\\n' > ${posixQuote(release)}`], { timeout: 2000 })
+            }
+          } finally { fs.unlinkSync(release) }
+          await closing
+        }
+      } else await call(IPC.sshDisconnectProject, 'fixture')
       expect(() => call(IPC.sshFsRead, 'fixture', file)).toThrow('disconnected')
       expect(await call(IPC.chatReadTranscript, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }))
         .toMatchObject({ found: false, unreadable: true })

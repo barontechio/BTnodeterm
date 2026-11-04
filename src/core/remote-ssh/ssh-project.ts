@@ -406,6 +406,7 @@ interface Conn {
 
 export class SshProjectManager {
   private conns = new Map<string, Conn>()
+  private disconnects = new Map<string, { promise: Promise<void>; revision: number; uncertain: boolean; final: boolean }>()
   private remoteHooks: RemoteHooks
   /** Projects whose agent-status mirror was actually pushed, gates the disconnect cleanup so a
    *  transient folder-picker browse (never pushed) doesn't pay an extra rm round-trip. */
@@ -642,8 +643,18 @@ export class SshProjectManager {
     /** INTERNAL (never reachable over IPC): `quiet` marks this attempt as the background pre-warm,
      *  which emits no status events. Any loud connect — including one that coalesces onto a
      *  pre-warm already in flight — lifts the mark for the rest of the attempt. See `quiet`. */
-    opts?: { quiet?: boolean }
+    opts?: { quiet?: boolean; current?: () => boolean }
   ): Promise<ConnectResult> {
+    if (opts?.current && !opts.current()) return Promise.reject(new Error('SSH connect cancelled'))
+    const closing = this.disconnects.get(projectId)
+    if (closing) {
+      const revision = closing.revision
+      return closing.promise.then(() => {
+        if (closing.revision !== revision) throw new Error('SSH connect cancelled')
+        if (closing.uncertain) throw new Error('SSH disconnect is unconfirmed; retry disconnect before reconnecting')
+        return this.connect(projectId, conn, remoteCwd, opts)
+      })
+    }
     if (opts?.quiet) this.quiet.add(projectId)
     else this.quiet.delete(projectId)
     const inFlight = this.inFlight.get(projectId)
@@ -669,14 +680,14 @@ export class SshProjectManager {
       // exists to prevent. So wait the old attempt out (its outcome does not matter), then
       // connect on the new endpoint; connectOnce tears down whatever old-endpoint master the
       // settled attempt left behind.
-      const after = (): Promise<ConnectResult> => this.connect(projectId, conn, remoteCwd)
+      const after = (): Promise<ConnectResult> => this.connect(projectId, conn, remoteCwd, opts)
       return inFlight.attempt.then(after, after)
     }
     // The ticket is this attempt's claim on the project id. `disconnect` cancels a
     // pre-registration attempt by dropping the entry that holds it; connectOnce re-checks the
     // ticket before registering its master (see there).
     const ticket = Symbol('ssh-connect-attempt')
-    const attempt = this.connectOnce(projectId, conn, remoteCwd, ticket).finally(() => {
+    const attempt = this.connectOnce(projectId, conn, remoteCwd, ticket, opts?.current).finally(() => {
       if (this.inFlight.get(projectId)?.attempt === attempt) this.inFlight.delete(projectId)
     })
     // This host is reachable again, so this is the moment to pay off any remote `kill-session` a
@@ -763,7 +774,8 @@ export class SshProjectManager {
     projectId: string,
     conn: SshConnection,
     remoteCwd?: string,
-    ticket?: symbol
+    ticket?: symbol,
+    current?: () => boolean
   ): Promise<ConnectResult> {
     // Re-derive the login-agent pin for THIS endpoint (issue #427) — a config-level `IdentityAgent
     // SSH_AUTH_SOCK` must reach the user's login agent despite the app-agent env override. The
@@ -775,6 +787,7 @@ export class SshProjectManager {
       ...conn,
       identityAgentSock: await this.r.probeAgentSock?.(conn).catch(() => undefined)
     }
+    if (current && !current()) throw new Error('SSH connect cancelled')
     const existing = this.conns.get(projectId)
     if (existing && !sameEndpoint(existing.conn, conn)) {
       // The project now points at a DIFFERENT endpoint/identity. `-O check` below would happily
@@ -792,19 +805,19 @@ export class SshProjectManager {
       // against the not-yet-bound socket fails and it KILLS the prompting master and spawns a
       // second one for the same control path.
       await this.disconnect(projectId, { keepInFlight: true })
-      // `disconnect()` FIRES its `-O exit` but does not await it (`void this.r.run(...)`), and
-      // `kill()` is a no-op for a master that already daemonized. So the old master is usually
-      // still alive right here, and the leftover-socket probe below would `-O check` it, find it
-      // answering, and adopt it as a live orphan: the project ends up back on the OLD endpoint,
-      // which is the exact failure this branch exists to prevent. Await an exit of our own (a
-      // no-op if the first one already landed) and unlink the socket so the probe cannot see it.
+      if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) throw new Error('SSH connect cancelled')
+      if (this.disconnects.get(projectId)?.uncertain) throw new Error('SSH disconnect is unconfirmed')
+      // Remove a stale old socket only while this attempt still owns the project. A successful
+      // disconnect now waits for exit; the extra best-effort exit preserves older runner behavior.
       await this.r.run(exitMasterArgs(existing.conn, existing.controlPath)).catch(() => {})
+      if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) throw new Error('SSH connect cancelled')
       await fs.rm(existing.controlPath, { force: true }).catch(() => {})
     } else if (existing) {
       // Verify the cached master is still alive before reusing it, a dropped/timed-out master
       // would otherwise leave us reusing a dead socket. If `-O check` fails, surface
       // `reconnecting`, drop the stale entry, and fall through to re-establish.
       const { code } = await this.r.run(checkMasterArgs(existing.conn, existing.controlPath))
+      if (current && !current()) throw new Error('SSH connect cancelled')
       if (code === 0) {
         // Keep the remote git cwd current even on an idempotent reuse (the folder may have changed).
         // Guard against a later connect without remoteCwd clearing a known cwd.
@@ -865,6 +878,7 @@ export class SshProjectManager {
     } catch {
       // absent → no leftover (the normal path)
     }
+    if (current && !current()) throw new Error('SSH connect cancelled')
     if (leftover && (await this.r.run(checkMasterArgs(conn, controlPath))).code === 0) {
       // Live orphan: reuse it. `kill()` sends `-O exit` (what `disconnect` does anyway); the loop
       // below succeeds on its first `-O check` and runs the normal post-connect setup.
@@ -882,12 +896,13 @@ export class SshProjectManager {
       // disconnect already fired onIdle would silently disarm the idle key-forget it triggered,
       // and nothing would ever re-arm it - the unlocked key then survives to the 12h backstop.
       // No await sits between this check and start()'s cancel, so no disconnect can interleave.
-      if (ticket && this.inFlight.get(projectId)?.ticket !== ticket) {
+      if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) {
         throw new Error('SSH connect cancelled')
       }
       // The app-private agent has to be listening BEFORE ssh authenticates, or `AddKeysToAgent`
       // stores the unlocked key nowhere and every connect this run prompts again. Never fatal.
       await this.r.ensureAgent?.().catch(() => {})
+      if (current && !current()) throw new Error('SSH connect cancelled')
       master = this.r.spawnMaster(masterArgs(conn, controlPath), this.r.masterEnvFor?.(conn.identityFile) ?? {})
     }
     // A disconnect can land while this attempt is still in the probes above, BEFORE any conns
@@ -897,7 +912,7 @@ export class SshProjectManager {
     // every conns entry alive for the rest of the run, and a stuck entry also pins `conns`
     // non-empty so the app agent's idle forget never fires. Kill whatever was just spawned or
     // adopted and fail the attempt instead.
-    if (ticket && this.inFlight.get(projectId)?.ticket !== ticket) {
+    if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) {
       master.kill()
       throw new Error('SSH connect cancelled')
     }
@@ -917,7 +932,9 @@ export class SshProjectManager {
     let exitGrace = MASTER_EXIT_GRACE_CHECKS
     let waitStartedAt = Date.now()
     for (;;) {
+      if (current && !current()) break
       const { code } = await this.r.run(checkMasterArgs(conn, controlPath))
+      if (current && !current()) break
       if (code === 0) {
         // THE TRANSPORT IS USABLE NOW — say so, before the setup chain below.
         //
@@ -2624,7 +2641,17 @@ export class SshProjectManager {
    * internal teardowns, the watchdog's stale-master drop and a failed connect all empty `conns`
    * routinely and must not be read as "the user is done with SSH".
    */
-  async disconnect(projectId: string, opts?: { keepInFlight?: boolean; final?: boolean }): Promise<void> {
+  disconnect(projectId: string, opts?: { keepInFlight?: boolean; final?: boolean }): Promise<void> {
+    const pending = this.disconnects.get(projectId)
+    if (pending && !pending.uncertain) {
+      if (!opts?.keepInFlight) {
+        pending.revision++ // cancels connects queued behind this close
+        this.inFlight.delete(projectId)
+      }
+      pending.final ||= opts?.final === true
+      return pending.promise
+    }
+    if (!opts?.keepInFlight) this.inFlight.delete(projectId)
     const c = this.conns.get(projectId)
     if (!c) {
       // No registered master, but an attempt may still be in flight for this id, inside
@@ -2634,8 +2661,21 @@ export class SshProjectManager {
       // browse) that only quit could remove.
       if (!opts?.keepInFlight) this.inFlight.delete(projectId)
       if (opts?.final && this.conns.size === 0) this.r.onIdle?.()
-      return
+      this.disconnects.delete(projectId)
+      return Promise.resolve()
     }
+    const closing = { promise: Promise.resolve(), revision: 0, uncertain: false, final: opts?.final === true }
+    this.disconnects.set(projectId, closing)
+    closing.promise = Promise.resolve().then(() => this.disconnectOnce(projectId, c, closing)).finally(() => {
+      if (!closing.uncertain && this.disconnects.get(projectId) === closing) this.disconnects.delete(projectId)
+    })
+    return closing.promise
+  }
+
+  private async disconnectOnce(
+    projectId: string, c: Conn, closing: { uncertain: boolean; final: boolean }
+  ): Promise<void> {
+    if (this.conns.get(projectId) !== c) return
     // Remove the pushed agent-status mirror while the master is still alive: a file left behind
     // would freeze the phone's badges at the last event (the heartbeat that lets the phone detect
     // staleness dies with this connection). Best-effort.
@@ -2647,24 +2687,26 @@ export class SshProjectManager {
     }
     // Cancel the reverse hook tunnel (over the still-live master) BEFORE tearing the master down.
     await this.remoteHooks.teardown(projectId, c.conn, c.controlPath)
+    if (this.conns.get(projectId) !== c) return
     this.tunnelProbeFailures.delete(projectId)
-    void this.r.run(exitMasterArgs(c.conn, c.controlPath))
+    // Keep the close owned until the actual mux command settles. Returning early lets a
+    // reconnect adopt the closing socket, or lets a delayed exit kill its replacement.
+    const result = await this.r.run(exitMasterArgs(c.conn, c.controlPath)).catch(() => ({ code: 255 }))
+    if (this.conns.get(projectId) !== c) return
+    if (result.code !== 0) {
+      closing.uncertain = true
+      this.emitStatus({ projectId, status: 'error', error: 'SSH disconnect is unconfirmed; retry disconnect before reconnecting' })
+      return // retain the old identity; never treat a failed exit as an absent master
+    }
     c.master.kill()
     this.conns.delete(projectId)
-    // Drop any in-flight connect attempt for this project. Without this, a connect() issued after
-    // a disconnect coalesces onto the stale attempt (see connect): the user tears a project down,
-    // re-opens it, and the fresh connect returns the DOOMED attempt's promise instead of
-    // establishing a master for the live server. The running attempt is not awaited/cancelled
-    // here (it may be blocked on a passphrase prompt), but once settled its .finally sees no
-    // matching inFlight entry and does not resurrect anything. `keepInFlight` is the internal
-    // caller's opt-out: a teardown INSIDE a live attempt must not discard that attempt's own
-    // coalescing entry (see connectOnce's endpoint-change branch).
-    if (!opts?.keepInFlight) this.inFlight.delete(projectId)
+    // disconnect() invalidated the old connect ticket before any teardown await. Never delete
+    // a later attempt's ticket here, after asynchronous cleanup.
     this.emitStatus({ projectId, status: 'disconnected' })
     // Nothing left to keep an unlocked key alive for. Production schedules (not performs) the
     // agent shutdown: the connect dialog's throwaway browse master disconnects a few hundred ms
     // before the real project connects, and forgetting in that gap costs a second prompt.
-    if (opts?.final && this.conns.size === 0) this.r.onIdle?.()
+    if (closing.final && this.conns.size === 0) this.r.onIdle?.()
   }
 
   /**
@@ -2685,6 +2727,7 @@ export class SshProjectManager {
    */
   disconnectAll(): void {
     this.stopWatchdog()
+    for (const closing of this.disconnects.values()) closing.revision++
     for (const projectId of [...this.conns.keys()]) {
       const c = this.conns.get(projectId)
       if (!c) continue

@@ -11459,6 +11459,11 @@ Python 3/POSIX command opens verified no-follow descriptors, bounds discovery/wi
 and writes no host file. Unknown roots, missing runtimes, unsafe trees and failed reads never mean
 absence or authorize account/local fallback. Read-only histories do not grant remote control proof.
 
+SSH disconnect completion includes the mux exit. Keep a per-project close barrier, invalidate
+older connect tickets before teardown, and fence state changes against the captured connection
+after awaits. A second disconnect/shutdown cancels queued reconnects. Failed exit keeps the old
+identity and reports uncertainty; it must not silently allow socket adoption by queued work.
+
 `PtyManager.runNodeActions` / `NodeExecutionCoordinator.runMany` atomically claim a bounded immutable
 set of nodes under one async execution context. Nested single claims do not own a group. Refuse a
 busy member/capacity overflow before claiming any; owner departure keeps every fence until real

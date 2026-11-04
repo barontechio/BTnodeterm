@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fakePlatform } from '../core/platform-fake'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { DEFAULT_SETTINGS } from '../shared/types'
@@ -9,7 +9,7 @@ import { registerServerSshProjects } from './ssh-projects'
 
 describe('Server SSH owner surface', () => {
   let service: ReturnType<typeof registerServerSshProjects> | undefined
-  afterEach(() => { service?.close(); resetPlatformForTests() })
+  afterEach(() => { service?.close(); resetPlatformForTests(); vi.restoreAllMocks(); vi.unstubAllEnvs() })
   const boot = (enabled: boolean, projectTarget?: Parameters<typeof registerServerSshProjects>[0]['projectTarget']) => {
     const platform = fakePlatform({ isOwnerClient: (id) => id === 1 || id === 2 }); platform.clients.push(1, 2, 3)
     initPlatform(platform)
@@ -45,6 +45,44 @@ describe('Server SSH owner surface', () => {
     await expect(p.handlers[IPC.sshConnectProject](1, 'p', { host: 'saved.invalid', user: 'u', port: 0 }, '/saved')).rejects.toThrow('invalid-connection')
     await expect(p.handlers[IPC.sshConnectProject](1, 'p', { host: 'saved.invalid', user: 'u' }, '/other')).rejects.toThrow('target-changed')
     expect(fs.existsSync(path.join(p.userDataDir, 'ssh-askpass.sh'))).toBe(false)
+  })
+
+  it.each(['owner', 'target'])('revokes a queued connection when its %s changes', async (change) => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '1')
+    const server = { host: 'saved.invalid', user: 'u' }
+    let target = { server, remoteCwd: '/saved' }
+    const p = boot(true, () => target)
+    let current: (() => boolean) | undefined
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(service!.manager, 'connect').mockImplementation(async (_project, _server, _cwd, options) => {
+      current = options?.current
+      await gate
+      if (!current?.()) throw new Error('SSH connect cancelled')
+      throw new Error('revocation was ignored')
+    })
+    const pending = expect(p.handlers[IPC.sshConnectProject](1, 'p', server, '/saved')).rejects.toThrow('cancelled')
+    await vi.waitFor(() => expect(current).toBeDefined())
+    expect(current!()).toBe(true)
+    if (change === 'owner') {
+      service!.forgetClient(1)
+      p.handlers[IPC.sshPromptConnect](1) // same numeric id must not revive the old request
+    } else target = { server: { ...server, host: 'changed.invalid' }, remoteCwd: '/saved' }
+    expect(current!()).toBe(false)
+    release()
+    await pending
+  })
+
+  it('does not leave a completed connect request authorized for detached work', async () => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '1')
+    const p = boot(true)
+    let current: (() => boolean) | undefined
+    vi.spyOn(service!.manager, 'connect').mockImplementation(async (_project, _server, _cwd, options) => {
+      current = options?.current
+      return { controlPath: '/fixture' }
+    })
+    await p.handlers[IPC.sshConnectProject](1, 'p', { host: 'fixture.invalid', user: 'u' })
+    expect(current!()).toBe(false)
   })
 
 })

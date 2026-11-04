@@ -56,6 +56,11 @@ explicit temporary `-F` config, including native transport's `ssh -G` calls. It 
 paths and pins the loopback server key. `HOME` alone does not redirect OpenSSH's passwd-derived
 configuration paths, and `SshConnection.extraArgs` is not forwarded by the ControlMaster builders.
 
+Disconnect completion includes the actual mux exit command. Reconnects queued behind a close
+wait for it; another disconnect or host shutdown cancels those queued requests. A failed exit
+retains the old identity and reports an unconfirmed disconnect, requiring an explicit disconnect
+retry before reconnecting. Delayed cleanup checks the original connection before changing state.
+
 
 ## Owner Codex conversation pages
 
