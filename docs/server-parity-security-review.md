@@ -1,5 +1,28 @@
 # Server parity security review
 
+## Confirmed follow-up result and gateway redirect guard
+
+CodeQL result [126793739074](https://github.com/barontechio/BTnodeterm/runs/126793739074) on
+`c3cacbf7` succeeds: the five preceding annotations are absent. Windows quality and dependency
+review also succeed. This result retains one medium warning in `core/agent-env-ipc.ts` for a stored
+gateway key flowing to model discovery. That flow is intentional authentication, bounded by the
+persisted gateway URL for host secret/environment references; caller-provided literal keys retain
+their explicit pre-save test path. It is not arbitrary file-content transmission.
+
+Review nevertheless identified an additional redirect concern: Fetch can retain the compatibility
+`x-bf-vk` header across origins. `43e22f35` now refuses redirects in discovery, matching the other
+host credential protocols. Two real loopback authorities reproduce an unwanted second request on
+the predecessor for both HTTP 302 and 307; corrected code authenticates only to the configured
+gateway and the redirect destination receives no request. All 65 focused gateway/credential/context
+checks and typecheck pass. No query or threshold is weakened, and no report is dismissed here.
+
+The new aggregate remains pending. Its prior `d07c2f57` run passes 24,906 tests and fails three
+remote screen-dialog assertions because that fixture omitted the required context namespace;
+`02090566` supplies it without changing assertions. The 12 real preview/SSH protocol cases pass
+after `d07c2f57` supplies the same fixture arguments on physical process respawn. Actual known-host
+contents remain unchanged. Fresh full/CI verification covers these final changes; the six moderate
+minimatch packaging-chain audit entries below remain unresolved.
+
 ## Follow-up scan and current corrections (2026-11-04)
 
 The result gate [126780177650](https://github.com/barontechio/BTnodeterm/runs/126780177650) on

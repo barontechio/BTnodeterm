@@ -93,6 +93,14 @@ Neither partial run establishes an aggregate pass. The new CodeQL result and Win
 confirm their corrections. The lock audit now reports six moderate packaging-chain entries from
 one minimatch advisory updated on November 4; see the security review, not historical zero-audit text.
 
+Follow-up result: `c3cacbf7` passes the CodeQL result gate and Windows quality; none of the five
+preceding findings remain. One medium model-gateway authentication-flow warning was reviewed;
+`43e22f35` additionally refuses discovery redirects, with real 302/307 two-authority regressions.
+The next local aggregate includes that change plus the screen-dialog context mock correction
+`02090566`. The preceding `d07c2f57` run passes 24,906 tests and fails only those three incomplete
+mock assertions. Its 12 real preview/SSH cases pass after retaining fixture arguments on respawn.
+This is not yet a passing final aggregate, and no default-branch merge or deployment is implied.
+
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
 | Worktrees and sessions | Verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
