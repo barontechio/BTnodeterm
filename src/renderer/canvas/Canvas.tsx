@@ -1,3 +1,6 @@
+import { installBrowserNotificationRouter } from '../bridge/browser-notifications'
+import { captureNotificationTarget } from './browserNotificationTarget'
+import { notificationMembership } from './notificationMembership'
 import { planGeometryCommand } from '@shared/geometry-command'
 import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
 import { planBoardAssignment } from '@shared/board-assignment'
@@ -1797,7 +1800,7 @@ export function Canvas() {
   // the ledger row, not a reference into the store: reading it needs only the pointer it carries.
   const [closedTranscript, setClosedTranscript] = useState<ClosedSessionEntry | null>(null)
   // Node to center once its project finishes loading (cross-project notification click).
-  const pendingFocusRef = useRef<string | null>(null)
+  const pendingFocusRef = useRef<string | { nodeId: string; current(): boolean } | null>(null)
   // "Open recent": a conversation to resume once the project it belongs to is on the canvas.
   const pendingResumeRef = useRef<{ projectId: string; conv: RecentConversation } | null>(null)
   // A `nodeterm://open` link the human accepted: the node to create once its project is on the canvas.
@@ -3530,9 +3533,10 @@ export function Canvas() {
           if (Date.now() - pendingLink.at < PENDING_LINK_MAX_MS) linkCreateRef.current(pendingLink.open)
         }
         // Consume a cross-project focus request (notification click on a background node).
-        const pending = pendingFocusRef.current
+        const request = pendingFocusRef.current
+        pendingFocusRef.current = null
+        const pending = typeof request === 'string' ? request : request?.current() ? request.nodeId : null
         if (pending) {
-          pendingFocusRef.current = null
           const node = nodesRef.current.find((n) => n.id === pending)
           if (node) {
             // Same rule as focusNodeById: if the project we just landed on shows the BOARD, the
@@ -16270,7 +16274,8 @@ export function Canvas() {
                   if (now - (notifyCooldownRef.current[h.nodeId] ?? 0) < 5000) continue
                   notifyCooldownRef.current[h.nodeId] = now
                   noteHandoff(h.nodeId, now)
-                  void window.nodeTerminal.notify({
+                  void api.notify({
+                    projectId: pid,
                     title: `${ctlProject?.name ?? 'Board'} — handed to you: ${cardTitle(h.nodeId) || 'a card'}`,
                     body: `Moved to ${h.columnTitle}.`,
                     nodeId: h.nodeId
@@ -17034,7 +17039,7 @@ export function Canvas() {
         const now = Date.now()
         if (now - (notifyCooldownRef.current[e.nodeId] ?? 0) < 5000) return // dedup/cooldown
         notifyCooldownRef.current[e.nodeId] = now
-        void window.nodeTerminal.notify({
+        void api.notify({
           title: `${contextFor(e.nodeId)} — ${agentLabel} ${statusText}`,
           body: clip(e.lastMessage) || fallbackBody,
           nodeId: e.nodeId
@@ -18629,6 +18634,42 @@ export function Canvas() {
       }
     }
   })
+
+  // Browser clicks carry a source-bound guard all the way through a queued project landing.
+  const notificationRouterRef = useRef<Parameters<typeof installBrowserNotificationRouter>[0]>(() => null)
+  notificationRouterRef.current = (source, payload) => {
+    const target = captureNotificationTarget(source, payload, () =>
+      notificationMembership({ projectId: nodesProjectIdRef.current, nodes: nodesRef.current })
+    )
+    if (!target) return null
+    return {
+      current: target.current,
+      focus: (current) => {
+        if (!current()) return
+        const store = useProjects.getState()
+        if (store.activeProjectId === target.projectId && nodesProjectIdRef.current === target.projectId) {
+          focusNodeById(target.nodeId)
+          return
+        }
+        const pending = {
+          nodeId: target.nodeId,
+          current: () => current() &&
+            useProjects.getState().activeProjectId === target.projectId &&
+            nodesProjectIdRef.current === target.projectId
+        }
+        pendingFocusRef.current = pending
+        if (store.getProject(target.projectId)?.closed) {
+          void reopenProject(target.projectId).then((ok) => {
+            if (!ok && pendingFocusRef.current === pending) pendingFocusRef.current = null
+          })
+        } else switchProject(target.projectId)
+      }
+    }
+  }
+  useEffect(() => {
+    if (!isBrowserRuntime()) return
+    return installBrowserNotificationRouter((source, payload) => notificationRouterRef.current(source, payload))
+  }, [])
 
   // OS-notification click → focus the originating node (see the note beside focusNodeById:
   // travelToNode, not focusNodeById, so a closed project's tab is reopened first).

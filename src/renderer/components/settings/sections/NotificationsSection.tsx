@@ -1,3 +1,4 @@
+import { isBrowserRuntime } from '@renderer/bridge/runtime'
 import { useRef, useState } from 'react'
 import { useSettings } from '../../../state/settings'
 import { SettingsSection } from '../SettingsSection'
@@ -150,7 +151,7 @@ function CustomSoundRow({ kind, volume }: { kind: AlertSoundKind; volume: number
 }
 
 // The OS-refusal repair row's wording follows the OS whose notification center refused us.
-const blockedCopy = notificationsBlockedCopy(isMacPlatform() ? 'mac' : isWindowsPlatform() ? 'windows' : 'other')
+const blockedCopy = notificationsBlockedCopy(isBrowserRuntime() ? 'browser' : isMacPlatform() ? 'mac' : isWindowsPlatform() ? 'windows' : 'other')
 
 export function NotificationsSection({ isActive }: { isActive: boolean }): React.JSX.Element {
   const notifyOnClaudeDone = useSettings((s) => s.settings.notifyOnClaudeDone)
@@ -170,7 +171,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
     <SettingsSection
       id="notifications"
       title="Notifications"
-      description="Get notified when an agent finishes while the app is in the background."
+      description={isBrowserRuntime() ? "Get notified while this page stays open in a supported browser. Enable to request this site’s notification permission." : "Get notified when an agent finishes while the app is in the background."}
       isActive={isActive}
       searchEntries={ENTRIES}
     >
@@ -195,7 +196,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
                       nodeId: '',
                       force: true
                     })
-                    .then((result) => setOsBlocked(result === 'failed'))
+                    .then((result) => setOsBlocked(result === 'failed' || (isBrowserRuntime() && result === 'skipped')))
               }}
             />
           }

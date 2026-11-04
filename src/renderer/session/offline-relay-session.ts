@@ -40,7 +40,7 @@ export function deadRelayTransport(): FrameTransport {
  * Built here rather than in session.ts because relay-api imports session.ts.
  */
 export function offlineRelayApi(): NodeTerminalApi {
-  return buildRelayApi(OFFLINE_RELAY_SESSION_ID, deadRelayTransport()).api
+  return buildRelayApi(OFFLINE_RELAY_SESSION_ID, deadRelayTransport(), { offline: true }).api
 }
 
 setOfflineRelayApiFactory(offlineRelayApi)

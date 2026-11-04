@@ -23,7 +23,6 @@ import {
   type ClaudeUsage,
   type ClipboardWriteOptions,
   type NodeTerminalApi,
-  type NotifyPayload,
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
@@ -632,17 +631,8 @@ export function buildStubApi(): Omit<
     // is disabled with this reason on the Server Edition (AppearanceSection's browser branch).
     setUiZoomFactor: noop,
     getPathForFile: (): string => '',
-    notify: async (payload: NotifyPayload): Promise<'shown' | 'failed' | 'skipped'> => {
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        try {
-          new Notification(payload.title, { body: payload.body })
-          return 'shown'
-        } catch {
-          return 'skipped'
-        }
-      }
-      return 'skipped'
-    },
+    // Offline/unbound APIs must never display notices on behalf of a live owner.
+    notify: async () => 'skipped',
     openNotificationSettings: pnoop,
     onFocusNode: noopUnsub,
     // Server Edition v1: the memory-pressure levers run HOST-side only (the session reaper, driven

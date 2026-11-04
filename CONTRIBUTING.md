@@ -2148,3 +2148,12 @@ after authorized publication. A cancelled attempt rejects even when its physical
 A retained SSH connection during pending or uncertain teardown owns cleanup only. Background
 CLI probes use connection-lifetime queue checks and cannot publish connected, retry, or start
 follow-up setup after close begins, including close triggered synchronously by a status callback.
+
+Browser notifications are open-page effects owned by the actual WS/relay API lifetime. Request
+permission only with explicit `force` AND current browser user activation; background events never
+prompt. Canvas injects routing, using the live nodes epoch and fresh globally unique membership,
+exact project/API/workspace-session identity and known CLI session id. Carry the validity guard
+through deferred project landing; disposal, replacement, removal or offline state cancels focus.
+Keep offline stubs inert and native Desktop behavior unchanged. Settings points to browser site
+permissions, not OS settings. This does not implement Service Worker/Web Push, closed-page delivery
+or private mobile notification support. Existing consent and entitlement gates still apply.

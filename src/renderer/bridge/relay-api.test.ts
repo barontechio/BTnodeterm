@@ -87,11 +87,15 @@ describe('buildRelayApi', () => {
 
   it('keeps app-global namespaces as the LOCAL window.nodeTerminal references', () => {
     const { local } = fakeLocalApi()
+    local.notify = vi.fn(async () => 'shown' as const)
+    local.onFocusNode = vi.fn(() => () => {})
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
     const t = new FakeTransport()
     const { api } = buildRelayApi('conn-1', t)
 
     // Your update banner, clipboard, settings and license are YOURS, not the host's.
+    expect(api.notify).toBe(local.notify)
+    expect(api.onFocusNode).toBe(local.onFocusNode)
     expect(api.updates).toBe(local.updates)
     expect(api.clipboard).toBe(local.clipboard)
     expect(api.settings).toBe(local.settings)
@@ -418,6 +422,7 @@ it('browser joined API cannot fall through to the owning local Server administra
     githubControl: { status: admin }, transcripts: { search: admin }
   })
   ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+  Object.assign(window, { addEventListener: vi.fn(), removeEventListener: vi.fn() })
   markBrowserTeamConnection('browser-isolation')
   try {
     const handle = buildRelayApi('browser-isolation', new FakeTransport(), { hosted: true })

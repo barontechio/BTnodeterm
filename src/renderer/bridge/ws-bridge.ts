@@ -1,4 +1,5 @@
 import { withRemoteMeters } from './remote-meters'
+import { createBrowserNotifications } from './browser-notifications'
 import { createBrowserTeamJoin } from './browser-team/join'
 import type { ChatCatalog } from '@shared/chat-catalog'
 import type { HostLaunchReply } from '@shared/headless-launch'
@@ -1732,6 +1733,9 @@ export async function installWsBridge(): Promise<boolean> {
       }
     })()
   }
+  const notifications = createBrowserNotifications(() => api)
+  api.notify = notifications.notify
+  client.onClose(notifications.dispose)
   const ownerPtyData = api.pty.onData
   api.pty.onData = (key, listener) => key.startsWith('relay:browser-team-') ? browserTeams.onPtyData(key, listener) : ownerPtyData(key, listener)
   ;(window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal = api

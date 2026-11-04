@@ -1,3 +1,4 @@
+import { createBrowserNotifications } from './browser-notifications'
 import { isBrowserRuntime } from './runtime'
 import { isBrowserTeamConnection } from './browser-team/connections'
 import { DEFAULT_SETTINGS } from '../../shared/types'
@@ -74,6 +75,8 @@ export interface RelayApiOptions {
   /** A relay tab joined by a hosted team's `nodeterm://join` code: it gets `api.hosted` and a role
    *  gate on everything it sends. Absent/false = a Team Access relay tab, built exactly as before. */
   hosted?: boolean
+  /** Disconnected sentinel: never install page-owned notification effects. */
+  offline?: boolean
 }
 
 /**
@@ -253,10 +256,17 @@ export function buildRelayApi(
     ...(hosted ? buildHostedApi(client) : {})
   } satisfies NodeTerminalApi
 
+  const notifications = browser && !opts?.offline ? createBrowserNotifications(() => api) : null
+  if (notifications) {
+    api.notify = notifications.notify
+    client.onClose(notifications.dispose)
+  }
+
   return {
     api,
     ready: () => client.ready(),
     close: () => {
+      notifications?.dispose()
       local.relayClient.disconnect(connectionId)
       // A hosted connection's own close is announced locally: main never reports it (see
       // relay-local-close.ts), and this tab's team is held until its connection ends.

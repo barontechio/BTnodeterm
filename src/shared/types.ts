@@ -3089,6 +3089,8 @@ export interface AnnouncementsApi {
 }
 
 export interface NotifyPayload {
+  /** Browser routing hint; native notification handling remains unchanged. */
+  projectId?: string
   title: string
   body: string
   /** Node to focus/center when the notification is clicked. */
