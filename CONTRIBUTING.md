@@ -939,6 +939,9 @@ mutations and message delivery validate every target before writing anything; mi
 named refusal. Validate Server upgrades against a disposable data directory and port. Restarting a
 shared live service is
 an explicit operator action, never a test or an automatic repair step.
+`ungroup --group <id>` removes only a frame: inside the serialized mutation it verifies the
+current group kind and same-project creator proof for the frame and every direct child. It never
+calls terminal close/kill; child world positions and metadata survive, and only frame edges are removed.
 
 **A canvas-control verb you add in `Canvas.tsx` does not exist on the Server Edition.** The verbs
 run in the DESKTOP renderer's dispatch; the browser bridge never subscribes to `onAgentControl`, and

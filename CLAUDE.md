@@ -4869,6 +4869,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   `open-agent` are verified-only at the Server handler boundary. A plain terminal keeps generic
   node hook wiring but receives neither `NODETERM_AGENT_ID` nor `NODETERM_CANVAS_CONTROL`; missing
   identity never defaults to Claude.
+  Server `ungroup --group <id>` uses the existing persisted ungroup transform inside the factory
+  mutation queue. After loading, it requires a current group in the caller project and creator
+  proof for the frame and every direct child, including matching ownership project IDs. It never
+  delegates to `close` (a terminal id or queued kind change must not kill a session). Children retain
+  world positions, nested parents and metadata; only the frame and its incident edges are removed.
+  Unsupported flags/project targets and absent action adapters refuse explicitly; restart never
+  reconstructs creator proof. No terminal lifecycle or filesystem deletion participates.
   **Windows hosts**: a PowerShell/cmd-run agent cannot type `sh "<shim>"`, so a win32 core also
   writes `nodeterm.cmd` / `context.cmd` beside the shims (`syncWindowsShLauncher` — finds Git for
   Windows' `sh.exe`, passes `%*` through, fails LOUDLY without it) and the skills, the connect-time

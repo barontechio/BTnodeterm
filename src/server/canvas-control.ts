@@ -292,6 +292,7 @@ export async function initServerCanvasControl(
       factory.openTerminal(sourceNodeId, args, verified),
     openAgent: (sourceNodeId, args, verified) => factory.openAgent(sourceNodeId, args, verified),
     close: (sourceNodeId, args, verified) => factory.close(sourceNodeId, args, verified),
+    ungroup: (sourceNodeId, args, verified) => factory.ungroup(sourceNodeId, args, verified),
     link: (sourceNodeId, args, verified) => factory.link(sourceNodeId, args, verified),
     group: (sourceNodeId, args) => factory.group(sourceNodeId, args),
     rename: (sourceNodeId, args) => factory.rename(sourceNodeId, args),

@@ -268,6 +268,21 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     expect(a.openAgent).not.toHaveBeenCalled()
   })
 
+  it('routes ungroup after identity/parse, and refuses an absent action truthfully', async () => {
+    const a = actions()
+    const absent = createServerEditionControlHandler(a)
+    expect(await absent({ verb: 'ungroup', nodeId: 'src', args: { group: 'g' }, verified: true }))
+      .toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
+    const ungroup = vi.fn(async () => ({ ok: true as const }))
+    const handler = createServerEditionControlHandler({ ...a, ungroup })
+    expect(await handler({ verb: 'ungroup', nodeId: 'src', args: {}, verified: true })).toMatchObject({ ok: false })
+    expect(await handler({ verb: 'ungroup', nodeId: 'src', args: { group: 'g' }, verified: false })).toMatchObject({ ok: false })
+    expect(ungroup).not.toHaveBeenCalled()
+    expect(await handler({ verb: 'ungroup', nodeId: 'src', args: { group: 'g' }, verified: true })).toEqual({ ok: true })
+    expect(ungroup).toHaveBeenCalledWith('src', { group: 'g' }, true)
+    expect(a.close).not.toHaveBeenCalled()
+  })
+
   it('routes run to the factory (#925)', async () => {
     const a = actions()
     const handler = createServerEditionControlHandler(a)

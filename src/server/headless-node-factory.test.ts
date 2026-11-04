@@ -1,3 +1,4 @@
+import { createServerEditionControlHandler } from './control-unsupported'
 import fs from 'node:fs'
 import { StationHandoverTracker } from '../core/station-handover'
 import os from 'node:os'
@@ -680,7 +681,7 @@ describe('HeadlessNodeFactory', () => {
     })
   })
 
-  it('lets the creator close a nested frame only, promoting surviving members to its parent', async () => {
+  it.each(['close', 'ungroup'] as const)('lets the creator %s a nested frame only, preserving children', async (verb) => {
     const outerReply = await factory.group('term-source', {
       nodes: 'term-upstream,term-owned',
       label: 'Outer'
@@ -715,10 +716,7 @@ describe('HeadlessNodeFactory', () => {
     publishedProjects.length = 0
     removed.length = 0
 
-    await expect(factory.close('term-source', { node: innerId }, true)).resolves.toMatchObject({
-      ok: true,
-      result: { ids: [innerId] }
-    })
+    await expect(verb === 'close' ? factory.close('term-source', { node: innerId }, true) : ungroup({ group: innerId })).resolves.toMatchObject({ ok: true })
 
     const after = (await new WorkspaceStore().load({ sideline: false })).projects[0]
     expect(after.nodes.some((node) => node.id === innerId)).toBe(false)
@@ -734,6 +732,119 @@ describe('HeadlessNodeFactory', () => {
     )
     expect(publishedProjects.at(-1)?.nodes.some((node) => node.id === innerId)).toBe(false)
   })
+
+  // Real enabled router + real factory; the unused actions cannot make this test pass.
+  const ungroup = (args: Record<string, string>, verified = true, nodeId = 'term-source') => {
+    const unused = async () => { throw new Error('unexpected action') }
+    return createServerEditionControlHandler({
+      openProject: unused, openTerminal: unused, openAgent: unused, close: unused, link: unused,
+      group: unused, rename: unused, color: unused, sticky: unused, settings: unused, run: unused,
+      reportOutcome: unused, githubRead: unused, deliver: unused,
+      ungroup: (source, flags, identity) => factory.ungroup(source, flags, identity)
+    })({ verb: 'ungroup', nodeId, args, verified })
+  }
+  const makeFrame = async () => {
+    const reply = await factory.group('term-source', { nodes: 'term-upstream' })
+    expect(reply.ok).toBe(true)
+    return (reply.result as { groupId: string }).groupId
+  }
+
+  it('ungroup preserves child metadata and non-frame edges and forgets only frame proof', async () => {
+    const id = await makeFrame()
+    const workspace = await store.load({ sideline: false })
+    const project = workspace.projects[0]
+    project.ropes = [{ id: 'frame-rope', source: id, target: 'term-owned' }, { id: 'child-rope', source: 'term-upstream', target: 'term-owned' }]
+    project.bridges = [{ id: 'frame-link', source: id, target: 'term-owned' }, { id: 'child-link', source: 'term-upstream', target: 'term-owned' }]
+    await store.save(workspace)
+    const child = structuredClone((await store.load({ sideline: false })).projects[0].nodes.find(n => n.id === 'term-upstream')!)
+    await expect(ungroup({ group: id })).resolves.toMatchObject({ ok: true, result: { groupId: id, promoted: ['term-upstream'] } })
+    const after = (await new WorkspaceStore().load({ sideline: false })).projects[0]
+    const promoted = after.nodes.find(n => n.id === child.id)!
+    const { position: _beforePosition, parentId: _beforeParent, ...beforeMetadata } = child
+    const { position: _afterPosition, parentId: _afterParent, ...afterMetadata } = promoted
+    expect(afterMetadata).toEqual(beforeMetadata)
+    expect(promoted.parentId).toBeUndefined()
+    expect(after.ropes).toEqual([project.ropes[1]])
+    expect(after.bridges).toEqual([project.bridges[1]])
+    expect(ownership.ownerOf(id)).toBeUndefined()
+    expect(ownership.ownerOf(child.id)).toEqual({ sourceNodeId: 'term-source', projectId: 'project-1' })
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
+  it('ungroup refuses terminal/unknown targets, flags/project overrides, missing and unverified identity', async () => {
+    const id = await makeFrame()
+    const before = await store.load({ sideline: false })
+    const invalid: Record<string, string>[] = [{ group: 'term-upstream' }, { group: 'missing' }, {}, { group: ' ' },
+      { group: id, project: 'project-1' }, { group: id, node: 'term-owned' }, { group: id, force: '' }]
+    for (const args of invalid) {
+      expect((await ungroup(args)).ok).toBe(false)
+    }
+    expect((await ungroup({ group: id }, false)).ok).toBe(false)
+    expect((await ungroup({ group: id }, true, 'missing-source')).ok).toBe(false)
+    expect((await ungroup({ group: id }, true, 'term-upstream')).ok).toBe(false)
+    expect(await store.load({ sideline: false })).toEqual(before)
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
+  it('ungroup removes an empty owned frame without a terminal lifecycle call', async () => {
+    const id = await makeFrame()
+    const workspace = await store.load({ sideline: false })
+    workspace.projects[0].nodes = workspace.projects[0].nodes.filter(n => n.id !== 'term-upstream')
+    await store.save(workspace)
+    await expect(ungroup({ group: id })).resolves.toMatchObject({ ok: true, result: { promoted: [] } })
+    expect((await store.load({ sideline: false })).projects[0].nodes.some(n => n.id === id)).toBe(false)
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
+  it('a failed ungroup save never forgets proof or closes a terminal', async () => {
+    const id = await makeFrame()
+    const before = await store.load({ sideline: false })
+    vi.spyOn(store, 'save').mockRejectedValueOnce(new Error('disk failure'))
+    await expect(ungroup({ group: id })).rejects.toThrow('disk failure')
+    expect(await new WorkspaceStore().load({ sideline: false })).toEqual(before)
+    expect(ownership.ownerOf(id)).toBeDefined()
+    expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+  })
+
+  it.each(['foreign-child', 'child-project', 'frame-project', 'restart'])(
+    'ungroup refuses %s proof without changing durable nodes', async (scenario) => {
+      const id = await makeFrame()
+      if (scenario === 'foreign-child') ownership.forget('term-upstream')
+      if (scenario === 'child-project') ownership.record('term-upstream', { sourceNodeId: 'term-source', projectId: 'other-project' })
+      if (scenario === 'frame-project') ownership.record(id, { sourceNodeId: 'term-source', projectId: 'other-project' })
+      if (scenario === 'restart') ownership.clear()
+      const before = await store.load({ sideline: false })
+      expect((await ungroup({ group: id })).ok).toBe(false)
+      expect(await store.load({ sideline: false })).toEqual(before)
+      expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+    }
+  )
+
+  it.each(['kind', 'owner', 'child', 'stop'])(
+    'ungroup rechecks %s after waiting in the actual mutation queue', async (scenario) => {
+      const id = await makeFrame()
+      let enter!: () => void, release!: () => void
+      const entered = new Promise<void>(r => { enter = r })
+      const held = new Promise<void>(r => { release = r })
+      const load = store.load.bind(store)
+      vi.spyOn(store, 'load').mockImplementationOnce(async options => { enter(); await held; return load(options) })
+      const previous = factory.rename('term-source', { node: 'term-owned', title: 'Still owned' })
+      await entered
+      const pending = ungroup({ group: id })
+      if (scenario === 'kind') {
+        const workspace = await load({ sideline: false })
+        workspace.projects[0].nodes.find(n => n.id === id)!.kind = 'terminal'
+        await store.save(workspace)
+      }
+      if (scenario === 'owner') ownership.forget(id)
+      if (scenario === 'child') ownership.forget('term-upstream')
+      if (scenario === 'stop') factory.stop()
+      release(); await previous
+      expect((await pending).ok).toBe(false)
+      expect((await load({ sideline: false })).projects[0].nodes.some(n => n.id === id)).toBe(true)
+      expect(pty.creates).toEqual([]); expect(pty.sends).toEqual([]); expect(pty.destroys).toEqual([])
+    }
+  )
 
   it('refuses a non-creator that tries to close a headless-created frame', async () => {
     const grouped = await factory.group('term-source', {

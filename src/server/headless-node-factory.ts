@@ -1129,6 +1129,48 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** Remove a frame only: never send a group id through the terminal-closing path. */
+  ungroup(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      const flagError = unsupportedFlags(args, new Set(['group']))
+      if (flagError) return { ok: false, error: `ungroup: ${flagError}` }
+      if (!verified) return { ok: false, error: 'ungroup-identity-refused: verified node identity required' }
+      const id = (args.group ?? '').trim()
+      if (!id) return { ok: false, error: 'ungroup requires --group <id>' }
+      const workspace = await this.loadForEdit()
+      const source = sourceProject(workspace, sourceNodeId)
+      if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+      if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
+        return { ok: false, error: 'source node is not a control-capable agent' }
+      }
+      // Resolve and authorize inside the serialized operation, after its awaited load. A queued
+      // request must not inherit an earlier group-kind or creator verdict (including after stop).
+      const owner = this.ownership.ownerOf(id)
+      if (!owner || owner.sourceNodeId !== sourceNodeId) return this.ownershipRefusal('ungroup', sourceNodeId, id)
+      if (owner.projectId !== source.project.id) return { ok: false, error: 'ungroup: group is not in the caller project' }
+      const project = source.project
+      const matches = project.nodes.filter(node => node.id === id)
+      if (matches.length !== 1 || matches[0].kind !== 'group') {
+        return { ok: false, error: 'ungroup: target must be an existing group' }
+      }
+      const children = project.nodes.filter(node => node.parentId === id)
+      for (const child of children) {
+        const proof = this.ownership.ownerOf(child.id)
+        if (!proof || proof.sourceNodeId !== sourceNodeId || proof.projectId !== project.id) {
+          return this.ownershipRefusal('ungroup', sourceNodeId, child.id)
+        }
+      }
+      project.nodes = ungroupPersistedNodes(project.nodes, id).nodes
+      project.ropes = project.ropes?.filter(edge => edge.source !== id && edge.target !== id)
+      project.bridges = project.bridges?.filter(edge => edge.source !== id && edge.target !== id)
+      if (!await this.castAndSave(workspace)) return { ok: false, error: 'ungroup-not-saved: canvas control is stopping' }
+      this.ownership.forget(id)
+      await this.publishPersisted([project.id])
+      return { ok: true, message: `ungrouped ${id}; promoted ${children.length} child node(s)`,
+        result: { groupId: id, promoted: children.map(node => node.id) } }
+    })
+  }
+
   link(
     sourceNodeId: string,
     args: Record<string, string>,

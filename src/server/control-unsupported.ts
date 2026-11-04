@@ -84,6 +84,8 @@ export interface ServerEditionControlActions {
     args: Record<string, string>,
     verified: boolean
   ): Promise<ServerControlReply>
+  /** Optional for older action adapters; absence remains an explicit unsupported refusal. */
+  ungroup?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   link(
     sourceNodeId: string,
     args: Record<string, string>,
@@ -118,6 +120,7 @@ const SERVER_V1_VERBS: ReadonlySet<string> = new Set([
   'close',
   'link',
   'group',
+  'ungroup',
   'rename',
   'color',
   'send',
@@ -181,6 +184,10 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
         return actions.openAgent(nodeId, command.args, verified)
       case 'close':
         return actions.close(nodeId, command.args, verified)
+      case 'ungroup':
+        return actions.ungroup ? actions.ungroup(nodeId, command.args, verified) : {
+          ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: unsupportedServerVerbMessage(verb)
+        }
       case 'link':
         return actions.link(nodeId, command.args, verified)
       case 'group':

@@ -233,6 +233,19 @@ describe('initServerCanvasControl', () => {
     })
     expect(paneOwner).not.toHaveBeenCalled()
     expect(sendEnvelope).not.toHaveBeenCalled()
+
+    // Production boot wiring reaches ungroup, with the creator proof from that actual open.
+    const grouped = await runtime.handler({ verb: 'group', nodeId: 'source', args: { nodes: openedId }, verified: true })
+    expect(grouped.ok).toBe(true)
+    const groupId = (grouped.result as { groupId: string }).groupId
+    const createsBefore = vi.mocked(pty.createHeadless).mock.calls.length
+    expect(await runtime.handler({ verb: 'ungroup', nodeId: 'source', args: { group: groupId }, verified: true }))
+      .toMatchObject({ ok: true, result: { promoted: [openedId] } })
+    expect(workspace.projects[0].nodes.some(n => n.id === groupId)).toBe(false)
+    expect(workspace.projects[0].nodes.find(n => n.id === openedId)?.parentId).toBeUndefined()
+    expect(vi.mocked(pty.createHeadless).mock.calls.length).toBe(createsBefore)
+    expect(pty.destroySession).not.toHaveBeenCalled()
+    expect(shell.submitted).toHaveLength(1)
   })
 
   it('wires permitted delivery through paste-settle-submit on the first fresh pane message', async () => {
