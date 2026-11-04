@@ -196,7 +196,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
         )}
         <span className="group-node__name-size">
           <span className="group-node__name-mirror" aria-hidden="true">
-            {data.title || '\u00a0'}
+            {data.title.replace(/[\r\n]/g, '') || '\u00a0'}
           </span>
           <input
             className="group-node__name nodrag"
