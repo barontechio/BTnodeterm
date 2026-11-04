@@ -41,55 +41,60 @@ vi.mock('../core/exec-path', async (original) => {
 /** Real SSH authentication and exec channels; all commands run under a temporary remote HOME. */
 describe.skipIf(process.platform === 'win32')('Server SSH transport composition', () => {
   it.each(['0', '1'])('unlocks, reads/writes and reconnects over transport %s', async (native) => {
-    const previous = process.env.NODETERM_NATIVE_SSH; process.env.NODETERM_NATIVE_SSH = native
+    const previous = process.env.NODETERM_NATIVE_SSH
     const previousConfig = process.env.NODETERM_TEST_SSH_CONFIG
     const previousCalls = process.env.NODETERM_TEST_SSH_CALLS
-    const root = testTmpDir('server-ssh-e2e-'); const remote = path.join(root, 'remote'); fs.mkdirSync(remote)
-    if (!sshFixture.executable) {
-      sshFixture.executable = path.join(testTmpDir('ssh-fixture-bin-'), 'ssh')
-      const realSsh = (await vi.importActual<typeof import('../core/exec-path')>('../core/exec-path'))
-        .findExecutableSync('ssh', ['/usr/bin/ssh', '/usr/local/bin/ssh'])
-      if (!realSsh) throw new Error('OpenSSH client required for protocol fixture')
-      fs.writeFileSync(sshFixture.executable, `#!/bin/sh\nset -eu\n: "\${NODETERM_TEST_SSH_CONFIG:?}" "\${NODETERM_TEST_SSH_CALLS:?}"\nprintf '%s\\n' "$1" >> "$NODETERM_TEST_SSH_CALLS"\nexec ${posixQuote(realSsh)} -F "$NODETERM_TEST_SSH_CONFIG" "$@"\n`, { mode: 0o700 })
-    }
-    const key = ed25519KeyPair({ passphrase: 'fixture-only', cipher: 'aes256-cbc', rounds: 1 }); const host = ed25519KeyPair()
-    const identityFile = path.join(root, 'identity'); fs.writeFileSync(identityFile, key.private, { mode: 0o600 })
     const clients = new Set<Connection>(); const children = new Set<ChildProcess>()
-    const sshd = new Server({ hostKeys: [host.private] }, (client) => {
-      clients.add(client); client.on('close', () => clients.delete(client)); client.on('error', () => {})
-      client.on('authentication', (ctx) => ctx.method === 'publickey' ? ctx.accept() : ctx.reject(['publickey']))
-      client.on('ready', () => client.on('session', (accept) => {
-        accept().on('exec', (acceptExec, _reject, info) => {
-          const channel = acceptExec()
-          const child = spawn('/bin/sh', ['-c', info.command], { cwd: remote,
-            env: { ...process.env, HOME: remote, USERPROFILE: remote } })
-          children.add(child); channel.pipe(child.stdin); child.stdin.on('error', () => {})
-          child.stdout.pipe(channel, { end: false }); child.stderr.pipe(channel.stderr, { end: false })
-          child.on('close', (code) => { children.delete(child); channel.exit(code ?? 1); channel.end() })
-          channel.on('close', () => { if (child.exitCode === null) child.kill() })
-        })
-      }))
-    })
-    await new Promise<void>((resolve) => sshd.listen(0, '127.0.0.1', resolve))
-    const port = (sshd.address() as AddressInfo).port
-    const config = path.join(root, 'ssh_config'); const known = path.join(root, 'known_hosts')
-    fs.writeFileSync(known, `[127.0.0.1]:${port} ${host.public}\n`)
-    fs.writeFileSync(config, `Host *\n  UserKnownHostsFile ${known}\n  GlobalKnownHostsFile ${known}\n  IdentitiesOnly yes\n`)
-    process.env.NODETERM_TEST_SSH_CONFIG = config
-    process.env.NODETERM_TEST_SSH_CALLS = path.join(root, 'ssh-calls')
-    const resolved = execFileSync(sshFixture.executable, ['-G', '-p', String(port), '-l', 'fixture', '127.0.0.1'], { encoding: 'utf8' })
-    expect(resolved).toContain(`userknownhostsfile ${known}\n`)
-    expect(resolved).toContain(`globalknownhostsfile ${known}\n`)
-    fs.writeFileSync(process.env.NODETERM_TEST_SSH_CALLS, '')
-    const platform = fakePlatform({ isOwnerClient: (id) => id === 1 || id === 2 }); platform.clients.push(1, 2)
-    initPlatform(platform)
-    const connected: string[] = []
-    let savedTarget: { server: SshConnection; remoteCwd: string } | undefined
-    const service = registerServerSshProjects({ platform, enabled: true, settings: () => DEFAULT_SETTINGS, projectTarget: () => savedTarget,
-      onConnected: async (id) => { connected.push(id) } })
-    const call = (method: string, ...args: unknown[]): any => platform.handlers[method](1, ...args)
+    let cleanupServer: Server | undefined
+    let cleanupService: ReturnType<typeof registerServerSshProjects> | undefined
     let transcripts: ReturnType<typeof createServerRemoteTranscripts> | undefined
     try {
+      process.env.NODETERM_NATIVE_SSH = native
+      const root = testTmpDir('server-ssh-e2e-'); const remote = path.join(root, 'remote'); fs.mkdirSync(remote)
+      if (!sshFixture.executable) {
+        sshFixture.executable = path.join(testTmpDir('ssh-fixture-bin-'), 'ssh')
+        const realSsh = (await vi.importActual<typeof import('../core/exec-path')>('../core/exec-path'))
+          .findExecutableSync('ssh', ['/usr/bin/ssh', '/usr/local/bin/ssh'])
+        if (!realSsh) throw new Error('OpenSSH client required for protocol fixture')
+        fs.writeFileSync(sshFixture.executable, `#!/bin/sh\nset -eu\n: "\${NODETERM_TEST_SSH_CONFIG:?}" "\${NODETERM_TEST_SSH_CALLS:?}"\nprintf '%s\\n' "$1" >> "$NODETERM_TEST_SSH_CALLS"\nexec ${posixQuote(realSsh)} -F "$NODETERM_TEST_SSH_CONFIG" "$@"\n`, { mode: 0o700 })
+      }
+      const key = ed25519KeyPair({ passphrase: 'fixture-only', cipher: 'aes256-cbc', rounds: 1 }); const host = ed25519KeyPair()
+      const identityFile = path.join(root, 'identity'); fs.writeFileSync(identityFile, key.private, { mode: 0o600 })
+      const sshd = new Server({ hostKeys: [host.private] }, (client) => {
+        clients.add(client); client.on('close', () => clients.delete(client)); client.on('error', () => {})
+        client.on('authentication', (ctx) => ctx.method === 'publickey' ? ctx.accept() : ctx.reject(['publickey']))
+        client.on('ready', () => client.on('session', (accept) => {
+          accept().on('exec', (acceptExec, _reject, info) => {
+            const channel = acceptExec()
+            const child = spawn('/bin/sh', ['-c', info.command], { cwd: remote,
+              env: { ...process.env, HOME: remote, USERPROFILE: remote } })
+            children.add(child); channel.pipe(child.stdin); child.stdin.on('error', () => {})
+            child.stdout.pipe(channel, { end: false }); child.stderr.pipe(channel.stderr, { end: false })
+            child.on('close', (code) => { children.delete(child); channel.exit(code ?? 1); channel.end() })
+            channel.on('close', () => { if (child.exitCode === null) child.kill() })
+          })
+        }))
+      })
+      cleanupServer = sshd
+      await new Promise<void>((resolve) => sshd.listen(0, '127.0.0.1', resolve))
+      const port = (sshd.address() as AddressInfo).port
+      const config = path.join(root, 'ssh_config'); const known = path.join(root, 'known_hosts')
+      fs.writeFileSync(known, `[127.0.0.1]:${port} ${host.public}\n`)
+      fs.writeFileSync(config, `Host *\n  UserKnownHostsFile ${known}\n  GlobalKnownHostsFile ${known}\n  IdentitiesOnly yes\n`)
+      process.env.NODETERM_TEST_SSH_CONFIG = config
+      process.env.NODETERM_TEST_SSH_CALLS = path.join(root, 'ssh-calls')
+      const resolved = execFileSync(sshFixture.executable, ['-G', '-p', String(port), '-l', 'fixture', '127.0.0.1'], { encoding: 'utf8' })
+      expect(resolved).toContain(`userknownhostsfile ${known}\n`)
+      expect(resolved).toContain(`globalknownhostsfile ${known}\n`)
+      fs.writeFileSync(process.env.NODETERM_TEST_SSH_CALLS, '')
+      const platform = fakePlatform({ isOwnerClient: (id) => id === 1 || id === 2 }); platform.clients.push(1, 2)
+      initPlatform(platform)
+      const connected: string[] = []
+      let savedTarget: { server: SshConnection; remoteCwd: string } | undefined
+      const service = registerServerSshProjects({ platform, enabled: true, settings: () => DEFAULT_SETTINGS, projectTarget: () => savedTarget,
+        onConnected: async (id) => { connected.push(id) } })
+      cleanupService = service
+      const call = (method: string, ...args: unknown[]): any => platform.handlers[method](1, ...args)
       const connection = { host: '127.0.0.1', port, user: 'fixture', identityFile }
       savedTarget = { server: connection, remoteCwd: remote }
       await call(IPC.sshSave, { ...connection, id: 'fixture', label: 'Fixture' })
@@ -239,13 +244,22 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(connected).toEqual(['fixture', 'fixture'])
       expect(fs.readFileSync(known, 'utf8')).toBe(`[127.0.0.1]:${port} ${host.public}\n`)
     } finally {
-      hookServer.stop(); hookServer.clearNodeAuthSecretForTests()
-      transcripts?.dispose(); service.close(); resetNativeMuxForTests(); resetPlatformForTests()
-      for (const child of children) child.kill(); for (const client of clients) client.end()
-      await new Promise<void>((resolve) => sshd.close(() => resolve()))
-      if (previous === undefined) delete process.env.NODETERM_NATIVE_SSH; else process.env.NODETERM_NATIVE_SSH = previous
-      if (previousConfig === undefined) delete process.env.NODETERM_TEST_SSH_CONFIG; else process.env.NODETERM_TEST_SSH_CONFIG = previousConfig
-      if (previousCalls === undefined) delete process.env.NODETERM_TEST_SSH_CALLS; else process.env.NODETERM_TEST_SSH_CALLS = previousCalls
+      try {
+        try {
+          hookServer.stop(); hookServer.clearNodeAuthSecretForTests()
+          transcripts?.dispose(); cleanupService?.close()
+        } finally {
+          resetNativeMuxForTests(); resetPlatformForTests()
+          for (const child of children) child.kill(); for (const client of clients) client.end()
+          if (cleanupServer?.address()) {
+            await new Promise<void>((resolve) => cleanupServer!.close(() => resolve()))
+          }
+        }
+      } finally {
+        if (previous === undefined) delete process.env.NODETERM_NATIVE_SSH; else process.env.NODETERM_NATIVE_SSH = previous
+        if (previousConfig === undefined) delete process.env.NODETERM_TEST_SSH_CONFIG; else process.env.NODETERM_TEST_SSH_CONFIG = previousConfig
+        if (previousCalls === undefined) delete process.env.NODETERM_TEST_SSH_CALLS; else process.env.NODETERM_TEST_SSH_CALLS = previousCalls
+      }
     }
   }, 25_000)
 })
