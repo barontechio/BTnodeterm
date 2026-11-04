@@ -75,3 +75,24 @@ Owner disconnection, RPC completion, account or harness changes and connection r
 the read. This owner-only API does not authorize agent context links, quota access or background
 meters; those require separate adapters. Real encrypted-key loopback tests exercise the OpenSSH
 and native transports with managed-account Codex pages and wrong-owner refusal.
+
+
+## Agent context links without an open tab
+
+Connected Claude and Codex nodes can provide bounded transcript/summary context over the existing
+context-link hook route. The Server derives directed edges from saved canvases; an agent must
+present its valid per-node identity token as well as the hook bearer. Legacy/foreign unverified
+callers retain existing local behavior but cannot use the new remote reader. Owner chat permission
+is independent and never substitutes for that agent proof.
+
+Each request binds the caller's unique project, saved/effective session, harness, selected account
+and (when remote) endpoint/generation. It verifies the target against the linked session/account,
+rechecks the saved directed edge before queued execution and after IO, and revokes on link-map
+publication, cancellation, timeout or completion. An unrelated link-map update can conservatively
+refuse an in-flight remote read; a fresh request uses the new map. Normal POST-body completion is
+not cancellation. No detached continuation retains authority and no browser tab is required.
+
+The same strict Claude/Codex locator reads at most 2 MiB plus lookbehind, under the reader's
+32-request/two-per-target concurrency and 30-second deadline. Shared context-link formatters render
+the tail. Missing Python, unsupported harnesses, stale state and transport errors do not fall back
+to local files. Remote terminal capture, subagent files and opencode export remain unavailable.

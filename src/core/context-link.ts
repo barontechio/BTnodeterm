@@ -91,9 +91,21 @@ let deps: ContextLinkDeps = {}
  * those answers. It may classify remote records while omitting
  * their read adapters; those records must then refuse rather than search this machine.
  */
+export interface ContextLinkRequestScope {
+  signal?: AbortSignal
+  /** Host-only live identity proof; an absent proof grants no remote agent read. */
+  verified?(): boolean
+}
+export interface RemoteContextReadScope extends ContextLinkRequestScope {
+  callerId: string
+  current(): boolean
+}
+
 export interface ContextLinkDeps {
   /** True for saved or live remote records, including disconnected/unmounted nodes. */
   isRemoteNode?: (nodeId: string) => boolean
+  /** Request-specific agent read. Independent of owner history and arbitrary hook paths. */
+  readRemoteTranscript?(node: ContextLinkInfo, scope: RemoteContextReadScope): Promise<string | null>
   /** Read (at most `maxBytes` of) a file on a remote node's host. null = unreadable. */
   readRemoteFile?: (nodeId: string, filePath: string, maxBytes: number) => Promise<string | null>
   /** Run one command on a remote node's host and return stdout. null = it failed. */
@@ -260,6 +272,7 @@ export async function handleContextLinkRequest(req: {
   verb: string
   nodeId: string
   args: Record<string, string>
+  scope?: ContextLinkRequestScope
 }): Promise<string> {
   if (!req.nodeId) return 'Not a nodeterm session — nothing to read.'
   if (!CONTEXT_LINK_VERBS.includes(req.verb as ContextLinkVerb)) {
@@ -278,13 +291,21 @@ export async function handleContextLinkRequest(req: {
       ? JSON.stringify([node.id, node.note]) : transcriptIdentity(node)
     const metadata = (authorizedLinks[req.nodeId] ?? []).filter((node) => node.id === targetId)
     const binding = metadata.length === 1 ? identity(metadata[0]) : undefined
+    const revision = linkRevision
     const current = () => {
       const matches = (authorizedLinks[req.nodeId] ?? []).filter((entry) => entry.id === targetId)
-      return !!binding && matches.length === 1 && identity(matches[0]) === binding
+      return !req.scope?.signal?.aborted && !!binding && matches.length === 1 && identity(matches[0]) === binding
     }
     const changed = 'Linked context changed during the read. Refresh the links and try again.'
     if (!current()) return changed
-    const answer = await renderContextLink(doc, req.verb as ContextLinkVerb, req.args, fetchers)
+    const scopedFetchers: ContextLinkFetch = deps.readRemoteTranscript ? { ...fetchers,
+      transcript: (node) => deps.isRemoteNode?.(node.id)
+        ? deps.readRemoteTranscript!(metadata[0], { ...req.scope, callerId: req.nodeId,
+          // Never resurrect an old remote request after link removal/recreation.
+          current: () => revision === linkRevision && current() })
+        : fetchTranscript(node)
+    } : fetchers
+    const answer = await renderContextLink(doc, req.verb as ContextLinkVerb, req.args, scopedFetchers)
     return current() ? answer : changed
   } catch (e) {
     console.warn('[context-link] read failed', e)

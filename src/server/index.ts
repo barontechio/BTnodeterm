@@ -143,7 +143,7 @@ import { presenceHub } from '../core/presence/hub'
 import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
 import { createCanvasAuthority, type CanvasAuthority } from '../core/canvas-authority'
 import { wireAgentStatus } from './agent-status'
-import { initServerContextLink } from './context-link'
+import { initServerContextLink, deriveLinkMap } from './context-link'
 import { createServerWorkspaceWatcher, outsideEditPublisher } from './workspace-external-watch'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 import { registerChatCatalogIpc } from '../core/chat-catalog'
@@ -677,7 +677,12 @@ export async function startServer(
   registerStationHandoverIpc(platform, () => canvasControl?.stationHandovers ?? null)
   const remoteTranscripts = createServerRemoteTranscripts({ platform, enabled: config.sshProjects === true,
     workspace: workspaceStore, pty: ptyManager, settings: () => settingsStore.get(),
-    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects })
+    sessionOf: (id) => mirrorEntry(id)?.sessionId, ssh: sshProjects,
+    contextPermission: (callerId, targetId) => {
+      const map = deriveLinkMap({ canvases: () => workspaceStore.persistedCanvases(),
+        agentSessions: () => sessionNameSweepEntries() })
+      return (map[callerId] ?? []).filter((entry) => entry.id === targetId).length === 1
+    } })
   const {
     contextTail,
     geminiContextTail,
@@ -925,6 +930,7 @@ export async function startServer(
   // src/server/context-link.ts.
   const contextLink = initServerContextLink({
     ptyManager,
+    readRemoteTranscript: remoteTranscripts.readLinkedTranscript,
     isRemoteNode: (id) => isRemoteWorkspaceNode(workspaceStore, ptyManager, id),
     canvases: () => workspaceStore.persistedCanvases()
   })

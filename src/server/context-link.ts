@@ -15,7 +15,7 @@
 // canvas and get a link map that is correct with zero tabs open.
 import type { ContextLinkMap } from '../shared/types'
 import { buildBackgroundLinkMaps } from '../shared/context-link-map'
-import { initContextLink, setContextLinks } from '../core/context-link'
+import { initContextLink, setContextLinks, type ContextLinkDeps } from '../core/context-link'
 import { transcriptPathOf } from '../core/context-link-core'
 import { sessionNameSweepEntries } from '../core/agent-status-mirror'
 import type { PtyManager } from '../core/pty-manager'
@@ -42,6 +42,7 @@ export interface ServerContextLinkDeps {
   transcriptOf?: (nodeId: string) => string
   /** Include saved/disconnected remote records; absent read adapters must never imply local. */
   isRemoteNode?: (nodeId: string) => boolean
+  readRemoteTranscript?: ContextLinkDeps['readRemoteTranscript']
   sweepMs?: number
 }
 
@@ -83,7 +84,7 @@ export function initServerContextLink(deps: ServerContextLinkDeps): {
   const transcriptOf = deps.transcriptOf ?? transcriptPathOf
 
   // Classification is independent of reader support and connection liveness.
-  initContextLink(deps.ptyManager, { isRemoteNode: deps.isRemoteNode })
+  initContextLink(deps.ptyManager, { isRemoteNode: deps.isRemoteNode, readRemoteTranscript: deps.readRemoteTranscript })
 
   // Skip a rewrite when nothing a link document depends on has changed. The map alone is not the
   // whole input — a link's transcript path is resolved at write time from the hook-fed table, and

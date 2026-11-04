@@ -15,12 +15,14 @@ function fixture() {
     cwd: '/repo', group: null, title: 'Node', color: '#000', position: { x: 0, y: 0 }, size: { width: 640, height: 440 } }
   const settings = structuredClone(DEFAULT_SETTINGS)
   settings.claudeAccounts = [{ id: 'managed', label: 'Account', host: sshHostKey(conn), createdAt: Date.now() }]
-  let ids = ['p']; let remote = true; let connected = true; let generation = 'g1'; let session = sid
+  let ids = ['p']; let remote = true; let connected = true; let generation = 'g1'; let session = sid; let callerSession = 'caller-session'; let edge = true
+  const callerNode = { ...node, id: 'caller', agentSessionId: callerSession }
   const signals: AbortSignal[] = []
   const run = vi.fn(async () => result)
   const api = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings,
-    sessionOf: () => session, pty: { sshRemoteForNode: () => undefined }, workspace: {
-      projectIdsForNode: () => ids, getNodeForHostAction: () => node,
+    sessionOf: (id) => id === 'caller' ? callerSession : session,
+    contextPermission: (caller, target) => edge && caller === 'caller' && target === 'node', pty: { sshRemoteForNode: () => undefined }, workspace: {
+      projectIdsForNode: () => ids, getNodeForHostAction: (id) => id === 'caller' ? callerNode : node,
       relayNodePlacements: () => ids.map((projectId) => ({ projectId, node })),
       sshProjectIdForNode: () => remote ? 'p' : undefined,
       projectTargetInfo: () => ({ name: 'Project', cwd: '/repo', ...(remote ? { ssh: { server: conn, remoteCwd: '/repo' } } : {}) })
@@ -32,7 +34,8 @@ function fixture() {
         return work()
       }
     } })
-  return { api, platform, node, settings, run, signals, changeSession: () => { session = 'replacement' }, setIds: (value: string[]) => { ids = value },
+  return { api, platform, node, callerNode, settings, run, signals, revokeEdge: () => { edge = false },
+    changeCaller: () => { callerSession = 'replacement' }, changeSession: () => { session = 'replacement' }, setIds: (value: string[]) => { ids = value },
     local: () => { remote = false }, disconnect: () => { connected = false }, reconnect: () => { connected = true; generation = 'g2' } }
 }
 
@@ -120,4 +123,43 @@ describe('Server SSH transcript routing and caller lifetime', () => {
     expect(await late).toMatchObject({ ok: false, reason: 'remote-reader-permission-required' })
     expect(f.run).not.toHaveBeenCalled(); f.api.dispose()
   })
+})
+
+
+describe('Server remote linked-context permission is independent of owner history', () => {
+  const linked = { id: 'node', title: 'Target', agentId: 'claude', sessionId: sid, accountId: 'managed', cwd: '/repo' }
+  const scope = () => ({ callerId: 'caller', verified: () => true, current: () => true, signal: new AbortController().signal })
+
+  it('serves a verified directed agent read with zero browser tabs', async () => {
+    const f = fixture(); f.platform.clients.length = 0
+    expect(await f.api.readLinkedTranscript(linked, scope())).toBe('data')
+    expect(await f.api.reader.readPage(q, page)).toMatchObject({ ok: false, reason: 'remote-reader-permission-required' })
+    f.api.dispose()
+  })
+
+  it('owner history does not grant agent read permission or override missing/wrong linked account metadata', async () => {
+    const f = fixture()
+    for (const change of [ { ...scope(), verified: undefined }, { ...scope(), verified: () => false },
+      { ...scope(), current: () => false }, { ...scope(), callerId: 'unlinked' } ]) {
+      expect(await f.api.rpcScope(1, () => f.api.readLinkedTranscript(linked, change))).toBeNull()
+    }
+    expect(await f.api.readLinkedTranscript({ ...linked, accountId: undefined }, scope())).toBeNull()
+    expect(f.run).not.toHaveBeenCalled(); f.api.dispose()
+  })
+
+  it.each(['edge', 'caller', 'caller-account', 'target-session', 'generation', 'abort', 'proof'] as const)(
+    'discards linked data after %s changes during IO', async (change) => {
+      const f = fixture(); const abort = new AbortController(); let verified = true
+      let finish!: (value: typeof result) => void
+      f.run.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+      const read = f.api.readLinkedTranscript(linked, { ...scope(), signal: abort.signal, verified: () => verified })
+      if (change === 'edge') f.revokeEdge()
+      if (change === 'caller') f.changeCaller()
+      if (change === 'caller-account') f.callerNode.accountId = 'other'
+      if (change === 'target-session') f.node.agentSessionId = 'replacement'
+      if (change === 'generation') f.reconnect()
+      if (change === 'abort') abort.abort()
+      if (change === 'proof') verified = false
+      finish(result); expect(await read).toBeNull(); f.api.dispose()
+    })
 })

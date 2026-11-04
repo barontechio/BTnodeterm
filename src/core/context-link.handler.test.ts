@@ -407,3 +407,35 @@ it('starts another remote read after an edit while the first remote read is stil
   expect(await second).toContain('ship it')
   await refresh
 })
+
+
+it('passes current directed-edge authority to a remote reader without requiring a hook path', async () => {
+  let current!: () => boolean; let release!: (value: string) => void
+  const readRemoteTranscript = vi.fn((_node, scope) => {
+    current = scope.current
+    return new Promise<string>((resolve) => { release = resolve })
+  })
+  start({ isRemoteNode: () => true, readRemoteTranscript })
+  const target = { id: 'new-remote', title: 'Remote', agentId: 'codex', sessionId: 'codex-session', accountId: 'account' }
+  await setLinks({ caller: [target] })
+  const abort = new AbortController()
+  const read = handleContextLinkRequest({ verb: 'transcript', nodeId: 'caller', args: {},
+    scope: { signal: abort.signal, verified: () => true } })
+  expect(readRemoteTranscript).toHaveBeenCalledWith(target, expect.objectContaining({ callerId: 'caller', signal: abort.signal }))
+  expect(current()).toBe(true)
+  await setLinks({}); await setLinks({ caller: [target] })
+  expect(current()).toBe(false)
+  // The adapter uses current() before releasing bytes; this stand-in demonstrates the fence.
+  release(current() ? CLAUDE_LINE : '')
+  expect(await read).not.toContain('ship it')
+})
+
+it('refuses to deliver a response after its HTTP request was aborted', async () => {
+  let release!: (value: string) => void
+  start({ isRemoteNode: () => true, readRemoteTranscript: () => new Promise((resolve) => { release = resolve }) })
+  await setLinks({ caller: [{ id: 'remote', title: 'Remote', agentId: 'claude', sessionId: 'session' }] })
+  const abort = new AbortController()
+  const read = handleContextLinkRequest({ verb: 'transcript', nodeId: 'caller', args: {}, scope: { signal: abort.signal } })
+  abort.abort(); release(CLAUDE_LINE)
+  expect(await read).toContain('changed during the read')
+})

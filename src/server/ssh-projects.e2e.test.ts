@@ -15,6 +15,8 @@ import { IPC } from '../shared/ipc'
 import { registerServerSshProjects } from './ssh-projects'
 import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
 import { createServerRemoteTranscripts } from './remote-transcripts'
+import { handleContextLinkRequest, initContextLink, setContextLinks } from '../core/context-link'
+import type { PtyManager } from '../core/pty-manager'
 import { remoteCodexHome } from '../core/codex-accounts-core'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 
@@ -92,8 +94,9 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       const node: CanvasNodeState = { id: 'remote-node', kind: 'terminal', agentId: 'claude', accountId: 'managed', agentSessionId: sid,
         title: 'Remote', cwd: remote, color: '#000', group: null, position: { x: 0, y: 0 }, size: { width: 640, height: 440 } }
       transcripts = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings, sessionOf: () => sid,
+        contextPermission: (caller, target) => caller === 'reader-node' && target === 'remote-node',
         pty: { sshRemoteForNode: () => undefined }, ssh: service, workspace: {
-          projectIdsForNode: () => savedTarget ? ['fixture'] : [], getNodeForHostAction: () => node,
+          projectIdsForNode: () => savedTarget ? ['fixture'] : [], getNodeForHostAction: (id) => id === 'reader-node' ? { ...node, id } : node,
           relayNodePlacements: () => [{ projectId: 'fixture', node }],
           sshProjectIdForNode: () => 'fixture', projectTargetInfo: () => savedTarget ? { name: 'Fixture', ssh: savedTarget } : null
         } })
@@ -122,6 +125,16 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(JSON.stringify(codexChat.messages)).toContain('remote Codex answer')
       expect(await platform.handlers[IPC.chatReadTranscript](3, sid, remote, 'managed', 'remote-node', 'codex', { maxBytes: 65536 }))
         .toMatchObject({ found: false, unreadable: true })
+      initContextLink({ getTmuxBin: () => null } as unknown as PtyManager, {
+        isRemoteNode: transcripts.isRemoteNode, readRemoteTranscript: transcripts.readLinkedTranscript
+      })
+      await setContextLinks({ 'reader-node': [{ id: 'remote-node', title: 'Remote Codex', agentId: 'codex', sessionId: sid, accountId: 'managed' }] })
+      const linked = await handleContextLinkRequest({ verb: 'transcript', nodeId: 'reader-node', args: {},
+        scope: { signal: new AbortController().signal, verified: () => true } })
+      expect(linked).toContain('remote Codex answer')
+      expect(await handleContextLinkRequest({ verb: 'transcript', nodeId: 'reader-node', args: {} }))
+        .not.toContain('remote Codex answer')
+      await setContextLinks({})
       node.agentId = 'claude'
       savedTarget = undefined
       expect(service.refForProject('fixture')).toBeUndefined()

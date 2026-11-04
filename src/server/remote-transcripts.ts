@@ -1,3 +1,6 @@
+import { stableStringify } from '../shared/canvas-mutations'
+import type { ContextLinkInfo } from '../shared/types'
+import type { RemoteContextReadScope } from '../core/context-link'
 import { capabilityAgentId } from '../shared/agents/config'
 import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
 import { sshEndpointKey, sshHostKey, type SshConnection } from '../shared/ssh'
@@ -18,6 +21,8 @@ interface Dependencies {
   pty: Pick<PtyManager, 'sshRemoteForNode'>
   settings(): Settings
   sessionOf(nodeId: string): string | undefined
+  /** Current directed edge in this host's saved canvases; absent means no agent permission. */
+  contextPermission?(callerId: string, targetId: string): boolean
   ssh: {
     /** Must be the shell's verified reference, including the current saved endpoint/folder. */
     refForProject(projectId: string): { conn: SshConnection; controlPath: string; remoteCwd?: string } | undefined
@@ -85,6 +90,57 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     }
   })
   const reader = makeReader('claude'); const codexReader = makeReader('codex')
-  return { reader, codexReader, isRemoteNode, supported, rpcScope, forgetClient: (id: number) => owners.forget(id),
-    dispose: () => { reader.dispose(); codexReader.dispose(); owners.dispose() } }
+  const linkedRequests = new AsyncLocalStorage<{ current(): boolean; signal: AbortSignal }>()
+  const linkedReader = new RemoteClaudeTranscripts({ targetFor: (id) => targetFor(id),
+    allowed: () => linkedRequests.getStore()?.current() === true,
+    run: (target, command) => deps.ssh.manager.sshRun(childArgs(target.conn, target.controlPath, command)),
+    withQueuedExecutionCheck: (current, work, options) => deps.ssh.withQueuedExecutionCheck(current, work,
+      { signal: AbortSignal.any([options.signal, linkedRequests.getStore()!.signal]) })
+  })
+  const callerIdentity = (id: string): string | null => {
+    const ids = deps.workspace.projectIdsForNode(id)
+    const node = deps.workspace.getNodeForHostAction(id)
+    const project = ids.length === 1 ? deps.workspace.projectTargetInfo(ids[0]) : null
+    if (!project || !node || node.kind !== 'terminal' || node.pendingLaunch) return null
+    const sessionId = deps.sessionOf(id) || node.agentSessionId
+    if (!sessionId || !node.agentId) return null
+    const ref = isRemoteNode(id) ? deps.ssh.refForProject(ids[0]) : undefined
+    const connectionKey = ref ? deps.ssh.manager.connectionKeyFor(ids[0]) : undefined
+    if (isRemoteNode(id) && (!ref || !connectionKey)) return null
+    const live = deps.pty.sshRemoteForNode(id)
+    if (live && (!ref || live.controlPath !== ref.controlPath || sshEndpointKey(live.conn) !== sshEndpointKey(ref.conn))) return null
+    const harness = capabilityAgentId(node.agentId)
+    const account = !node.accountId ? undefined : (harness === 'codex' ? deps.settings().codexAccounts :
+      harness === 'claude' ? deps.settings().claudeAccounts : []).find((entry) => entry.id === node.accountId)
+    if (node.accountId && (!account || account.pending || account.host !== (ref ? sshHostKey(ref.conn) : undefined))) return null
+    return stableStringify({ projectId: ids[0], project, agentId: node.agentId, sessionId,
+      savedSessionId: node.agentSessionId, accountId: node.accountId, account, cwd: node.cwd, ref, connectionKey })
+  }
+  const readLinkedTranscript = async (node: ContextLinkInfo, scope: RemoteContextReadScope): Promise<string | null> => {
+    node = { ...node }; scope = { ...scope }
+    const abort = new AbortController()
+    const signal = scope.signal ? AbortSignal.any([scope.signal, abort.signal]) : abort.signal
+    let binding: string | null
+    try { binding = callerIdentity(scope.callerId) } catch { return null }
+    const current = () => {
+      try {
+        const target = targetFor(node.id)
+        return !signal.aborted && !!binding && scope.verified?.() === true && scope.current() &&
+          deps.contextPermission?.(scope.callerId, node.id) === true && callerIdentity(scope.callerId) === binding &&
+          (node.agentId === 'claude' || node.agentId === 'codex') && supported(node.agentId, node.id) && !!target &&
+          target.accountId === node.accountId && target.sessionId === node.sessionId
+      }
+      catch { return false }
+    }
+    try {
+      if (!current() || !node.sessionId) return null
+      return await linkedRequests.run({ current, signal }, async () => {
+        const result = await linkedReader.readPage({ nodeId: node.id, sessionId: node.sessionId,
+          accountId: node.accountId, cwd: node.cwd, remoteOnly: true }, { before: null, maxBytes: 2 * 1024 * 1024 })
+        return current() && result?.ok ? result.data.toString('utf8') : null
+      })
+    } finally { abort.abort() }
+  }
+  return { reader, codexReader, readLinkedTranscript, isRemoteNode, supported, rpcScope, forgetClient: (id: number) => owners.forget(id),
+    dispose: () => { reader.dispose(); codexReader.dispose(); linkedReader.dispose(); owners.dispose() } }
 }
