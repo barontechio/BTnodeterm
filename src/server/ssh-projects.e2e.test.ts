@@ -48,6 +48,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
     let cleanupServer: Server | undefined
     let cleanupService: ReturnType<typeof registerServerSshProjects> | undefined
     let transcripts: ReturnType<typeof createServerRemoteTranscripts> | undefined
+    let bodyFailed = false
     try {
       process.env.NODETERM_NATIVE_SSH = native
       const root = testTmpDir('server-ssh-e2e-'); const remote = path.join(root, 'remote'); fs.mkdirSync(remote)
@@ -243,22 +244,37 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(service.manager.connectionKeyFor('fixture')).not.toBe(generation)
       expect(connected).toEqual(['fixture', 'fixture'])
       expect(fs.readFileSync(known, 'utf8')).toBe(`[127.0.0.1]:${port} ${host.public}\n`)
+    } catch (error) {
+      bodyFailed = true
+      throw error
     } finally {
+      const cleanupErrors: unknown[] = []
+      const release = async (action: () => unknown): Promise<void> => {
+        try { await action() } catch (error) { cleanupErrors.push(error) }
+      }
       try {
-        try {
-          hookServer.stop(); hookServer.clearNodeAuthSecretForTests()
-          transcripts?.dispose(); cleanupService?.close()
-        } finally {
-          resetNativeMuxForTests(); resetPlatformForTests()
-          for (const child of children) child.kill(); for (const client of clients) client.end()
+        await release(() => hookServer.stop())
+        await release(() => hookServer.clearNodeAuthSecretForTests())
+        await release(() => transcripts?.dispose())
+        await release(() => cleanupService?.close())
+        await release(() => resetNativeMuxForTests())
+        await release(() => resetPlatformForTests())
+        for (const child of children) await release(() => child.kill())
+        for (const client of clients) await release(() => client.end())
+        await release(async () => {
           if (cleanupServer?.address()) {
             await new Promise<void>((resolve) => cleanupServer!.close(() => resolve()))
           }
-        }
+        })
       } finally {
         if (previous === undefined) delete process.env.NODETERM_NATIVE_SSH; else process.env.NODETERM_NATIVE_SSH = previous
         if (previousConfig === undefined) delete process.env.NODETERM_TEST_SSH_CONFIG; else process.env.NODETERM_TEST_SSH_CONFIG = previousConfig
         if (previousCalls === undefined) delete process.env.NODETERM_TEST_SSH_CALLS; else process.env.NODETERM_TEST_SSH_CALLS = previousCalls
+      }
+      if (cleanupErrors.length) {
+        const error = new AggregateError(cleanupErrors, 'SSH fixture cleanup failed')
+        if (bodyFailed) console.error(error)
+        else throw error
       }
     }
   }, 25_000)
