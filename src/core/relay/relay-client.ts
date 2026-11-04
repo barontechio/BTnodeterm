@@ -242,11 +242,12 @@ export function connectRelayClient(opts: ConnectRelayClientOptions): RelayClient
       onTunnel(kind, payload)
     },
     onClose: () => {
-      closed = true
       if (!socket) {
-        early.push(() => opts.onClose())
+        // Preserve arrival order: an encrypted denial queued before this close still matters.
+        early.push(() => { closed = true; opts.onClose() })
         return
       }
+      closed = true
       opts.onClose()
     }
   })

@@ -1,3 +1,4 @@
+import { isBrowserRuntime } from './runtime'
 import { isBrowserTeamConnection } from './browser-team/connections'
 import { DEFAULT_SETTINGS } from '../../shared/types'
 // buildRelayApi — assemble a full `NodeTerminalApi` for a remote-desktop (relay) project tab.
@@ -90,7 +91,7 @@ export function buildRelayApi(
   const carrier = transport ?? new RelayFrameTransport(connectionId)
   // A hosted tab's role, once the host has said it. Unknown = the lowest role (hosted-gate.ts).
   let hostedRole: HostedRole | null = null
-  const browser = isBrowserTeamConnection(connectionId)
+  const browser = isBrowserRuntime() || isBrowserTeamConnection(connectionId)
   const hosted = browser || opts?.hosted === true
   const client = hosted ? new RoleGatedRpcClient(carrier, () => hostedRole) : new RpcClient(carrier)
 

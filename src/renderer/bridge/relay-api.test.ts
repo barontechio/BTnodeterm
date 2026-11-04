@@ -437,3 +437,29 @@ it('browser joined API cannot fall through to the owning local Server administra
     ;(globalThis as Record<string, unknown>).window = saved
   }
 })
+
+it('offline browser relay API never inherits owning Server administration; Desktop retains its contract', async () => {
+  const runtime = await import('./runtime')
+  const { offlineRelayApi } = await import('../session/offline-relay-session')
+  const { local } = fakeLocalApi()
+  const saved = (globalThis as Record<string, unknown>).window
+  const admin = vi.fn(async () => undefined)
+  Object.assign(local, { settings: { save: admin }, ssh: { list: admin } })
+  ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+  const shell = vi.spyOn(runtime, 'isBrowserRuntime').mockReturnValue(true)
+  try {
+    const offline = offlineRelayApi()
+    await expect(offline.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(offline.ssh.list()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(offline.settings).not.toBe(local.settings)
+    expect(offline.ssh).not.toBe(local.ssh)
+    expect(admin).not.toHaveBeenCalled()
+    shell.mockReturnValue(false)
+    const native = offlineRelayApi()
+    expect(native.settings).toBe(local.settings)
+    expect(native.ssh).toBe(local.ssh)
+  } finally {
+    shell.mockRestore()
+    ;(globalThis as Record<string, unknown>).window = saved
+  }
+})

@@ -105,7 +105,8 @@ export function createBrowserTeamJoin(broker: BrowserJoinBroker, options: {
         let token = await broker.request(BROWSER_JOIN_TOKEN, record.deviceToken) as JoinMintResult
         if (!token.ok && token.kind === 'bad-token' && !minted) { await mint(); token = await broker.request(BROWSER_JOIN_TOKEN, record.deviceToken) as JoinMintResult }
         if (!token.ok) {
-          if (token.kind === 'revoked') await update({ deviceToken: null, approvedAt: null })
+          // Keep the rejected token durable: only explicit Forget/Remove and rejoin may mint anew.
+          if (token.kind === 'revoked') await update({ approvedAt: null })
           throw new Error(`[${token.kind === 'revoked' ? 'E_JOIN_REVOKED' : token.kind === 'bad-token' ? 'E_JOIN_REFUSED' : token.kind === 'throttled' ? 'E_JOIN_THROTTLED' : 'E_JOIN_NETWORK'}] Team connection refused`)
         }
         if (!current() || token.pairingToken.length > 8192 || !allowedEndpoint(token.relayEndpoint)) throw new Error('[E_JOIN_REFUSED] Invalid relay destination or cancelled join')

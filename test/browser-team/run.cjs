@@ -39,7 +39,7 @@ const wait = async (read, description) => {
   const browserBundle = await build({ stdin: { contents: browserSource, resolveDir: repo }, bundle: true, platform: 'browser', format: 'iife', write: false, tsconfig: path.join(repo, 'tsconfig.web.json') })
   const js = browserBundle.outputFiles[0].text
   const listeners = [], sinks = new Map(), dispatched = []
-  let serial = 0, code = '', service, chrome, cdp, deviceMints = 0, joinMints = 0
+  let serial = 0, code = '', service, chrome, cdp, deviceMints = 0, joinMints = 0, revokeJoinTokens = false
   const platform = fakePlatform({ isOwnerClient: id => id === 1 })
   const server = http.createServer(async (req, res) => {
     try {
@@ -88,7 +88,7 @@ const wait = async (read, description) => {
     const target = String(input)
     if (target.endsWith('/challenge')) return new Response('{}', { status: 404 })
     if (target.endsWith('/device')) { deviceMints++; return Response.json({ deviceToken: `device-${deviceMints}` }) }
-    if (target.endsWith('/join')) { joinMints++; return Response.json({ pairingToken: 'fixture', relayEndpoint: relayUrl }) }
+    if (target.endsWith('/join')) { joinMints++; if (revokeJoinTokens) return new Response('{}', { status: 403 }); return Response.json({ pairingToken: 'fixture', relayEndpoint: relayUrl }) }
     return Response.json({ pairingToken: 'fixture', hostId: 'fixture-host', exp: 0 })
   }
   registerBrowserJoin(platform, { apiBase: 'https://fixture.invalid', relayEndpoint: relayUrl, fetch: issuer })
@@ -199,6 +199,17 @@ const wait = async (read, description) => {
       assert.equal(await peer('fixture.approved'), false)
       assert.equal((await peer('fixture.bookmarks()'))[0].approved, false)
     }
+    const revoked = await page()
+    revokeJoinTokens = true
+    const beforeRevoked = deviceMints
+    for (let attempt = 0; attempt < 2; attempt++) assert.match(await revoked('fixture.connect().then(()=>"unexpected",e=>e.message)'), /E_JOIN_REVOKED/)
+    const restored = await page(revoked.context)
+    assert.match(await restored('fixture.connect().then(()=>"unexpected",e=>e.message)'), /E_JOIN_REVOKED/)
+    assert.equal(deviceMints, beforeRevoked + 1)
+    await restored('fixture.forget()')
+    assert.match(await restored('fixture.connect().then(()=>"unexpected",e=>e.message)'), /E_JOIN_REVOKED/)
+    assert.equal(deviceMints, beforeRevoked + 2)
+    revokeJoinTokens = false
     const diskFailure = await page()
     await diskFailure('fixture.mode("fail-token")')
     const beforeDisk = deviceMints, beforeJoin = joinMints
@@ -209,7 +220,7 @@ const wait = async (read, description) => {
     await sibling('fixture.forget()')
     await wait(() => owner('fixture.closed'), 'cross-tab forget closes owner')
     assert.deepEqual(await owner('fixture.bookmarks()'), [])
-    const report = { csp: browserTeamConnectPolicy(relayUrl), separateRelayOrigin: new URL(url).host !== new URL(relayUrl).host, results, crossTabLock: 'refused', crossTabForget: 'closed', tokenWriteFailure: 'blocked-no-remint', persistenceFailure: 'refused', closeDuringPin: 'refused', deviceMints, joinMints, browser: await call('Browser.getVersion') }
+    const report = { csp: browserTeamConnectPolicy(relayUrl), separateRelayOrigin: new URL(url).host !== new URL(relayUrl).host, results, crossTabLock: 'refused', crossTabForget: 'closed', tokenWriteFailure: 'blocked-no-remint', revokedToken: 'durable-no-remint-until-forget', persistenceFailure: 'refused', closeDuringPin: 'refused', deviceMints, joinMints, browser: await call('Browser.getVersion') }
     fs.writeFileSync(path.join(temp, 'result.json'), JSON.stringify(report, null, 2))
     console.log(JSON.stringify({ evidence: temp, ...report }, null, 2))
     await call('Browser.close')

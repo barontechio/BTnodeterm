@@ -34,9 +34,9 @@ export function deadRelayTransport(): FrameTransport {
  * `sessionForProject`). It is a real relay api — the same core-bound / local split a live relay tab
  * has — over a dead carrier, so every core-bound call (pty, fs, git, workspace, files, …) rejects:
  * no terminal can be created on THIS machine's core under a node id that lives on another machine.
- * It is not a wall around this machine: like a live relay tab's api it spreads `...local`, so the
- * namespaces a relay tab keeps local (contextLink, transcripts, handoff, media, the app-global ones)
- * still act here, and its `boardLog` read answers `unsupported: true` rather than rejecting.
+ * Native Desktop retains its app-global services. Browser runtime uses the same inert base as
+ * live browser team tabs, so this fallback cannot regain owning Server administration.
+ * Its `boardLog` read answers `unsupported: true` rather than rejecting.
  * Built here rather than in session.ts because relay-api imports session.ts.
  */
 export function offlineRelayApi(): NodeTerminalApi {
