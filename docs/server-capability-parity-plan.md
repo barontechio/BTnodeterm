@@ -33,7 +33,9 @@ Additional accepted deliveries are integrated independently:
 The frozen integration at `bb90eade` passes 24,667 tests (109 skipped), typecheck and both
 production builds. One preceding full run timed out waiting for an SSH passphrase prompt;
 three isolated runs and the complete unchanged-snapshot rerun passed. The cause is not established.
-The later Git and disabled-gateway integration requires a new aggregate validation before push.
+The later frozen Git and disabled-gateway integration `1a2a57a9` passes 24,691 tests
+(109 skipped), typecheck, 90 focused checks and both production builds on Linux. Documentation-only
+delivery updates preserve that source snapshot. Fresh remote CI is required for the pushed head.
 The separately reviewed remote agent context-link phase is not integrated: a publication-boundary
 revocation defect must be fixed and independently re-reviewed first. Owner history access remains
 a separate accepted permission path.
