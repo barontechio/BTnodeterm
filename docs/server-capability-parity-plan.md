@@ -13,8 +13,13 @@ notification test using the captured API's quiet behavior (`175b6f79`), native S
 waiting for actual target acceptance instead of a fixed delay (`d86c652e`), and transfer preparation
 assertions before revocation checks (`cb1758d0`). The last change improves diagnostics; it does not
 prove the transfer failure's cause. No production authorization, timeout limit or test assertion
-was weakened. New composition checks and integrated CI remain required; the earlier 192-case
-candidate evidence and all historical failures below belong to their exact snapshots.
+was weakened. The rebased product (documentation snapshot `de4b1b35`) passes node/web typecheck and sequential
+Desktop/Server builds. Its 23-file composition run at default limits with `--maxWorkers=4` has 205
+passes and eight timeouts: all six profile cases at five seconds and the two existing plain/tmux
+happy paths at 20 seconds. The three base repair tests pass. This run is a failed gate; neither the
+unchanged production bytes nor load establishes its cause. No timeout was increased and no retry
+loop was used. The earlier 192-case candidate evidence and all historical failures below belong
+to their exact snapshots. New integrated CI and coordinator review remain required before release.
 
 ## Worktree C staging candidate (2026-11-04)
 
