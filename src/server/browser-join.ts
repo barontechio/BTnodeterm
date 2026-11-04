@@ -1,12 +1,14 @@
+import { browserTeamRelayOrigin } from './browser-join-policy'
 import type { CorePlatform } from '../core/platform'
 import { decodeJoinCode } from '../core/relay/join-code'
 import { mintDeviceToken, mintJoinToken } from '../core/relay/join-token'
 import { BROWSER_JOIN_DEVICE, BROWSER_JOIN_TOKEN } from '../shared/browser-join'
 
 /** The host's fixed relay API only; this is not a URL proxy or a route available to peers. */
-export function registerBrowserJoin(platform: CorePlatform, options: { apiBase?: string; fetch?: typeof fetch } = {}): void {
+export function registerBrowserJoin(platform: CorePlatform, options: { apiBase?: string; relayEndpoint?: string; fetch?: typeof fetch } = {}): void {
   const apiBase = options.apiBase ?? process.env.NODETERM_API_BASE ?? 'https://api.nodeterm.dev'
   const safeFetch: typeof fetch = (url, init) => (options.fetch ?? fetch)(url, { ...init, redirect: 'error', credentials: 'omit' })
+  const relayOrigin = browserTeamRelayOrigin(options.relayEndpoint)
   let pending = 0
   const run = async <T>(id: number, work: () => Promise<T>): Promise<T> => {
     if (!platform.isOwnerClient?.(id)) throw new Error('browser-join-owner-required')
@@ -27,6 +29,8 @@ export function registerBrowserJoin(platform: CorePlatform, options: { apiBase?:
   }))
   platform.handleWithSender(BROWSER_JOIN_TOKEN, (id, token: unknown) => run(id, async () => {
     if (typeof token !== 'string' || !token || token.length > 8192) throw new Error('invalid browser join token')
-    return mintJoinToken({ apiBase, deviceToken: token, fetch: safeFetch })
+    const result = await mintJoinToken({ apiBase, deviceToken: token, fetch: safeFetch })
+    if (result.ok && (!relayOrigin || browserTeamRelayOrigin(result.relayEndpoint) !== relayOrigin)) throw new Error('[E_JOIN_REFUSED] Relay origin is not enabled by this Server operator')
+    return result
   }))
 }

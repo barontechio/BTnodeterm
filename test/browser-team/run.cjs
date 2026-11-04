@@ -13,8 +13,8 @@ const wait = async (read, description) => {
   throw new Error('Timed out: ' + description)
 }
 ;(async () => {
-  await build({ stdin: { contents: `export {createHostedService} from './src/core/relay/hosted-service';export {registerBrowserJoin} from './src/server/browser-join';export {fakePlatform} from './src/core/platform-fake';export {IPC} from './src/shared/ipc';`, resolveDir: repo }, bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: path.join(temp, 'host.cjs') })
-  const { createHostedService, registerBrowserJoin, fakePlatform, IPC } = require(path.join(temp, 'host.cjs'))
+  await build({ stdin: { contents: `export {createHostedService} from './src/core/relay/hosted-service';export {registerBrowserJoin} from './src/server/browser-join';export {browserTeamConnectPolicy} from './src/server/browser-join-policy';export {fakePlatform} from './src/core/platform-fake';export {IPC} from './src/shared/ipc';`, resolveDir: repo }, bundle: true, platform: 'node', format: 'cjs', packages: 'external', outfile: path.join(temp, 'host.cjs') })
+  const { createHostedService, registerBrowserJoin, browserTeamConnectPolicy, fakePlatform, IPC } = require(path.join(temp, 'host.cjs'))
   const browserSource = `
     import {createBrowserTeamJoin} from './src/renderer/bridge/browser-team/join';
     import {BrowserTeamStore} from './src/renderer/bridge/browser-team/store';
@@ -43,7 +43,7 @@ const wait = async (read, description) => {
   const platform = fakePlatform({ isOwnerClient: id => id === 1 })
   const server = http.createServer(async (req, res) => {
     try {
-      if (req.url === '/bundle.js') { res.setHeader('content-type', 'text/javascript'); res.end(js); return }
+      if (req.url === '/bundle.js') { res.setHeader('content-type', 'text/javascript'); res.end('window.code=' + JSON.stringify(code) + ';\n' + js); return }
       if (req.url === '/broker') {
         let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 32768) throw Error('oversized') }
         const { method, args } = JSON.parse(body)
@@ -52,12 +52,16 @@ const wait = async (read, description) => {
         res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ value })); return
       }
       res.setHeader('content-type', 'text/html')
-      res.end(`<script>window.code=${JSON.stringify(code)}</script><script src="/bundle.js"></script>`)
+      res.setHeader('Content-Security-Policy', `default-src 'self'; ${browserTeamConnectPolicy(relayUrl)}`)
+      res.end('<script src="/bundle.js"></script>')
     } catch (error) { res.statusCode = 400; res.end(JSON.stringify({ error: error.message })) }
   })
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
-  const port = server.address().port, url = `http://127.0.0.1:${port}`, relayUrl = `ws://127.0.0.1:${port}/relay`
-  const wsServer = new WS.WebSocketServer({ server, path: '/relay' })
+  const port = server.address().port, url = `http://127.0.0.1:${port}`
+  const relayServer = http.createServer()
+  relayServer.listen(0, '127.0.0.1'); await once(relayServer, 'listening')
+  const relayUrl = `ws://127.0.0.1:${relayServer.address().port}/relay`
+  const wsServer = new WS.WebSocketServer({ server: relayServer, path: '/relay' })
   wsServer.on('connection', socket => {
     const listener = listeners.shift()
     if (!listener) { socket.close(); return }
@@ -87,7 +91,7 @@ const wait = async (read, description) => {
     if (target.endsWith('/join')) { joinMints++; return Response.json({ pairingToken: 'fixture', relayEndpoint: relayUrl }) }
     return Response.json({ pairingToken: 'fixture', hostId: 'fixture-host', exp: 0 })
   }
-  registerBrowserJoin(platform, { apiBase: 'https://fixture.invalid', fetch: issuer })
+  registerBrowserJoin(platform, { apiBase: 'https://fixture.invalid', relayEndpoint: relayUrl, fetch: issuer })
   service = createHostedService({ dataDir: path.join(temp, 'host'), apiBase: 'https://fixture.invalid', relayUrl,
     deviceId: 'fixture-host', hostLabel: 'fixture', transport, fetch: issuer,
     projectsOfNode: id => [id === 'other' ? 'Q' : 'P'], nodeOfSession: id => id === 'shared-session' ? 'shared' : undefined,
@@ -205,13 +209,13 @@ const wait = async (read, description) => {
     await sibling('fixture.forget()')
     await wait(() => owner('fixture.closed'), 'cross-tab forget closes owner')
     assert.deepEqual(await owner('fixture.bookmarks()'), [])
-    const report = { results, crossTabLock: 'refused', crossTabForget: 'closed', tokenWriteFailure: 'blocked-no-remint', persistenceFailure: 'refused', closeDuringPin: 'refused', deviceMints, joinMints, browser: await call('Browser.getVersion') }
+    const report = { csp: browserTeamConnectPolicy(relayUrl), separateRelayOrigin: new URL(url).host !== new URL(relayUrl).host, results, crossTabLock: 'refused', crossTabForget: 'closed', tokenWriteFailure: 'blocked-no-remint', persistenceFailure: 'refused', closeDuringPin: 'refused', deviceMints, joinMints, browser: await call('Browser.getVersion') }
     fs.writeFileSync(path.join(temp, 'result.json'), JSON.stringify(report, null, 2))
     console.log(JSON.stringify({ evidence: temp, ...report }, null, 2))
     await call('Browser.close')
   } finally {
     cdp?.close(); chrome?.kill(); service?.stop()
     for (const socket of wsServer.clients) socket.terminate()
-    wsServer.close(); server.closeAllConnections(); await new Promise(resolve => server.close(resolve))
+    wsServer.close(); relayServer.closeAllConnections(); await new Promise(resolve => relayServer.close(resolve)); server.closeAllConnections(); await new Promise(resolve => server.close(resolve))
   }
 })().catch(error => { console.error(error); console.error('Evidence directory:', temp); process.exitCode = 1 })

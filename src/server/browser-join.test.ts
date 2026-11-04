@@ -31,6 +31,12 @@ it('does not hand a token to a departed owner after the API await', async () => 
   registerBrowserJoin(platform, { fetch: (() => new Promise(resolve => { finish = resolve })) as typeof fetch })
   const pending = platform.handlers[BROWSER_JOIN_TOKEN](1, 'device')
   owner = false
-  finish(new Response(JSON.stringify({ pairingToken: 'short-lived', relayEndpoint: 'wss://relay.example' }), { status: 200 }))
+  finish(new Response(JSON.stringify({ pairingToken: 'short-lived', relayEndpoint: 'wss://relay.nodeterm.dev' }), { status: 200 }))
   await expect(pending).rejects.toThrow('owner-departed')
+})
+
+it('refuses token destinations outside the operator CSP origin', async () => {
+  const platform = fakePlatform({ isOwnerClient: () => true })
+  registerBrowserJoin(platform, { fetch: (async () => Response.json({ pairingToken: 'token', relayEndpoint: 'wss://other.example' })) as typeof fetch })
+  await expect(platform.handlers[BROWSER_JOIN_TOKEN](1, 'device')).rejects.toThrow('Relay origin is not enabled')
 })

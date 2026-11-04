@@ -1,3 +1,4 @@
+import { browserTeamConnectPolicy } from './browser-join-policy'
 import type { DevelopmentPreviewTransport } from './development-preview'
 // Plain node:http request handler for the server edition.
 // Deliberately NOT Fastify: the handler surface is tiny (a handful of auth
@@ -404,8 +405,8 @@ async function serveStatic(
   const identity = async (): Promise<Buffer> => {
     const raw = await fs.promises.readFile(filePath)
     // CSP rewrite ONLY on index.html: give the WS client a connect-src. `'self'` covers a
-    // same-origin ws:/wss: URL (CSP3 matches ws↔http and wss↔https for 'self'), which is the only
-    // socket the bridge opens — `ws: wss:` allowed a socket to ANY host (S6).
+    // same-origin ws:/wss: URL. Hosted team joins additionally use only the operator-configured
+    // relay origin, never the unrestricted `ws: wss:` schemes or a caller-supplied CSP source.
     if (!isIndex) return raw
     const html = raw.toString('utf8')
     const marker = "default-src 'self';"
@@ -418,7 +419,7 @@ async function serveStatic(
       )
       return raw
     }
-    return Buffer.from(html.replace(marker, "default-src 'self'; connect-src 'self';")
+    return Buffer.from(html.replace(marker, `default-src 'self'; ${browserTeamConnectPolicy()}`)
       .replace("frame-src 'self' blob:", "frame-src 'self' blob: https: http:"))
   }
 
