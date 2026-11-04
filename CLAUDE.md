@@ -11577,3 +11577,9 @@ remain supported; redirected, unreadable, oversized or changed metadata refuses.
 administration changes can conservatively invalidate approval. This is not an external filesystem
 lock. Version 3 envelopes reject unknown top-level fields; legacy v1/v2 reads keep their explicit
 historical contract, rather than silently interpreting future authority fields.
+
+SSH connect attempts retain their original ticket and requester predicate through setup IO,
+queued command dispatch and connected publication. Cancellation may close only the connection
+created by that attempt; an expired requester reusing an existing master must not destroy it.
+Transport callbacks leave the short connect scope, and optional background setup starts only
+after authorized publication. A cancelled attempt rejects even when its physical close is pending.

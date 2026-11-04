@@ -1,5 +1,6 @@
 // SSH project orchestration, with transport/authentication/status supplied by the shell.
 import { promises as fs } from 'fs'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { PROMPT_WAIT_MS } from './ssh-project-limits'
 import path from 'path'
 import { createHash, randomUUID } from 'crypto'
@@ -67,6 +68,8 @@ import {
 } from '../codex-accounts-core'
 
 export interface SshProjectRunners {
+  /** Host-only dispatch guard; transport implementations recheck after their command queue. */
+  withQueuedExecutionCheck?<T>(current: () => boolean, work: () => Promise<T>): Promise<T>
   userDataDir: string
   /** Spawn the long-lived master; returns a handle we can kill. `stderr()` (when the spawner wires
    *  it) returns the master's captured stderr so a failed connect can surface the REAL ssh error
@@ -408,6 +411,7 @@ interface Conn {
 
 export class SshProjectManager {
   private conns = new Map<string, Conn>()
+  private connectScopes = new AsyncLocalStorage<{ active: boolean; current(): boolean; owned?: Conn }>()
   private disconnects = new Map<string, { promise: Promise<void>; revision: number; uncertain: boolean; final: boolean }>()
   private remoteHooks: RemoteHooks
   /** Projects whose agent-status mirror was actually pushed, gates the disconnect cleanup so a
@@ -421,9 +425,26 @@ export class SshProjectManager {
     { conn: SshConnection; attempt: Promise<ConnectResult>; ticket: symbol }
   >()
   private watchdog?: ReturnType<typeof setInterval>
+  private runScoped(...args: Parameters<SshProjectRunners['run']>): ReturnType<SshProjectRunners['run']> {
+    const scope = this.connectScopes.getStore()
+    if (!scope) return this.r.run(...args)
+    const current = () => scope.active && scope.current()
+    if (!current()) return Promise.reject(new Error('SSH connect cancelled'))
+    // Queues retain the explicit predicate; transport-owned sockets and callbacks do not
+    // inherit the short connect request. The awaiting application continues in its own scope.
+    return this.connectScopes.exit(() => this.r.withQueuedExecutionCheck
+      ? this.r.withQueuedExecutionCheck(current, () => this.r.run(...args))
+      : this.r.run(...args))
+  }
+
   constructor(private r: SshProjectRunners) {
+    const transport = r
+    this.r = { ...transport,
+      spawnMaster: (...args) => this.connectScopes.exit(() => transport.spawnMaster(...args)),
+      ...(transport.ensureAgent ? { ensureAgent: () => this.connectScopes.exit(() => transport.ensureAgent!()) } : {})
+    }
     this.remoteHooks = new RemoteHooks(
-      { run: r.run },
+      { run: (...args) => this.runScoped(...args) },
       (conn) => r.integrationsForHost?.(sshHostKey(conn)) ?? NO_REMOTE_INTEGRATION,
       r.integrationReceipts
     )
@@ -482,13 +503,13 @@ export class SshProjectManager {
    * leaves the connection alone and the project keeps working without hooks. It must never cost
    * the user a connection that is already up.
    */
-  private async repairHookTunnelIfDead(projectId: string, existing: Conn): Promise<void> {
+  private async repairHookTunnelIfDead(projectId: string, existing: Conn, current: () => boolean = () => true): Promise<void> {
     try {
       const hook = this.r.getHook()
       // No hook server yet ⇒ nothing to point at, and `setup()` would refuse anyway.
       if (!hook?.port || !hook.token) return
       const probe = await this.remoteHooks.tunnelAlive(projectId, existing.conn, existing.controlPath, hook.token)
-      if (this.conns.get(projectId) !== existing) return
+      if (!current() || this.conns.get(projectId) !== existing) return
       if (probe.alive) {
         this.tunnelRepair.delete(projectId)
         this.tunnelProbeFailures.delete(projectId)
@@ -496,7 +517,8 @@ export class SshProjectManager {
         // Free once this run has confirmed the host (the check's own cadence); otherwise this is
         // where a host the connect-time check could not confirm gets looked at again.
         if (existing.remoteHome && existing.hookEndpointPath) {
-          this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome, 'reuse')
+          if (!current()) return
+          this.connectScopes.exit(() => this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome!, 'reuse'))
         }
         return
       }
@@ -511,6 +533,7 @@ export class SshProjectManager {
         return
       }
       const res = await this.remoteHooks.setup(projectId, existing.conn, existing.controlPath, hook)
+      if (!current() || this.conns.get(projectId) !== existing) return
       this.tunnelRepair.set(projectId, recordTunnelRepair(this.tunnelRepair.get(projectId), !!res, now))
       if (!res) {
         if (this.conns.get(projectId) === existing && shouldReportTunnelLost(failures)) {
@@ -522,7 +545,7 @@ export class SshProjectManager {
       // that window means this entry is no longer the live one — the same rule the establish path
       // applies before rebuilding a master. Writing the endpoint onto a superseded entry would
       // point sessions at a socket belonging to a connection nobody holds.
-      if (this.conns.get(projectId) !== existing) return
+      if (!current() || this.conns.get(projectId) !== existing) return
       existing.hookEndpointPath = res.endpointPath
       this.tunnelProbeFailures.delete(projectId)
       this.hookTunnelHealth(projectId, true)
@@ -530,13 +553,15 @@ export class SshProjectManager {
       // never got them; and a tunnel that died may have died with a master another desktop
       // rebuilt. Look now.
       if (existing.remoteHome) {
-        this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome, 'repair')
+        if (!current()) return
+        this.connectScopes.exit(() => this.refreshAgentTools(existing.conn, existing.controlPath, existing.remoteHome!, 'repair'))
       }
       // Same contract as the establish path: hook events lost while the tunnel was down are gone
       // for good, so the working agents need a resync. Fire-and-forget behind a catch — a repair
       // job must never surface to the user as a dead SSH project.
       try {
-        this.r.onTunnelVerified?.(projectId, existing.controlPath, existing.conn)
+        if (!current()) return
+        this.connectScopes.exit(() => this.r.onTunnelVerified?.(projectId, existing.controlPath, existing.conn))
       } catch {
         // undecided changes nothing: the stale sweep remains the backstop
       }
@@ -693,7 +718,20 @@ export class SshProjectManager {
     // pre-registration attempt by dropping the entry that holds it; connectOnce re-checks the
     // ticket before registering its master (see there).
     const ticket = Symbol('ssh-connect-attempt')
-    const attempt = this.connectOnce(projectId, conn, remoteCwd, ticket, opts?.current).finally(() => {
+    const scope = { active: true, owned: undefined as Conn | undefined, current: () => {
+      try { return this.inFlight.get(projectId)?.ticket === ticket && (!opts?.current || opts.current()) }
+      catch { return false }
+    } }
+    const attempt = Promise.resolve().then(() => this.connectScopes.run(scope,
+      () => this.connectOnce(projectId, conn, remoteCwd, ticket, scope.current))).catch(async (error) => {
+      // A separate disconnect already owns its physical close and must not be awaited here
+      // (the cancelled caller can settle while that close is deliberately held).
+      if (scope.owned && this.conns.get(projectId) === scope.owned && !this.disconnects.has(projectId)) {
+        await this.connectScopes.exit(() => this.disconnect(projectId))
+      }
+      throw error
+    }).finally(() => {
+      scope.active = false
       if (this.inFlight.get(projectId)?.attempt === attempt) this.inFlight.delete(projectId)
     })
     // This host is reachable again, so this is the moment to pay off any remote `kill-session` a
@@ -704,7 +742,7 @@ export class SshProjectManager {
     // Fire-and-forget, same contract as the tunnel resync below it: several remote round trips of
     // pure cleanup must never delay, or fail, a connect that has already succeeded.
     void attempt.then(
-      () => this.settleOwedKills(projectId),
+      () => this.connectScopes.exit(() => this.settleOwedKills(projectId)),
       () => {}
     )
     this.inFlight.set(projectId, { conn, attempt, ticket })
@@ -724,7 +762,7 @@ export class SshProjectManager {
     const c = this.conns.get(projectId)
     if (!c) return
     await drainPendingRemoteKills(sshHostKey(c.conn), async (session) => {
-      const { code } = await this.r.run(remoteTmuxKillArgs(c.conn, c.controlPath, session))
+      const { code } = await this.runScoped(remoteTmuxKillArgs(c.conn, c.controlPath, session))
       return code === 0 || code === 1
     })
   }
@@ -783,6 +821,12 @@ export class SshProjectManager {
     ticket?: symbol,
     current?: () => boolean
   ): Promise<ConnectResult> {
+    const assertCurrent = () => {
+      if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) {
+        throw new Error('SSH connect cancelled')
+      }
+    }
+    assertCurrent()
     // Re-derive the login-agent pin for THIS endpoint (issue #427) — a config-level `IdentityAgent
     // SSH_AUTH_SOCK` must reach the user's login agent despite the app-agent env override. The
     // inbound value is unconditionally overwritten: `conn` arrives over IPC (and its ancestors from
@@ -815,21 +859,22 @@ export class SshProjectManager {
       if (this.disconnects.get(projectId)?.uncertain) throw new Error('SSH disconnect is unconfirmed')
       // Remove a stale old socket only while this attempt still owns the project. A successful
       // disconnect now waits for exit; the extra best-effort exit preserves older runner behavior.
-      await this.r.run(exitMasterArgs(existing.conn, existing.controlPath)).catch(() => {})
+      await this.runScoped(exitMasterArgs(existing.conn, existing.controlPath)).catch(() => {})
       if ((current && !current()) || (ticket && this.inFlight.get(projectId)?.ticket !== ticket)) throw new Error('SSH connect cancelled')
       await fs.rm(existing.controlPath, { force: true }).catch(() => {})
     } else if (existing) {
       // Verify the cached master is still alive before reusing it, a dropped/timed-out master
       // would otherwise leave us reusing a dead socket. If `-O check` fails, surface
       // `reconnecting`, drop the stale entry, and fall through to re-establish.
-      const { code } = await this.r.run(checkMasterArgs(existing.conn, existing.controlPath))
+      const { code } = await this.runScoped(checkMasterArgs(existing.conn, existing.controlPath))
       if (current && !current()) throw new Error('SSH connect cancelled')
       if (code === 0) {
         // Keep the remote git cwd current even on an idempotent reuse (the folder may have changed).
         // Guard against a later connect without remoteCwd clearing a known cwd.
         existing.remoteCwd = remoteCwd ?? existing.remoteCwd
         // ...and CHECK THE TUNNEL, because `-O check` says nothing about it (issue #735).
-        await this.repairHookTunnelIfDead(projectId, existing)
+        await this.repairHookTunnelIfDead(projectId, existing, current)
+        assertCurrent()
         return {
           controlPath: existing.controlPath,
           hookEndpointPath: existing.hookEndpointPath,
@@ -850,7 +895,9 @@ export class SshProjectManager {
       // from under a still-live daemon that keeps its TCP session and remote reverse forward for
       // up to 300s - the "two fds on one sshd" condition the orphan-rebuild path exists to cure.
       // Best-effort: a genuinely dead master makes this a fast failed round-trip.
-      await this.r.run(exitMasterArgs(existing.conn, existing.controlPath)).catch(() => {})
+      await this.runScoped(exitMasterArgs(existing.conn, existing.controlPath)).catch(() => {})
+      assertCurrent()
+      if (this.conns.get(projectId) !== existing) throw new Error('SSH connect cancelled')
       existing.master.kill()
       this.conns.delete(projectId)
     }
@@ -862,6 +909,7 @@ export class SshProjectManager {
     } catch {
       // ignore, keeps the manager unit-testable
     }
+    assertCurrent()
     this.emitStatus({ projectId, status: 'connecting' })
     // A master socket FILE can outlive its process (app crash, `kill -9`, host sleep/resume, a
     // plain `kill()` on quit doesn't always let ssh unlink it). ssh's `ControlMaster=auto` REFUSES
@@ -885,17 +933,19 @@ export class SshProjectManager {
       // absent → no leftover (the normal path)
     }
     if (current && !current()) throw new Error('SSH connect cancelled')
-    if (leftover && (await this.r.run(checkMasterArgs(conn, controlPath))).code === 0) {
+    if (leftover && (await this.runScoped(checkMasterArgs(conn, controlPath))).code === 0) {
+      assertCurrent()
       // Live orphan: reuse it. `kill()` sends `-O exit` (what `disconnect` does anyway); the loop
       // below succeeds on its first `-O check` and runs the normal post-connect setup.
       reusedOrphan = true
       master = {
         kill: () => {
-          void this.r.run(exitMasterArgs(conn, controlPath)).catch(() => {})
+          void this.runScoped(exitMasterArgs(conn, controlPath)).catch(() => {})
         },
         on: () => {}
       }
     } else {
+      assertCurrent()
       if (leftover) await fs.rm(controlPath, { force: true }).catch(() => {})
       // Ticket check BEFORE the agent is consulted, not only before registration below: start()'s
       // first act is cancelScheduledStop(), so a doomed attempt reaching ensureAgent AFTER its own
@@ -923,6 +973,8 @@ export class SshProjectManager {
       throw new Error('SSH connect cancelled')
     }
     this.conns.set(projectId, { conn, controlPath, master, remoteCwd })
+    const connectScope = this.connectScopes.getStore()
+    if (connectScope) connectScope.owned = this.conns.get(projectId)
     // Wait until the master answers `-O check`. The bound is the master PROCESS, not a fixed
     // attempt count: while the spawned ssh is alive it is connecting, authenticating, or waiting
     // on the askpass passphrase prompt, which a human can take minutes to answer, so it gets the
@@ -938,9 +990,9 @@ export class SshProjectManager {
     let exitGrace = MASTER_EXIT_GRACE_CHECKS
     let waitStartedAt = Date.now()
     for (;;) {
-      if (current && !current()) break
-      const { code } = await this.r.run(checkMasterArgs(conn, controlPath))
-      if (current && !current()) break
+      assertCurrent()
+      const { code } = await this.runScoped(checkMasterArgs(conn, controlPath))
+      assertCurrent()
       if (code === 0) {
         // THE TRANSPORT IS USABLE NOW — say so, before the setup chain below.
         //
@@ -965,9 +1017,11 @@ export class SshProjectManager {
         if (!reusedOrphan) {
           this.emitStatus({ projectId, status: 'connecting', masterControlPath: controlPath })
         }
+        assertCurrent()
         // Master is up. Best-effort remote hook setup (reverse tunnel + endpoint + install);
         // fail-open, a null result just means the remote agents run without hooks.
         const res = await this.remoteHooks.setup(projectId, conn, controlPath, this.r.getHook())
+        assertCurrent()
         // Fresh-launch-straight-to-SSH failure mode (field report: no RUNNING badges from remote
         // sessions until a reconnect): an ADOPTED live-orphan master carries the previous app run's
         // `-R <sock>:127.0.0.1:<oldPort>` reverse-hook forward. Its target port died with that run,
@@ -982,12 +1036,16 @@ export class SshProjectManager {
         // `-O exit`s and UNLINKS the live attempt's master and socket, and overwrites its map entry
         // with a third master, while the renderer has already been handed the second one.
         if (!res && reusedOrphan && this.conns.get(projectId)?.master === master) {
-          await this.r.run(exitMasterArgs(conn, controlPath)).catch(() => {}) // drop the orphan + its forwards
+          await this.runScoped(exitMasterArgs(conn, controlPath)).catch(() => {}) // drop the orphan + its forwards
+          assertCurrent()
           await fs.rm(controlPath, { force: true }).catch(() => {})
+          assertCurrent()
           reusedOrphan = false
           await this.r.ensureAgent?.().catch(() => {}) // as on the fresh-spawn path
+          assertCurrent()
           master = this.r.spawnMaster(masterArgs(conn, controlPath), this.r.masterEnvFor?.(conn.identityFile) ?? {})
           this.conns.set(projectId, { conn, controlPath, master, remoteCwd })
+          if (connectScope) connectScope.owned = this.conns.get(projectId)
           // Re-enter the wait loop on the SAME terms as a fresh spawn: the exit-aware,
           // wall-clock-bounded wait above, with the budget restarted (the orphan adopt + failed
           // setup already burned real time). A fixed few-second inner loop here reported
@@ -1014,11 +1072,12 @@ export class SshProjectManager {
           // PTY manager builds, so a host answer carrying a newline would be a command separator.
           // Same fail-open direction as the catch — an unusable answer just disables the features
           // that need an absolute remote home. See `isSafeRemoteHome`.
-          const r = await this.r.run(childArgs(conn, controlPath, 'printf %s "$HOME"'))
+          const r = await this.runScoped(childArgs(conn, controlPath, 'printf %s "$HOME"'))
           if (r.code === 0 && isSafeRemoteHome(r.stdout.trim())) remoteHome = r.stdout.trim()
         } catch {
           // fail-open
         }
+        assertCurrent()
         // Write nodeterm's remote tmux.conf + source it into the (warm) server, best-effort. The
         // tmux server only reads `-f` when it starts; source-file pushes the options into an
         // already-running server (warm reattach) so existing + new sessions get mouse/clipboard.
@@ -1035,16 +1094,18 @@ export class SshProjectManager {
             // session squeezes the lead exactly like a local one. 0/absent ⇒ pre-feature conf.
             // The size check inside the write keeps an old conf intact if the body never arrives.
             const confWrite = remoteAtomicWrite(confPath, remoteTmuxConf(50000, this.r.leadPaneWidth?.() ?? 0))
-            const w = await this.r.run(childArgs(conn, controlPath, confWrite.command), confWrite.stdin)
+            const w = await this.runScoped(childArgs(conn, controlPath, confWrite.command), confWrite.stdin)
             if (w.code === 0) {
               // source-file is best-effort (pushes options into a warm server); ignore its result.
-              await this.r.run(childArgs(conn, controlPath, `${remoteTmuxPathPrologue()}tmux -L ${RMT_TMUX_SOCKET} source-file ${posixQuote(confPath)}`))
+              await this.runScoped(childArgs(conn, controlPath, `${remoteTmuxPathPrologue()}tmux -L ${RMT_TMUX_SOCKET} source-file ${posixQuote(confPath)}`))
               tmuxConfPath = confPath
             }
           } catch {
             /* fail-open: no conf → remote tmux uses host defaults */
           }
         }
+        assertCurrent()
+        const afterConnected: Array<() => void> = []
         // Canvas control for remote agent nodes. Gated on BOTH the resolved home (every remote
         // path must be absolute) and a verified tunnel (`hookEndpointPath` is only set once
         // setup() proved the reverse forward reaches this app run), installing a skill whose
@@ -1057,18 +1118,18 @@ export class SshProjectManager {
           // RemoteHooks.installAgentTools) — the check applies them group by group, in order. It
           // writes only what differs from this build; a master just came up, so it always looks,
           // and an app update's new docs reach the host here, on the first connect after the relaunch.
-          this.refreshAgentTools(conn, controlPath, remoteHome, 'connect')
+          afterConnected.push(() => this.refreshAgentTools(conn, controlPath, remoteHome!, 'connect'))
           // Per-node tokens for every node of this project (the endpoint file written just above
           // is what tells the host's hook script where to find them, which is also why this is
           // gated on `hookEndpointPath`: a token nothing can be pointed at is a wasted round-trip).
           // Same not-awaited best-effort terms as the two installs.
-          void this.materialiseNodeTokens(projectId, conn, controlPath, remoteHome)
+          afterConnected.push(() => { void this.materialiseNodeTokens(projectId, conn, controlPath, remoteHome!) })
         }
         // Agent-integration consent (issue #744), REMOVAL side: a host the user declined (or agents
         // they declined) loses what we wrote there, and the legacy instruction blocks older builds
         // merged are stripped. Independent of the tunnel; not awaited (best-effort, never delays
         // the connect). The INSTALL side rides setup() and the agent-tools check above.
-        if (remoteHome) this.applyIntegrationRemovals(conn, controlPath, remoteHome)
+        if (remoteHome) afterConnected.push(() => this.applyIntegrationRemovals(conn, controlPath, remoteHome!))
         // Managed-Codex runtime: upload the relay bundle + launcher and probe node/codex/curl.
         // Deliberately gated on `remoteHome` ALONE, not on `hookEndpointPath` — account isolation +
         // a shared app-server need only the launcher/relay, never the canvas hooks, and the reverse
@@ -1081,13 +1142,13 @@ export class SshProjectManager {
         const codexRuntime = remoteHome
           ? await this.installRemoteCodexRuntime(conn, controlPath, remoteHome)
           : null
+        assertCurrent()
         // Same ownership check the failure path makes below, and for the same reason: the setup
         // above is several remote round-trips, and a disconnect + reconnect inside that window
         // leaves a DIFFERENT attempt's master in the map. Writing this attempt's results onto it
         // clobbered the live connection's `hookEndpointPath` with `undefined` (the "no RUNNING
         // badges from remote sessions" failure), emitted a second `connected`, and started a
-        // second claude probe against the same entry. A stale attempt reports its own result and
-        // touches nothing.
+        // second claude probe against the same entry. A stale attempt rejects and touches nothing.
         const entry = this.conns.get(projectId)?.master === master ? this.conns.get(projectId) : undefined
         if (entry) {
           entry.hookEndpointPath = hookEndpointPath
@@ -1099,7 +1160,9 @@ export class SshProjectManager {
           entry.codexCliPath = codexRuntime?.codex
           entry.setupDone = true
           this.emitStatus({ projectId, status: 'connected' })
+          assertCurrent()
           if (hookEndpointPath) this.hookTunnelHealth(projectId, true)
+          assertCurrent()
           // The tunnel is live again on a master we just established (the reuse branch returned long
           // before this line), so this is exactly the moment the hook events lost while it was down
           // can be reconstructed from the host.
@@ -1123,7 +1186,7 @@ export class SshProjectManager {
           // same guard for the same hard-won reason.) Do not tidy away.
           if (hookEndpointPath) {
             try {
-              this.r.onTunnelVerified?.(projectId, controlPath, conn)
+              this.connectScopes.exit(() => this.r.onTunnelVerified?.(projectId, controlPath, conn))
             } catch {
               // undecided changes nothing: the stale sweep remains the backstop, as before this hook
             }
@@ -1138,12 +1201,18 @@ export class SshProjectManager {
         // in the main process is a hard crash (Node's default --unhandled-rejections=throw), not a
         // log line. Internals are already try/catch-guarded, but `this.r.onStatus` (IPC send) can
         // still throw if the window is torn down mid-probe, that must never surface here.
-        if (entry) void this.probeClaudeAutoPermissionMode(projectId, entry).catch(() => {})
+        assertCurrent()
+        if (entry) {
+          for (const task of afterConnected) { assertCurrent(); this.connectScopes.exit(task) }
+          this.connectScopes.exit(() => { void this.probeClaudeAutoPermissionMode(projectId, entry).catch(() => {}) })
+        }
         // Same shape for the host's codex: may a remote Codex TUI carry `--no-daemon`? (From
         // 0.157.0 it otherwise joins an auto-started shared app-server that runs every later node
         // as the first one — shared/agents/codex-daemon.ts.) Unawaited and swallowed for the same
         // reasons; until it lands, remote Codex lines stay exactly as they were.
-        if (entry) void this.probeRemoteCodexNoDaemon(projectId, entry).catch(() => {})
+        assertCurrent()
+        if (entry) this.connectScopes.exit(() => { void this.probeRemoteCodexNoDaemon(projectId, entry).catch(() => {}) })
+        assertCurrent()
         return {
           controlPath,
           hookEndpointPath,
@@ -1218,7 +1287,7 @@ export class SshProjectManager {
   async listDir(projectId: string, dir: string): Promise<{ path: string; dirs: string[] }> {
     const c = this.conns.get(projectId)
     if (!c) throw new Error('Not connected.')
-    const { stdout } = await this.r.run(listDirArgs(c.conn, c.controlPath, dir))
+    const { stdout } = await this.runScoped(listDirArgs(c.conn, c.controlPath, dir))
     return { path: dir, dirs: parseLsDirs(stdout) }
   }
 
@@ -1226,7 +1295,7 @@ export class SshProjectManager {
   async makeDir(projectId: string, dir: string): Promise<boolean> {
     const c = this.conns.get(projectId)
     if (!c) return false
-    const { code } = await this.r.run(mkDirArgs(c.conn, c.controlPath, dir))
+    const { code } = await this.runScoped(mkDirArgs(c.conn, c.controlPath, dir))
     return code === 0
   }
 
@@ -1244,7 +1313,7 @@ export class SshProjectManager {
     try {
       let home = c.remoteHome
       if (!home) {
-        const r = await this.r.run(childArgs(c.conn, c.controlPath, 'printf %s "$HOME"'))
+        const r = await this.runScoped(childArgs(c.conn, c.controlPath, 'printf %s "$HOME"'))
         if (r.code === 0 && isSafeRemoteHome(r.stdout.trim())) home = r.stdout.trim()
       }
       if (!home) return null
@@ -1256,7 +1325,7 @@ export class SshProjectManager {
       // mkdir can partially create parents before returning non-zero; once this invocation has a
       // unique directory name, its finally block owns the cleanup attempt on every failure path.
       stagedDir = dir
-      const mk = await this.r.run(childArgs(c.conn, c.controlPath, `mkdir -p ${posixQuote(dir)}`))
+      const mk = await this.runScoped(childArgs(c.conn, c.controlPath, `mkdir -p ${posixQuote(dir)}`))
       if (mk.code !== 0) return null
       // `fileName` is a renderer string: posixQuote blocks shell injection but NOT filesystem
       // traversal (e.g. `../../../.bashrc` would escape the token dir and overwrite a remote file).
@@ -1275,7 +1344,7 @@ export class SshProjectManager {
     } finally {
       if (stagedDir) {
         try {
-          await this.r.run(
+          await this.runScoped(
             childArgs(c.conn, c.controlPath, `rm -rf -- ${posixQuote(stagedDir)}`)
           )
         } catch {
@@ -1316,7 +1385,7 @@ export class SshProjectManager {
       // it decides `-r`, and the tree can be stale. A failed probe is not evidence of "file" ,
       // but `test -d` failing on a live master overwhelmingly means "not a directory", and the
       // worst case of guessing wrong is a plain scp error, so this stays fail-open.
-      const probe = await this.r.run(childArgs(c.conn, c.controlPath, `test -d ${quoteRemotePath(remotePath)}`))
+      const probe = await this.runScoped(childArgs(c.conn, c.controlPath, `test -d ${quoteRemotePath(remotePath)}`))
       const isDir = probe.code === 0
       await fs.mkdir(destDir, { recursive: true })
       reservation = await this.reserveDestPath(destDir, name)
@@ -1437,12 +1506,12 @@ export class SshProjectManager {
     const name = safeDownloadBasename(remotePath)
     if (!name) return { ok: false, error: 'That path cannot be played.' }
     try {
-      const dirProbe = await this.r.run(
+      const dirProbe = await this.runScoped(
         childArgs(c.conn, c.controlPath, `test -d ${quoteRemotePath(remotePath)}`)
       )
       if (dirProbe.code === 0) return { ok: false, error: 'That path is a directory, not a video file.' }
       const dest = path.join(cacheDir, remoteMediaCacheName(sshHostKey(c.conn), remotePath, name))
-      const sizeProbe = await this.r.run(
+      const sizeProbe = await this.runScoped(
         childArgs(c.conn, c.controlPath, `wc -c < ${quoteRemotePath(remotePath)}`)
       )
       const remoteSize = sizeProbe.code === 0 ? parseInt(sizeProbe.stdout.trim(), 10) : NaN
@@ -1542,7 +1611,7 @@ export class SshProjectManager {
             : [remoteTmuxKillArgs(c.conn, c.controlPath, sessionName(id))]
         )
         .map((args) =>
-          this.r.run(args).then(
+          this.runScoped(args).then(
             () => undefined,
             () => undefined
           )
@@ -1556,7 +1625,7 @@ export class SshProjectManager {
    * `childArgs(conn, controlPath, cmd)`); returns `{ code, stdout }`.
    */
   sshRun(args: string[], stdin?: string, opts?: { timeoutMs?: number }): Promise<{ code: number; stdout: string }> {
-    return this.r.run(args, stdin, opts?.timeoutMs)
+    return this.runScoped(args, stdin, opts?.timeoutMs)
   }
 
   /**
@@ -1769,7 +1838,7 @@ export class SshProjectManager {
         // it exists, so a `cat >` straight at the name could be sourced half-written, and a channel
         // that died before the body arrived left it empty with `cat` still exiting 0.
         await runRemoteAtomicWrite(
-          (cmd, stdin) => this.r.run(childArgs(c.conn, c.controlPath, cmd), stdin),
+          (cmd, stdin) => this.runScoped(childArgs(c.conn, c.controlPath, cmd), stdin),
           remotePath,
           content,
           { restrictPermissions: true, mode: '600' }
@@ -1869,7 +1938,7 @@ export class SshProjectManager {
     console.warn(
       `[ssh-project] master for ${sshHostKey(e.conn)} did not answer a round trip after wake; ending it so terminals reconnect`
     )
-    await this.r.run(exitMasterArgs(e.conn, e.controlPath)).catch(() => {})
+    await this.runScoped(exitMasterArgs(e.conn, e.controlPath)).catch(() => {})
   }
 
   /** The connection's cached remote `--permission-mode auto` capability (undefined = not
@@ -1926,7 +1995,7 @@ export class SshProjectManager {
       // The size check keeps the phone's last good doc if the body never arrives: an empty file
       // there is not "no agents", it is a document the phone cannot parse.
       const write = remoteAtomicWrite(file, json, { restrictPermissions: true })
-      await this.r.run(childArgs(c.conn, c.controlPath, write.command), write.stdin)
+      await this.runScoped(childArgs(c.conn, c.controlPath, write.command), write.stdin)
     } catch {
       /* best-effort, see above */
     }
@@ -1958,7 +2027,7 @@ export class SshProjectManager {
       if (seenHosts.has(hk)) continue
       seenHosts.add(hk)
       try {
-        const { code, stdout } = await this.r.run(childArgs(c.conn, c.controlPath, cmd))
+        const { code, stdout } = await this.runScoped(childArgs(c.conn, c.controlPath, cmd))
         if (code === 0 && stdout) {
           for (const line of stdout.split('\n')) {
             const id = line.trim()
@@ -1992,7 +2061,7 @@ export class SshProjectManager {
       if (seenHosts.has(hk)) continue
       seenHosts.add(hk)
       try {
-        const { code, stdout } = await this.r.run(
+        const { code, stdout } = await this.runScoped(
           childArgs(c.conn, c.controlPath, REMOTE_GRANT_SCAN_CMD)
         )
         // Tagged with the host it came from: a grant authorizes pushes about THAT host only, and
@@ -2029,7 +2098,7 @@ export class SshProjectManager {
     try {
       // The hook polls for this file, so it must never see a truncated answer under its name.
       const write = remoteAtomicWrite(file, content, { restrictPermissions: true })
-      const { code } = await this.r.run(childArgs(c.conn, c.controlPath, write.command), write.stdin)
+      const { code } = await this.runScoped(childArgs(c.conn, c.controlPath, write.command), write.stdin)
       return code === 0
     } catch {
       return false
@@ -2105,7 +2174,7 @@ export class SshProjectManager {
     const c = this.conns.get(projectId)
     const remoteHome = this.codexRemoteHome(c)
     const home = remoteCodexHome(remoteHome, accountId)
-    const { code, stdout } = await this.r.run(
+    const { code, stdout } = await this.runScoped(
       childArgs(c!.conn, c!.controlPath, remoteCodexAccountSetupCommand(remoteHome, accountId))
     )
     if (code !== 0) {
@@ -2141,7 +2210,7 @@ export class SshProjectManager {
       // A managed account's identity is gated on a REAL, non-symlink auth.json: the shared runtime
       // assets are symlinks, the credential jar is never — so `test -f && test ! -L` is what
       // distinguishes "this account has actually logged in" from "it inherited a shared config".
-      const auth = await this.r.run(
+      const auth = await this.runScoped(
         childArgs(
           c.conn,
           c.controlPath,
@@ -2153,7 +2222,7 @@ export class SshProjectManager {
     const socket = remoteCodexSocket(remoteHome, accountId)
     const start = remoteCodexAppServerStartCommand(c.codexRelayRuntimePath, c.codexCliPath)
     const command = `CODEX_HOME=${posixQuote(home)} ${start} && ${posixQuote(c.codexRelayRuntimePath)} ${posixQuote(c.codexRelayScriptPath)} account-read ${posixQuote(socket)}`
-    const result = await this.r.run(childArgs(c.conn, c.controlPath, command))
+    const result = await this.runScoped(childArgs(c.conn, c.controlPath, command))
     if (result.code !== 0) return null
     try {
       const parsed = JSON.parse(result.stdout) as { email?: unknown }
@@ -2175,7 +2244,7 @@ export class SshProjectManager {
     if (!c || !isSafeRemoteHome(c.remoteHome)) return null
     const auth = `${remoteCodexHome(c.remoteHome as string, accountId)}/auth.json`
     try {
-      const { code, stdout } = await this.r.run(
+      const { code, stdout } = await this.runScoped(
         childArgs(
           c.conn,
           c.controlPath,
@@ -2201,7 +2270,7 @@ export class SshProjectManager {
       ? `CODEX_HOME=${posixQuote(home)} ${posixQuote(c.codexCliPath)} app-server daemon stop >/dev/null 2>&1 || true; `
       : ''
     const command = `${stop}rm -rf -- ${posixQuote(home)}`
-    return (await this.r.run(childArgs(c.conn, c.controlPath, command))).code === 0
+    return (await this.runScoped(childArgs(c.conn, c.controlPath, command))).code === 0
   }
 
   /**
@@ -2222,7 +2291,7 @@ export class SshProjectManager {
     // Resolve node/codex/curl through the login shell, then `readlink -f` each to an absolute real
     // path (a shell alias / nvm shim would not survive into a non-interactive relay launch). All
     // three must resolve; curl backs the launcher's token POSTs.
-    const probe = await this.r.run(
+    const probe = await this.runScoped(
       childArgs(
         conn,
         controlPath,
@@ -2245,7 +2314,7 @@ export class SshProjectManager {
     // Both go through the atomic, size-checked write: a running Codex node executes these files, so
     // a `cat >` that the channel cut short (it truncates first) left every Codex node on the host
     // launching an empty or half-written launcher until the next connect.
-    const runCmd = (cmd: string, stdin: string) => this.r.run(childArgs(conn, controlPath, cmd), stdin)
+    const runCmd = (cmd: string, stdin: string) => this.runScoped(childArgs(conn, controlPath, cmd), stdin)
     try {
       await runRemoteAtomicWrite(runCmd, relay, source, { restrictPermissions: true, mode: '700' })
       // The launcher embeds the app-server start command (absolute node + codex only, no secret).
@@ -2279,7 +2348,7 @@ export class SshProjectManager {
     for (const id of ids) {
       const home = remoteCodexHome(remoteHome, id)
       const startCommand = remoteCodexAppServerStartCommand(c.codexRelayRuntimePath, c.codexCliPath)
-      const start = await this.r.run(
+      const start = await this.runScoped(
         childArgs(c.conn, c.controlPath, `CODEX_HOME=${posixQuote(home)} ${startCommand}`)
       )
       if (start.code !== 0) throw new Error('SSH Codex app-server is unavailable')
@@ -2305,7 +2374,7 @@ export class SshProjectManager {
     if (!c.codexRelayRuntimePath || !c.codexRelayScriptPath) return false
     const socket = remoteCodexSocket(c.remoteHome as string, accountId)
     const command = `${posixQuote(c.codexRelayRuntimePath)} ${posixQuote(c.codexRelayScriptPath)} thread-check ${posixQuote(socket)} ${posixQuote(threadId)}`
-    return (await this.r.run(childArgs(c.conn, c.controlPath, command))).code === 0
+    return (await this.runScoped(childArgs(c.conn, c.controlPath, command))).code === 0
   }
 
   /** Cross-account expose ON THE HOST: hardlink the one authoritative rollout for `threadId` into
@@ -2326,7 +2395,7 @@ export class SshProjectManager {
     const target = remoteCodexSocket(c.remoteHome as string, accountId)
     const args = catalog.map((entry) => posixQuote(entry.socketPath)).join(' ')
     const command = `${posixQuote(c.codexRelayRuntimePath)} ${posixQuote(c.codexRelayScriptPath)} expose-thread ${posixQuote(target)} ${posixQuote(threadId)} ${args}`
-    if ((await this.r.run(childArgs(c.conn, c.controlPath, command))).code !== 0) {
+    if ((await this.runScoped(childArgs(c.conn, c.controlPath, command))).code !== 0) {
       throw new Error('SSH Codex session is unavailable or ambiguous')
     }
   }
@@ -2403,7 +2472,7 @@ export class SshProjectManager {
     const token = randomUUID()
     const stagingDir = `${remoteHome}/.nodeterm/codex-imports`
     const staging = `${stagingDir}/${token}.part`
-    const prepared = await this.r.run(
+    const prepared = await this.runScoped(
       childArgs(
         c!.conn,
         c!.controlPath,
@@ -2430,7 +2499,7 @@ export class SshProjectManager {
     // or `$HOME/.codex/sessions`) are both under the host `$HOME`; a cross-device `ln` (`EXDEV`)
     // also fails closed here (exit 17), it is never silently copied. On success `chmod 600` the
     // shared inode (credential-adjacent conversation) and drop the staging name, leaving the target.
-    const installed = await this.r.run(
+    const installed = await this.runScoped(
       childArgs(
         c!.conn,
         c!.controlPath,
@@ -2472,7 +2541,7 @@ export class SshProjectManager {
     const c = this.conns.get(projectId)
     if (!c) return null
     const dir = remoteAccountConfigDir(accountId) // id-validated ~-relative path
-    const mk = await this.r.run(mkDirArgs(c.conn, c.controlPath, dir))
+    const mk = await this.runScoped(mkDirArgs(c.conn, c.controlPath, dir))
     if (mk.code !== 0) return null
     // Install the managed hook into the account dir's settings.json (needs the absolute $HOME so the
     // merged `sh "…"` command has no unexpanded ~). Fail-open when the home never resolved.
@@ -2498,7 +2567,7 @@ export class SshProjectManager {
     const c = this.conns.get(projectId)
     if (!c) return null
     const file = `${remoteAccountConfigDir(accountId)}/.claude.json`
-    const { code, stdout } = await this.r.run(
+    const { code, stdout } = await this.runScoped(
       childArgs(c.conn, c.controlPath, `cat ${quoteRemotePath(file)} 2>/dev/null`)
     )
     return code === 0 && stdout ? stdout : null
@@ -2510,7 +2579,7 @@ export class SshProjectManager {
     const c = this.conns.get(projectId)
     if (!c) return
     const dir = remoteAccountConfigDir(accountId)
-    await this.r.run(childArgs(c.conn, c.controlPath, `rm -rf ${quoteRemotePath(dir)}`))
+    await this.runScoped(childArgs(c.conn, c.controlPath, `rm -rf ${quoteRemotePath(dir)}`))
   }
 
   /**
@@ -2544,7 +2613,7 @@ export class SshProjectManager {
     }
     if (!cmd) return { ok: false, reason: 'bad-request' }
     try {
-      const { code, stdout } = await this.r.run(childArgs(c.conn, c.controlPath, cmd))
+      const { code, stdout } = await this.runScoped(childArgs(c.conn, c.controlPath, cmd))
       return code === 0 ? parseRemoteSessionCopy(stdout) : { ok: false, reason: 'failed' }
     } catch {
       return { ok: false, reason: 'failed' }
@@ -2563,7 +2632,7 @@ export class SshProjectManager {
    */
   private async remoteClaudeVersion(conn: SshConnection, controlPath: string): Promise<string | null> {
     try {
-      const { stdout } = await this.r.run(childArgs(conn, controlPath, claudeVersionProbeCommand()))
+      const { stdout } = await this.runScoped(childArgs(conn, controlPath, claudeVersionProbeCommand()))
       // Markers absent ⇒ FAILED probe ⇒ null (unknown). Never scrape free-form stdout.
       return parseClaudeVersionProbe(stdout)
     } catch {
@@ -2579,7 +2648,7 @@ export class SshProjectManager {
   private async probeRemoteCodexNoDaemon(projectId: string, entry: Conn): Promise<void> {
     let supported: boolean | null = null
     try {
-      const { stdout } = await this.r.run(childArgs(entry.conn, entry.controlPath, codexNoDaemonProbeCommand()))
+      const { stdout } = await this.runScoped(childArgs(entry.conn, entry.controlPath, codexNoDaemonProbeCommand()))
       supported = parseCodexNoDaemonProbe(stdout)
     } catch {
       supported = null
@@ -2672,7 +2741,7 @@ export class SshProjectManager {
     }
     const closing = { promise: Promise.resolve(), revision: 0, uncertain: false, final: opts?.final === true }
     this.disconnects.set(projectId, closing)
-    closing.promise = Promise.resolve().then(() => this.disconnectOnce(projectId, c, closing)).finally(() => {
+    closing.promise = this.connectScopes.exit(() => Promise.resolve().then(() => this.disconnectOnce(projectId, c, closing))).finally(() => {
       if (!closing.uncertain && this.disconnects.get(projectId) === closing) this.disconnects.delete(projectId)
     })
     return closing.promise
@@ -2697,7 +2766,7 @@ export class SshProjectManager {
     this.tunnelProbeFailures.delete(projectId)
     // Keep the close owned until the actual mux command settles. Returning early lets a
     // reconnect adopt the closing socket, or lets a delayed exit kill its replacement.
-    const result = await this.r.run(exitMasterArgs(c.conn, c.controlPath)).catch(() => ({ code: 255 }))
+    const result = await this.runScoped(exitMasterArgs(c.conn, c.controlPath)).catch(() => ({ code: 255 }))
     if (this.conns.get(projectId) !== c) return
     const absent = result.code !== 0 && await this.r.masterAbsent?.(c.controlPath).catch(() => false)
     if (this.conns.get(projectId) !== c) return

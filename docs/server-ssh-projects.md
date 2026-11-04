@@ -111,3 +111,9 @@ The same strict Claude/Codex locator reads at most 2 MiB plus lookbehind, under 
 32-request/two-per-target concurrency and 30-second deadline. Shared context-link formatters render
 the tail. Missing Python, unsupported harnesses, stale state and transport errors do not fall back
 to local files. Remote terminal capture, subagent files and opencode export remain unavailable.
+
+SSH connect attempts retain their original ticket and requester predicate through setup IO,
+queued command dispatch and connected publication. Cancellation may close only the connection
+created by that attempt; an expired requester reusing an existing master must not destroy it.
+Transport callbacks leave the short connect scope, and optional background setup starts only
+after authorized publication. A cancelled attempt rejects even when its physical close is pending.
