@@ -36,11 +36,18 @@ describe('endpoint file sources cleanly under real /bin/sh with a spaced path', 
     expect(nodeTokenDir()).toContain(' ')
     expect(nodeTokenDir().startsWith(spaced)).toBe(true)
 
-    const r = spawnSync(
-      '/bin/sh',
-      ['-c', `. "$1" && printf %s "$NODETERM_NODE_TOKEN_DIR"`, 'sh', p],
-      { encoding: 'utf8' }
-    )
+    // Source the real writer bytes through an inherited descriptor. The shell's command
+    // and source pathname stay fixed; the generated assignments still contain the spaced path.
+    const endpoint = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0))
+    const r = (() => {
+      try {
+        return spawnSync(
+          '/bin/sh',
+          ['-c', `. /dev/fd/3 && printf %s "$NODETERM_NODE_TOKEN_DIR"`],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe', endpoint] }
+        )
+      } finally { fs.closeSync(endpoint) }
+    })()
     // (1) sh must source the file without error (unquoted → exit 127).
     expect(r.status).toBe(0)
     // (2) and the path must arrive with its space intact, byte for byte.

@@ -536,10 +536,16 @@ describe('clearAtomicTarget', () => {
 describe.skipIf(process.platform === 'win32')('durability acknowledgement of existing metadata', () => {
   it('flushes a regular file and its directory without rewriting bytes', async () => {
     const file = join(dir, 'repaired.json'); await fs.writeFile(file, 'repaired')
-    const before = await fs.stat(file)
-    await syncFileDurable(file)
-    expect(await fs.readFile(file, 'utf8')).toBe('repaired')
-    expect((await fs.stat(file)).ino).toBe(before.ino)
+    const original = await fs.open(file, 'r')
+    try {
+      const before = await original.stat()
+      await syncFileDurable(file)
+      const current = await fs.open(file, 'r')
+      try {
+        expect(await current.readFile('utf8')).toBe('repaired')
+        expect((await current.stat()).ino).toBe(before.ino)
+      } finally { await current.close() }
+    } finally { await original.close() }
   })
   it('refuses symlink files and directories without touching the referenced data', async () => {
     const file = join(dir, 'original'); await fs.writeFile(file, 'keep')

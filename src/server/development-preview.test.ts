@@ -23,7 +23,7 @@ async function fixture() {
     }
     if (req.url === '/redirect') res.setHeader('Location', '/next')
     if (req.url === '/escape') res.setHeader('Location', 'http://127.0.0.1:1/admin')
-    res.setHeader('Set-Cookie', 'secret=bad; Domain=preview.example.net')
+    res.setHeader('Set-Cookie', 'secret=bad; Domain=preview.example.net; HttpOnly; Secure; SameSite=Strict')
     res.writeHead(req.url === '/redirect' || req.url === '/escape' ? 302 : 200)
     res.end('development app')
   })
