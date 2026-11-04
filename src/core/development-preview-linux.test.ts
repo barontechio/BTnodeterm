@@ -134,7 +134,7 @@ exit 1
       const newer = await list()
       expect(newer).toHaveLength(1)
       fs.unlinkSync(ready)
-      execFileSync('tmux', ['-L', tmuxSocket, 'respawn-pane', '-k', '-t', 'nt-web:0.0', `${process.execPath} ${script}`])
+      execFileSync('tmux', ['-L', tmuxSocket, 'respawn-pane', '-k', '-t', 'nt-web:0.0', '-e', `NODETERM_TEST_PREVIEW_WS=${wsPath}`, process.execPath, script, ready, String(port)])
       for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
       expect(JSON.parse(fs.readFileSync(ready, 'utf8')).pid).not.toBe(pid)
       await expect(open(newer[0].id)).rejects.toThrow()
