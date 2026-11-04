@@ -37,7 +37,7 @@ export async function browserRemoteMedia(api: RemoteTransfersApi, projectId: str
   return checkedUrl(prepared.reference, prepared.url)
 }
 export class RemoteUploadUncertainError extends Error {
-  constructor() { super('Upload could not be confirmed. Check the remote project before retrying.') }
+  constructor() { super('Upload could not be confirmed. The file may exist in the original folder, even if that folder was moved. Inspect it before retrying.') }
 }
 export async function browserRemoteUpload(api: RemoteTransfersApi, projectId: string, nodeId: string, file: File): Promise<string | null> {
   // Unique create-only attachment in the saved project root; never a server-local staging file.

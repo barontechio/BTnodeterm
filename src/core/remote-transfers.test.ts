@@ -51,6 +51,19 @@ describe.skipIf(process.platform !== 'linux')('remote transfer reference authori
     expect(await fs.readFile(path.join(f.root, 'new.bin'), 'utf8')).toBe('hello')
   })
 
+  it.each(['source', 'owner'])('does not publish when %s expires before the commit marker', async reason => {
+    const f = fixture()
+    const ready = await f.service.prepare(f.caller, {projectId: 'p', kind: 'upload', relativePath: 'new.bin', bytes: 5})
+    expect(ready.status).toBe('ready'); if (ready.status !== 'ready') return
+    const body = Readable.from((async function* () {
+      yield Buffer.from('hello')
+      if (reason === 'owner') f.owners.forget(1)
+      else f.change()
+    })())
+    expect((await f.service.upload(ready.reference, f.caller.principal, body, new AbortController().signal)).outcome).not.toBe('committed')
+    expect(await fs.readdir(f.root)).toEqual([])
+  })
+
   it('refuses another cookie principal, owner departure and a changed generation before dispatch', async () => {
     const f = fixture()
     await fs.writeFile(path.join(f.root, 'data'), 'private')

@@ -4,7 +4,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { testTmpDir } from '../test-tmp'
-import { transferFileCommand, transferCommitMarker, parseTransferStat, type TransferFileQuery } from './strict-file-transfer'
+import { transferFileCommand, transferCommitMarker, parseTransferStat, STRICT_FILE_TRANSFER_PYTHON, type TransferFileQuery } from './strict-file-transfer'
 
 function run(query: TransferFileQuery, body?: Buffer): Promise<{code: number; output: Buffer}> {
   return new Promise(resolve => {
@@ -69,6 +69,50 @@ describe.skipIf(process.platform !== 'linux')('descriptor-scoped remote file tra
       expect(await fs.readdir(root)).toEqual([])
       if (action === 'rename') expect(await fs.readdir(moved)).toEqual([])
     } finally { child.kill('SIGKILL'); await closed }
+  })
+
+  // This is the explicitly approved descriptor-authority contract, NOT a claim that pathname
+  // validation and linkat are atomic. Keep the reviewer's original external repro unchanged.
+  it.each([['before-check', 'root'], ['after-check', 'root'], ['before-check', 'parent'], ['after-check', 'parent']] as const)('handles a directory move %s/%s under descriptor authority', async (timing, target) => {
+    const root = testTmpDir('remote-transfer-namespace-')
+    const moved = path.join(testTmpDir('remote-transfer-retired-'), 'original')
+    const directory = target === 'root' ? root : path.join(root, 'parent')
+    if (target === 'parent') await fs.mkdir(directory)
+    const relativePath = target === 'root' ? 'new.bin' : 'parent/new.bin'
+    const body = Buffer.from('exact body'), nonce = randomBytes(16).toString('hex')
+    const before = await stat(root, relativePath)
+    const query: TransferFileQuery = {root, relativePath, operation: 'create', identity: before.identity, bytes: body.length, nonce}
+    const marker = timing === 'before-check' ? 'os.fsync(content); os.fsync(parent); directories_current()' : "try: os.link('/proc/self/fd/'"
+    const at = STRICT_FILE_TRANSFER_PYTHON.split('\n').findIndex(line => line.includes(marker)) + 1
+    expect(at).toBeGreaterThan(0)
+    // sys.settrace schedules the external actor at the syscall boundary while executing the
+    // original production helper body. No product branch/hook or altered link implementation.
+    const wrapper = `import sys, os, json
+source = json.loads(sys.argv[2])
+root, moved = sys.argv[3], sys.argv[4]
+def trace(frame, event, arg):
+    if event == 'line' and frame.f_code.co_filename == '<original-helper>' and frame.f_lineno == ${at}:
+        os.rename(root, moved)
+        os.mkdir(root)
+    return trace
+sys.settrace(trace)
+exec(compile(source, '<original-helper>', 'exec'))
+`
+    const result = await new Promise<{code: number; output: Buffer}>(resolve => {
+      const child = execFile('python3', ['-c', wrapper, JSON.stringify(query), JSON.stringify(STRICT_FILE_TRANSFER_PYTHON), directory, moved],
+        {encoding: 'buffer', timeout: 5000, maxBuffer: 32768}, (error, output) => resolve({code: error ? 255 : 0, output}))
+      child.stdin!.on('error', () => {})
+      child.stdin!.end(Buffer.concat([body, transferCommitMarker(nonce)]))
+    })
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.output.toString()).outcome).toBe(timing === 'before-check' ? 'not-written' : 'unknown')
+    expect(await fs.readdir(directory)).toEqual([]) // never publishes into the replacement namespace
+    expect(String((await fs.stat(moved)).ino)).toBe(before.identity.parents.at(-1)![1])
+    if (timing === 'before-check') expect(await fs.readdir(moved)).toEqual([])
+    else {
+      expect(await fs.readdir(moved)).toEqual(['new.bin'])
+      expect(await fs.readFile(path.join(moved, 'new.bin'))).toEqual(body)
+    }
   })
 
   it('cannot overwrite a file created after preparation', async () => {

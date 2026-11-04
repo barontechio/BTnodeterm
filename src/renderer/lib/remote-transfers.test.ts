@@ -21,6 +21,7 @@ describe('browser SSH upload uncertainty', () => {
     const service = api({outcome: 'unknown'})
     await expect(browserRemoteUpload(service, 'project', 'node', new File(['body'], 'name'))).rejects.toBeInstanceOf(RemoteUploadUncertainError)
     expect(fetch).toHaveBeenCalledOnce(); expect(service.release).not.toHaveBeenCalled()
+    expect(new RemoteUploadUncertainError().message).toContain('even if that folder was moved')
   })
   it('accepts only a relative host transfer route', () => {
     expect(remoteTransferReference('/ssh-transfer?ref=' + ref)).toBe(ref)

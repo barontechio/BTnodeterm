@@ -10,6 +10,10 @@ export type TransferFileQuery = {
 
 // All filesystem authority is descriptor-relative. No shell expansion, symlink traversal,
 // overwrite or caller-selected receipt path. The bounded receipt lives on the published inode.
+// Upload authority is the verified opened directory chain, not an atomic pathname lock.
+// An uncooperating rename after the last check may move that admitted directory before link;
+// publication still targets its descriptor. An observed post-check change reports unknown, never success
+// at the replacement path, and never tries to remove another actor's replacement file.
 export const STRICT_FILE_TRANSFER_PYTHON = String.raw`
 import os, sys, stat, json, hashlib, errno, re, signal
 CAP = 134217728
@@ -113,6 +117,8 @@ def main():
         receipt = {'nonce': nonce, 'bytes': size, 'sha256': digest.hexdigest()}
         try: os.setxattr(content, ATTR, json.dumps(receipt, separators=(',', ':')).encode('ascii'))
         except (OSError, AttributeError): raise Unsupported()
+        # Last namespace validation authorizes this exact opened directory for publication.
+        # It cannot atomically exclude an external rename between this check and linkat.
         os.fsync(content); os.fsync(parent); directories_current()
         attempted = True
         # Publish the opened inode, never a replaceable temporary pathname. Linux procfs

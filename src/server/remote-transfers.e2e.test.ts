@@ -1,3 +1,5 @@
+import { Readable } from 'node:stream'
+import { transferCommitMarker } from '../core/remote-ssh/strict-file-transfer'
 import http from 'node:http'
 import WebSocket from 'ws'
 import { Auth } from './auth'
@@ -170,6 +172,26 @@ describe.skipIf(process.platform !== 'linux')('SSH bulk transfers over encrypted
       expect(digest(fs.readFileSync(path.join(remote, name)))).toBe(digest(payload))
       expect((await request(upload.url, {method: 'PUT', body: payload})).status).toBe(503)
       expect((await prepare('upload', name, {bytes: 1})).status).toBe('conflict')
+      const revokedUpload = await prepare('upload', 'changed-before-marker.bin', {bytes: 4})
+      const beforeMarkerStream = service.stream, beforeMarkerTarget = savedTarget
+      let markerBlocked = false
+      service.stream = (args, options) => {
+        if (!options.input) return beforeMarkerStream(args, options)
+        const input = options.input
+        return beforeMarkerStream(args, {...options, input: Readable.from((async function* () {
+          for await (const chunk of input) {
+            if (Buffer.from(chunk).includes(transferCommitMarker(revokedUpload.reference))) {
+              markerBlocked = true
+              savedTarget = {...beforeMarkerTarget!, remoteCwd: remote + '/changed'}
+            }
+            yield chunk
+          }
+        })(), {objectMode: false})})
+      }
+      try { expect((await request(revokedUpload.url, {method: 'PUT', body: 'body'})).status).toBe(404) }
+      finally {service.stream = beforeMarkerStream; savedTarget = beforeMarkerTarget}
+      expect(markerBlocked).toBe(true)
+      expect(fs.existsSync(path.join(remote, 'changed-before-marker.bin'))).toBe(false)
       const download = await prepare('download', name)
       const downloaded = await request(download.url)
       expect(downloaded.status).toBe(200)
