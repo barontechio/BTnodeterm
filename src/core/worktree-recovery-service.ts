@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { CanvasContentWriter } from './canvas-content-writer'
+import { carryLocalNodeExec } from '../shared/node-exec'
 import { canvasExecutionBinding } from './canvas-execution-reservations'
 import type { WorktreeCanvasAdmission } from './worktree-canvas-admission'
 import type { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
@@ -100,8 +101,11 @@ export class WorktreeRecoveryService {
         .map((node) => ({ project: candidate, node })))
       if (hits.length !== 1 || hits[0].project.id !== row.projectId || isRemoteSessionNode(hits[0].node) || hits[0].node.sshFs)
         throw new Error('A recorded recovery member changed project or route.')
-      const node = hits[0].node; const binding = canvasExecutionBinding(project, node)
-      if (binding !== member.binding && binding !== row.repair?.members.find((entry) => entry.nodeId === node.id)?.binding)
+      const node = hits[0].node
+      if (node.parentId && !ids.has(node.parentId)) throw new Error('A recovery ancestor is outside the recorded member set.')
+      const binding = canvasExecutionBinding(project, node)
+      if (binding !== member.binding && binding !== row.repair?.members.find((entry) => entry.nodeId === node.id)?.binding &&
+        binding !== row.repair?.staged?.find((entry) => entry.nodeId === node.id)?.binding)
         throw new Error('A recorded execution identity changed. Keep the recovery facts for explicit reconciliation.')
       // Agent recovery needs a verified account/runtime conversation adapter, not a guessed resume.
       if (node.agentId || node.agentSessionId || node.accountId || !['group', 'terminal', 'editor', 'diff'].includes(node.kind))
@@ -204,10 +208,17 @@ export class WorktreeRecoveryService {
           permit.assertCurrent()
           const candidate = await domain.workspace.load({ sideline: false })
           const captured = this.repairSnapshot(candidate, row)
+          const originalNodes = structuredClone(captured.nodes)
           const project = candidate.projects.find((entry) => entry.id === row.projectId)!
           this.repairNodes(captured.nodes, row, project.cwd)
-          const plan = { members: captured.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })),
+          const plan = row.repair ?? { members: captured.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })),
+            staged: captured.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project,
+              carryLocalNodeExec(originalNodes.find((old) => old.id === node.id), node, false)) })),
             manualStart: captured.nodes.filter((node) => node.kind === 'terminal').map((node) => node.id) }
+          const terminals = captured.nodes.filter((node) => node.kind === 'terminal').map((node) => node.id)
+          if (plan.manualStart.length !== terminals.length || plan.manualStart.some((id) => !terminals.includes(id)) ||
+            captured.nodes.some((node) => canvasExecutionBinding(project, node) !== plan.members.find((member) => member.nodeId === node.id)?.binding))
+            throw new Error('The recorded repair plan no longer matches its target identities.')
           row = await this.deps.journal.planRepair(id, plan, permit.assertCurrent)
           expectedRecord = JSON.stringify(row); changed = true
           await domain.dispatch.withRecovery(permit, async () => {

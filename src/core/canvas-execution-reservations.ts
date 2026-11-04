@@ -41,6 +41,14 @@ export class CanvasExecutionReservations {
   private repairScope = new AsyncLocalStorage<RepairScope>()
   constructor(private readonly source: Source) {}
   active(): boolean { return this.held.size > 0 }
+  /** A multi-file save may temporarily expose mixed content/index caches. At each new IO
+   * dispatch check the actual repair lifetime, without mistaking that staging for a new binding. */
+  assertDispatch(): void {
+    const scope = this.repairScope.getStore()
+    if (!scope) return
+    if (!scope.live) throw new Error('canvas-execution-expired-repair')
+    scope.permit.assertCurrent()
+  }
   assertCurrent(): void {
     for (const target of this.held.values()) {
       const project = this.source.project(target.project.id)
@@ -124,6 +132,8 @@ export class CanvasExecutionReservations {
   }
 
   assertProject(project: Location & Pick<Project, 'nodes' | 'unavailable'>): void {
+    const scope = this.repairScope.getStore()
+    if (scope?.live) scope.permit.assertCurrent()
     if (!this.held.size) return
     for (const target of this.held.values()) {
       if (target.project.id !== project.id) {

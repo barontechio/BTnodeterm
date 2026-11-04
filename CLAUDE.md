@@ -11519,3 +11519,13 @@ execution index and their parent directories. An ordinary atomic save is not tha
 Unsupported flushes, replacement identities and lost acknowledgements retain the repair plan and
 manual restrictions; they never publish recovered completion. This barrier does not lock external
 filesystem writers and does not change ordinary autosave durability or remote storage semantics.
+
+Execution repair checks its live permit after asynchronous authority/storage work and immediately
+before each new local directory/atomic-write dispatch. Already dispatched IO is awaited; expiry
+prevents later metadata effects and retains pending recovery. Recovery saves are local-only, so an
+unrelated SSH cache cannot turn this transaction into a remote metadata write.
+
+The bounded recovery plan also hashes the exact split-store intermediate state (new public content,
+old private execution overlay). An index publication failure can leave that state on disk. Fresh
+owner consent may reconcile that specific state; arbitrary mixed account/session/command edits
+remain refused. The journal carries hashes, never held command text or credentials.

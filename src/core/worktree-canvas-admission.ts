@@ -36,6 +36,7 @@ export class WorktreeCanvasAdmission implements WorkspaceExecutionAdmission {
   }
   active(): boolean { return this.reservations.active() || this.journal.needsAdmission() }
   assertCurrent(): void { this.reservations.assertCurrent() }
+  assertDispatch(): void { this.reservations.assertDispatch() }
   assertStorageChange(projectId: string): void {
     this.reservations.assertStorageChange(projectId)
     if (!this.journal.needsAdmission()) return

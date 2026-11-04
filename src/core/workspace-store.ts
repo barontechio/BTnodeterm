@@ -262,6 +262,7 @@ export interface WorkspaceExecutionAdmission {
   assertProject(project: Project): void
   assertStorageChange(projectId: string): void
   assertCurrent(): void
+  assertDispatch?(): void
 }
 
 /**
@@ -792,6 +793,7 @@ export class WorkspaceStore {
     if (!repaired || !sideline) return
     try {
       this.lastIndexWrite = null
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(this.indexPath, JSON.stringify(this.index))
     } catch { /* the next save writes it anyway */ }
   }
@@ -1136,6 +1138,7 @@ export class WorkspaceStore {
     if (!index) return
     this.applySettingsToIndex(index)
     this.lastIndexWrite = null
+    this.executionAdmission?.assertDispatch?.()
     await writeAtomic(this.indexPath, JSON.stringify(index))
   }
 
@@ -1290,7 +1293,7 @@ export class WorkspaceStore {
     const run = this.saveChain.then(() => hold.repair(async (transition) => {
       const result = await this.updateWorkspaceNow((fresh) => {
         const next = edit(fresh); transition(next); return next
-      }, beforeSave, {})
+      }, beforeSave, { localOnly: true })
       // Normal saves are atomic, not fsync acknowledgements. Keep the hold and FIFO through
       // durability of both content and the private execution overlay before journal completion.
       const files = new Set([this.indexPath])
@@ -1511,6 +1514,7 @@ export class WorkspaceStore {
     const rev = Math.max(this.revs.get(e.id) ?? 0, fileRev(read.file)) + 1
     const out = serializeProjectFile({ ...candidate, rev })
     try {
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(file, out)
     } catch {
       return false
@@ -1689,7 +1693,9 @@ export class WorkspaceStore {
       const next: ProjectFileV1 = { ...candidate, rev: (this.revs.get(projectId) ?? 0) + 1 }
       const content = serializeProjectFile(next)
       try {
+        this.executionAdmission?.assertDispatch?.()
         await fs.mkdir(path.dirname(file), { recursive: true })
+        this.executionAdmission?.assertDispatch?.()
         await writeAtomic(file, content)
         this.lastWritten.set(file, content)
         this.revs.set(projectId, next.rev)
@@ -1809,6 +1815,7 @@ export class WorkspaceStore {
     const migrating = this.pendingV2Backup !== null
     if (migrating) {
       try {
+        this.executionAdmission?.assertDispatch?.()
         await writeAtomic(path.join(platform().userDataDir, 'workspace.v2.bak'), this.pendingV2Backup!)
       } catch { /* backup is best-effort */ }
       this.pendingV2Backup = null
@@ -1831,6 +1838,7 @@ export class WorkspaceStore {
       onDisk.ino === last.ino
     if (!unchanged) {
       this.lastIndexWrite = null
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(this.indexPath, indexJson)
       const st = await fs.stat(this.indexPath).catch(() => null)
       this.lastIndexWrite = st
@@ -1895,7 +1903,9 @@ export class WorkspaceStore {
     const next: ProjectFileV1 = { ...candidate, rev: ourRev + 1 }
     const content = serializeProjectFile(next)
     try {
+      this.executionAdmission?.assertDispatch?.()
       await fs.mkdir(path.dirname(file), { recursive: true })
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(file, content)
       this.lastWritten.set(file, content)
       this.revs.set(projectId, next.rev)
@@ -2312,6 +2322,7 @@ export class WorkspaceStore {
     // workspace.json every tick.
     if (adopted || e.cache?.rev !== revBefore) {
       this.lastIndexWrite = null
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(this.indexPath, JSON.stringify(this.index))
     }
     return adopted
@@ -2953,6 +2964,7 @@ export class WorkspaceStore {
     if (updated === null) return false
     this.admitProjectFile(e, updated)
     try {
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(file, updated)
     } catch {
       return false
@@ -3023,6 +3035,7 @@ export class WorkspaceStore {
       if (updated === null) continue // not in this project (or unreadable file) — keep looking
       this.admitProjectFile(e, updated)
       try {
+        this.executionAdmission?.assertDispatch?.()
         await writeAtomic(file, updated)
       } catch {
         return false
@@ -3236,6 +3249,7 @@ export class WorkspaceStore {
     if (updated === null) return current()
     this.admitProjectFile(e, updated)
     try {
+      this.executionAdmission?.assertDispatch?.()
       await writeAtomic(file, updated)
     } catch {
       return current()

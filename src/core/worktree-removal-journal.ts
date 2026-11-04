@@ -24,6 +24,8 @@ export interface WorktreeRemovalIntent {
 export interface WorktreeRepairPlan {
   /** Expected post-repair execution bindings, including account/session/model/held intent. */
   members: Array<{ nodeId: string; binding: string }>
+  /** Exact content-written/index-not-yet-written bindings for the existing split store. */
+  staged?: Array<{ nodeId: string; binding: string }>
   /** Retain host dispatch quarantine even after metadata repair; never a launch grant. */
   manualStart: string[]
 }
@@ -56,12 +58,13 @@ function record(raw: unknown): WorktreeRemovalRecord {
     !row.members.some((member) => member.nodeId === row.groupId)) throw new Error('worktree-journal-invalid-record')
   if (row.repair !== undefined) {
     const repair = row.repair
-    if (!repair || row.phase === 'prepared' || Object.keys(repair).some((key) => !['members', 'manualStart'].includes(key)) ||
-      !Array.isArray(repair.members) || repair.members.length !== row.members.length ||
-      repair.members.some((member) => !member || !row.members.some((old) => old.nodeId === member.nodeId) ||
-        typeof member.binding !== 'string' || !/^[0-9a-f]{64}$/.test(member.binding) ||
-        Object.keys(member).some((key) => key !== 'nodeId' && key !== 'binding')) ||
-      new Set(repair.members.map((member) => member.nodeId)).size !== repair.members.length ||
+    const validMembers = (members: WorktreeRepairPlan['members']) => Array.isArray(members) && members.length === row.members.length &&
+      members.every((member) => member && row.members.some((old) => old.nodeId === member.nodeId) &&
+        typeof member.binding === 'string' && /^[0-9a-f]{64}$/.test(member.binding) &&
+        Object.keys(member).every((key) => key === 'nodeId' || key === 'binding')) &&
+      new Set(members.map((member) => member.nodeId)).size === members.length
+    if (!repair || row.phase === 'prepared' || Object.keys(repair).some((key) => !['members', 'staged', 'manualStart'].includes(key)) ||
+      !validMembers(repair.members) || (repair.staged !== undefined && !validMembers(repair.staged)) ||
       !Array.isArray(repair.manualStart) || new Set(repair.manualStart).size !== repair.manualStart.length ||
       repair.manualStart.some((id) => !row.members.some((member) => member.nodeId === id)))
       throw new Error('worktree-journal-invalid-repair')

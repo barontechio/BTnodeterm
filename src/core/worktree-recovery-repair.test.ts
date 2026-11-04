@@ -155,4 +155,47 @@ describe.skipIf(process.platform === 'win32')('recorded missing-checkout recover
     expect(f.journal.isNodePending('terminal')).toBe(true)
   })
 
+  it.each(['overlay', 'mkdir'])('rechecks owner lifetime after asynchronous %s before publishing metadata bytes', async (boundary) => {
+    const f = await fixture(); const started = deferred(); const finish = deferred()
+    const file = path.join(f.repo, '.nodeterm', 'project.json'); const before = fs.readFileSync(file, 'utf8')
+    if (boundary === 'overlay') {
+      f.store.setContentAuthority({ overlayLoad: async (workspace) => workspace, overlaySave: async (workspace) => {
+        if (!workspace.projects[0].nodes.find((node) => node.id === 'group')?.worktree) { started.resolve(); await finish.promise }
+        return workspace
+      } })
+    } else {
+      const mkdir = fs.promises.mkdir
+      vi.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args: Parameters<typeof mkdir>) => {
+        const result = await mkdir(...args)
+        if (args[0] === path.dirname(file)) { started.resolve(); await finish.promise }
+        return result
+      })
+    }
+    const recovering = f.service.recover(f.row.id, f.owner)
+    await started.promise; f.owners.forget(1)
+    expect(f.admission.reservations.active()).toBe(true)
+    finish.resolve(); expect(await recovering).toMatchObject({ ok: false, outcome: 'uncertain' })
+    expect(fs.readFileSync(file, 'utf8')).toBe(before)
+    expect(f.journal.list()[0].phase).toBe('removed')
+    expect(f.journal.isNodePending('terminal')).toBe(true)
+  })
+
+  it('reconciles the exact recorded split-file intermediate state after the private index write fails', async () => {
+    const f = await fixture(); const rename = fs.promises.rename
+    let fail = true
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args: Parameters<typeof rename>) => {
+      if (fail && args[1] === path.join(root, 'data', 'workspace.json')) throw new Error('private index publication failed')
+      return rename(...args)
+    })
+    expect(await f.service.recover(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+    expect(f.journal.list()[0]).toMatchObject({ phase: 'removed', repair: { staged: expect.any(Array) } })
+    expect(f.store.getNodeForHostAction('terminal')).toMatchObject({ cwd: f.repo })
+    expect(f.journal.isNodePending('terminal')).toBe(true)
+    fail = false
+    expect(await f.service.recover(f.row.id, f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
+    expect(f.store.getNodeForHostAction('terminal')?.pendingLaunch?.manualOnly).toBe(true)
+    expect(f.journal.isNodePending('terminal')).toBe(true)
+    expect(f.confirmations.request).toHaveBeenCalledTimes(2)
+  })
+
 })
