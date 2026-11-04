@@ -13,7 +13,7 @@ import { parseSshArgv } from './remote-ssh/native/ssh-argv'
 
 const cleanup: Array<() => void> = []
 afterEach(() => { for (const run of cleanup.splice(0)) run() })
-function fixture() {
+function fixture(afterResult?: (result: {code: number; interrupted: boolean}) => void) {
   const root = testTmpDir('remote-transfer-core-')
   const owners = new OwnerLifetimes()
   const caller: TransferCaller = {owner: owners.get(1, () => true), principal: {current: () => true}}
@@ -31,7 +31,7 @@ function fixture() {
           const child = spawn('sh', ['-c', parsed.command!], {stdio: ['pipe', 'pipe', 'pipe']})
           return {stdin: child.stdin, stdout: child.stdout, stderr: child.stderr,
             closed: new Promise<number>(resolve => child.once('close', code => resolve(code ?? 255))), cancel: () => { child.kill('SIGKILL') }}
-        })}
+        }).then(result => { afterResult?.(result); return result })}
   })
   cleanup.push(() => { service.dispose(); owners.dispose() })
   return {root, caller, owners, service, change: () => generation++, restore: () => { generation = 1 }, loseReceipt: () => { lostReceipt = true }, dispatched: () => dispatched}
@@ -147,4 +147,26 @@ describe.skipIf(process.platform !== 'linux')('reference invalidation schedules'
     expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, consume, new AbortController().signal)).toBe(true)
   })
 
+})
+
+it.skipIf(process.platform !== 'linux')('does not revive an observed immutable-read failure when cancellation arrives before Core handles its result', async () => {
+  const cancelled = new AbortController()
+  let arm = false
+  const f = fixture(result => {
+    if (arm && result.code === 68) {
+      cancelled.abort()
+    }
+  })
+  const p = path.join(f.root, 'movie.mp4')
+  await fs.writeFile(p, '0000ftyp1234567890abcdef')
+  const ready = await f.service.prepare(f.caller, {projectId: 'p', kind: 'media', relativePath: 'movie.mp4', nodeId: 'v'})
+  expect(ready.status).toBe('ready'); if (ready.status !== 'ready') return
+  await fs.rename(p, p + '.old'); await fs.writeFile(p, '0000ftyp1234567890abcdef')
+  arm = true
+  const consume = async (body: Readable) => { for await (const _ of body) {} }
+  expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, consume, cancelled.signal)).toBe(false)
+  expect(cancelled.signal.aborted).toBe(true)
+  arm = false
+  const renewed = f.service.renew(f.caller, ready.reference)
+  expect(renewed).toBe(false)
 })

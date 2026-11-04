@@ -186,7 +186,15 @@ export class RemoteTransfers {
       return await this.work(entry, async () => {
         let published = false
         const options = this.options(entry, async output => {
-          const {header, body} = await readHeader(output)
+          let proof: Awaited<ReturnType<typeof readHeader>>
+          try { proof = await readHeader(output) }
+          catch (error) {
+            // Latch a failed proof when it is observed, before a later caller cancellation
+            // can mask it at the transport-result/await boundary.
+            if (!signal.aborted) this.drop(entry)
+            throw error
+          }
+          const {header, body} = proof
           const h = header as {ok?: unknown; bytes?: unknown; identity?: unknown}
           if (!this.current(entry) || h?.ok !== true || h.bytes !== length || JSON.stringify(h.identity) !== JSON.stringify(entry.stat!.identity)) {
             this.drop(entry); body.destroy(); throw new Error('remote-transfer-stale-read')
@@ -200,7 +208,8 @@ export class RemoteTransfers {
         const ok = published && result.code === 0 && !result.interrupted && this.current(entry)
         // A failed read proof/protocol needs fresh preparation. Only a caller's ordinary
         // cancellation may keep a media reference; it cannot undo a latched source failure.
-        if (!ok && !signal.aborted) this.drop(entry)
+        // Helper exit 68 establishes a failed read even if cancellation beat the consumer.
+        if (!ok && (!signal.aborted || result.code === 68)) this.drop(entry)
         return ok
       })
     } catch { return false }
