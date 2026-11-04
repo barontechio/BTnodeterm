@@ -35,6 +35,7 @@ describe('context-link HTTP request lifetime', () => {
     expect((await response.text()).trim()).toBe('linked result')
     expect(scope.signal?.aborted).toBe(true)
     expect(scope.verified?.()).toBe(false)
+    expect(scope.retainAuthorization?.(() => true)).toBe(false)
   })
 
   it('revokes a still-running read when the caller closes its response socket', async () => {
@@ -64,6 +65,20 @@ describe('context-link HTTP request lifetime', () => {
     })
     const response = await post(undefined, nodeAuthToken(secret, 'caller'))
     expect((await response.text()).trim()).toBe('proof revoked')
+  })
+
+
+  it.each([0, 1])('checks every retained result at publication (revoked member %s)', async (revoked) => {
+    hookServer.clearNodeAuthSecretForTests()
+    const valid = [true, true]
+    hookServer.setContextLinkHandler(async ({ scope }) => {
+      expect(scope?.retainAuthorization?.(() => valid[0])).toBe(true)
+      expect(scope?.retainAuthorization?.(() => valid[1])).toBe(true)
+      queueMicrotask(() => { valid[revoked] = false })
+      return 'combined private results'
+    })
+    const response = await post()
+    expect(await response.text()).not.toContain('combined private results')
   })
 
 })

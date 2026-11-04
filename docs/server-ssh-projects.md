@@ -87,10 +87,14 @@ is independent and never substitutes for that agent proof.
 
 Each request binds the caller's unique project, saved/effective session, harness, selected account
 and (when remote) endpoint/generation. It verifies the target against the linked session/account,
-rechecks the saved directed edge before queued execution and after IO, and revokes on link-map
+rechecks the saved directed edge before queued execution, after IO and immediately before HTTP
+publication, and revokes on link-map
 publication, cancellation, timeout or completion. An unrelated link-map update can conservatively
 refuse an in-flight remote read; a fresh request uses the new map. Normal POST-body completion is
-not cancellation. No detached continuation retains authority and no browser tab is required.
+not cancellation. All reads contribute their original authorization validators to the outer response; formatting
+and timeout awaits cannot grant old bytes fresh authority. Restoring an identical edge or rotating
+and restoring the token secret cannot revive an old response. No detached continuation retains
+authority and no browser tab is required.
 
 The same strict Claude/Codex locator reads at most 2 MiB plus lookbehind, under the reader's
 32-request/two-per-target concurrency and 30-second deadline. Shared context-link formatters render

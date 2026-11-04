@@ -95,10 +95,13 @@ export interface ContextLinkRequestScope {
   signal?: AbortSignal
   /** Host-only live identity proof; an absent proof grants no remote agent read. */
   verified?(): boolean
+  /** Retain original authority through all formatting awaits until synchronous publication. */
+  retainAuthorization?(current: () => boolean): boolean
 }
 export interface RemoteContextReadScope extends ContextLinkRequestScope {
   callerId: string
   current(): boolean
+  retainAuthorization(current: () => boolean): boolean
 }
 
 export interface ContextLinkDeps {
@@ -297,16 +300,30 @@ export async function handleContextLinkRequest(req: {
       return !req.scope?.signal?.aborted && !!binding && matches.length === 1 && identity(matches[0]) === binding
     }
     const changed = 'Linked context changed during the read. Refresh the links and try again.'
+    const retained: Array<() => boolean> = []
+    let refused = false
+    const safe = (check: () => boolean) => { try { return check() === true } catch { return false } }
+    const retainAuthorization = (check: () => boolean) => {
+      if (refused || retained.length >= 128 || !safe(check) ||
+          (req.scope?.retainAuthorization && !req.scope.retainAuthorization(check))) {
+        refused = true; return false
+      }
+      retained.push(check); return true
+    }
     if (!current()) return changed
     const scopedFetchers: ContextLinkFetch = deps.readRemoteTranscript ? { ...fetchers,
-      transcript: (node) => deps.isRemoteNode?.(node.id)
-        ? deps.readRemoteTranscript!(metadata[0], { ...req.scope, callerId: req.nodeId,
-          // Never resurrect an old remote request after link removal/recreation.
-          current: () => revision === linkRevision && current() })
-        : fetchTranscript(node)
+      transcript: (node) => {
+        if (!deps.isRemoteNode?.(node.id)) return fetchTranscript(node)
+        // Never resurrect an old remote request after link removal/recreation. Core retains
+        // its own edge fence even when an adapter contributes additional authority checks.
+        const edgeCurrent = () => revision === linkRevision && current()
+        if (!retainAuthorization(edgeCurrent)) return Promise.resolve(null)
+        return deps.readRemoteTranscript!(metadata[0], { ...req.scope, callerId: req.nodeId,
+          current: edgeCurrent, retainAuthorization })
+      }
     } : fetchers
     const answer = await renderContextLink(doc, req.verb as ContextLinkVerb, req.args, scopedFetchers)
-    return current() ? answer : changed
+    return current() && !refused && retained.every(safe) ? answer : changed
   } catch (e) {
     console.warn('[context-link] read failed', e)
     return 'Could not read linked context.'

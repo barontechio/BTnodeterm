@@ -4,7 +4,9 @@ Server SSH linked-context reads use a separate agent request scope: per-node ide
 current directed saved edge, saved caller/target identities and the HTTP response lifetime.
 Owner history access grants no linked-context permission. Abort on response/socket departure,
 not normal POST-body completion; revoke the scope on completion/timeout and recheck before queued
-SSH dispatch and after IO. Remote read adapters derive paths from saved sessions, never hook paths.
+SSH dispatch, after IO and synchronously before HTTP publication. Retain all original edge/proof/
+source/target validators through formatting; never recapture authority for already-read bytes.
+Remote read adapters derive paths from saved sessions, never hook paths.
 
 Server SSH owner chat now supports paginated Codex rollouts as well as Claude transcripts.
 Keep the harness-specific adapters separate: a Claude reader must never answer a Codex request.

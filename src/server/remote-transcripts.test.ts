@@ -128,7 +128,7 @@ describe('Server SSH transcript routing and caller lifetime', () => {
 
 describe('Server remote linked-context permission is independent of owner history', () => {
   const linked = { id: 'node', title: 'Target', agentId: 'claude', sessionId: sid, accountId: 'managed', cwd: '/repo' }
-  const scope = () => ({ callerId: 'caller', verified: () => true, current: () => true, signal: new AbortController().signal })
+  const scope = () => ({ callerId: 'caller', verified: () => true, current: () => true, retainAuthorization: (check: () => boolean) => check(), signal: new AbortController().signal })
 
   it('serves a verified directed agent read with zero browser tabs', async () => {
     const f = fixture(); f.platform.clients.length = 0

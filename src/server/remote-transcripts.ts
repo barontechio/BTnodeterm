@@ -121,19 +121,25 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     const abort = new AbortController()
     const signal = scope.signal ? AbortSignal.any([scope.signal, abort.signal]) : abort.signal
     let binding: string | null
-    try { binding = callerIdentity(scope.callerId) } catch { return null }
-    const current = () => {
+    let targetBinding: string
+    const deadline = Date.now() + 30_000
+    try { binding = callerIdentity(scope.callerId); targetBinding = stableStringify(targetFor(node.id)) } catch { return null }
+    // Read completion cancels IO continuations, but original authority must remain checkable
+    // until the outer HTTP response publishes. Do not retain the inner request's abort signal.
+    const authorityCurrent = () => {
       try {
         const target = targetFor(node.id)
-        return !signal.aborted && !!binding && scope.verified?.() === true && scope.current() &&
+        return !scope.signal?.aborted && Date.now() < deadline && !!binding && scope.verified?.() === true && scope.current() &&
+          stableStringify(target) === targetBinding &&
           deps.contextPermission?.(scope.callerId, node.id) === true && callerIdentity(scope.callerId) === binding &&
           (node.agentId === 'claude' || node.agentId === 'codex') && supported(node.agentId, node.id) && !!target &&
           target.accountId === node.accountId && target.sessionId === node.sessionId
       }
       catch { return false }
     }
+    const current = () => !signal.aborted && authorityCurrent()
     try {
-      if (!current() || !node.sessionId) return null
+      if (!current() || !node.sessionId || !scope.retainAuthorization(authorityCurrent)) return null
       return await linkedRequests.run({ current, signal }, async () => {
         const result = await linkedReader.readPage({ nodeId: node.id, sessionId: node.sessionId,
           accountId: node.accountId, cwd: node.cwd, remoteOnly: true }, { before: null, maxBytes: 2 * 1024 * 1024 })

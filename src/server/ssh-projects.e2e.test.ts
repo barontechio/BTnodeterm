@@ -1,3 +1,7 @@
+import { randomBytes } from 'node:crypto'
+import { hookServer } from '../core/agents/hook-server'
+import { nodeAuthToken } from '../core/agents/node-auth-token'
+import type { RemoteContextReadScope } from '../core/context-link'
 import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -134,6 +138,43 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(linked).toContain('remote Codex answer')
       expect(await handleContextLinkRequest({ verb: 'transcript', nodeId: 'reader-node', args: {} }))
         .not.toContain('remote Codex answer')
+      // Exercise the entire publication boundary: real SSH bytes, formatter, verified HTTP
+      // caller, and a revoked/recreated edge between the final IO check and res.end.
+      let httpScope: RemoteContextReadScope | undefined
+      initContextLink({ getTmuxBin: () => null } as unknown as PtyManager, {
+        isRemoteNode: transcripts.isRemoteNode,
+        readRemoteTranscript: (entry, scope) => { httpScope = scope; return transcripts!.readLinkedTranscript(entry, scope) }
+      })
+      const map = { 'reader-node': [{ id: 'remote-node', title: 'Remote Codex', agentId: 'codex', sessionId: sid, accountId: 'managed' }] }
+      await setContextLinks(map)
+      await hookServer.start()
+      const authSecret = randomBytes(32); hookServer.setNodeAuthSecret(authSecret)
+      const httpRead = async () => {
+        const response = await fetch(`http://127.0.0.1:${hookServer.getPort()}/context-link/transcript`, {
+          method: 'POST', headers: { 'X-Nodeterm-Hook-Token': hookServer.getToken(),
+            'X-Nodeterm-Node-Token': nodeAuthToken(authSecret, 'reader-node'), 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'nodeId=reader-node'
+        })
+        return response.text()
+      }
+      expect(await httpRead()).toContain('remote Codex answer')
+      const run = service.manager.sshRun.bind(service.manager)
+      let revokedBeforeEnd = false
+      service.manager.sshRun = async (args) => {
+        const result = await run(args)
+        let left = 8
+        const revoke = () => {
+          if (left-- > 0) { queueMicrotask(revoke); return }
+          revokedBeforeEnd = httpScope?.signal?.aborted === false
+          void setContextLinks({}); void setContextLinks(map)
+        }
+        queueMicrotask(revoke)
+        return result
+      }
+      const revokedResponse = await httpRead()
+      expect(revokedBeforeEnd).toBe(true)
+      expect(revokedResponse).not.toContain('remote Codex answer')
+      service.manager.sshRun = run
       await setContextLinks({})
       node.agentId = 'claude'
       savedTarget = undefined
@@ -161,6 +202,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(service.manager.connectionKeyFor('fixture')).not.toBe(generation)
       expect(connected).toEqual(['fixture', 'fixture'])
     } finally {
+      hookServer.stop(); hookServer.clearNodeAuthSecretForTests()
       transcripts?.dispose(); service.close(); resetNativeMuxForTests(); resetPlatformForTests()
       for (const child of children) child.kill(); for (const client of clients) client.end()
       await new Promise<void>((resolve) => sshd.close(() => resolve()))

@@ -1086,6 +1086,19 @@ export class HookServer {
           // Always text: the caller is the sh shim, and the payload IS prose (a rendered
           // transcript). The handler owns the authorization — see context-link.ts.
           const abort = new AbortController()
+          const deadline = Date.now() + CONTEXT_LINK_READ_MS
+          const identitySecret = this.nodeAuthSecretOrNull()
+          const presentedToken = req.headers['x-nodeterm-node-token']
+          const originalToken = Array.isArray(presentedToken) ? [...presentedToken] : presentedToken
+          const validators: Array<() => boolean> = []
+          let refused = false
+          const safe = (check: () => boolean) => { try { return check() === true } catch { return false } }
+          const retainAuthorization = (check: () => boolean) => {
+            if (refused || abort.signal.aborted || Date.now() >= deadline || validators.length >= 128 || !safe(check)) {
+              refused = true; return false
+            }
+            validators.push(check); return true
+          }
           const cancelled = () => abort.abort()
           // IncomingMessage.close also means normal POST body completion. Only aborted input
           // or a closed RESPONSE ends the caller's lifetime while the handler is still working.
@@ -1096,16 +1109,21 @@ export class HookServer {
               ? await withTimeout(
                   this.contextLinkHandler({ verb, nodeId, args, scope: {
                     signal: abort.signal,
-                    verified: () => !abort.signal.aborted && this.identityGate(nodeId,
-                      CONTEXT_LINK_POLICY_VERB, req.headers['x-nodeterm-node-token']).verdict === 'verified'
+                    verified: () => !abort.signal.aborted && Date.now() < deadline &&
+                      identitySecret === this.nodeAuthSecretOrNull() && this.identityGate(nodeId,
+                        CONTEXT_LINK_POLICY_VERB, originalToken).verdict === 'verified',
+                    retainAuthorization
                   } }),
                   CONTEXT_LINK_READ_MS,
                   CONTEXT_LINK_TIMEOUT_TEXT
                 )
               : 'Context link is unavailable in this session.'
             if (!abort.signal.aborted && !res.destroyed) {
+              // No await between the original request's final authority check and publication.
+              // Every remote fetch/page contributes; a fresh capture cannot authorize old bytes.
+              const allowed = !refused && validators.every(safe)
               res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-              res.end(`${text}\n`)
+              res.end(`${allowed ? text : CONTEXT_LINK_TIMEOUT_TEXT}\n`)
             }
           } finally {
             abort.abort(); req.removeListener('aborted', cancelled); res.removeListener('close', cancelled)
