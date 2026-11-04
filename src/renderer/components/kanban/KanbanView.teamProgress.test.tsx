@@ -13,7 +13,8 @@ import { stationsByOpener, type StationNodeLike } from '../../lib/teamProgress'
 import { waitRopeId } from '../../lib/edgeModel'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ source: 'local', api: window.nodeTerminal })
+  useSession: () => ({ source: 'local', api: window.nodeTerminal }),
+  sessionForProject: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 vi.mock('../ContextMeter', () => ({ ContextMeter: () => null }))
 

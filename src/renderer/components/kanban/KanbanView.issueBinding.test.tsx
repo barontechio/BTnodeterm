@@ -17,7 +17,8 @@ import { useViewMode } from '../../state/viewMode'
 import { useGitHubIssues } from '../../state/githubIssues'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ source: 'local', api: window.nodeTerminal })
+  useSession: () => ({ source: 'local', api: window.nodeTerminal }),
+  sessionForProject: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 
 const ISSUE: GitHubIssueCardView = {

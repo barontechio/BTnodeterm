@@ -11,7 +11,8 @@ import { useKanbanDisplay } from '../../state/kanbanDisplay'
 import { useProjects } from '../../state/projects'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ source: 'local', api: window.nodeTerminal })
+  useSession: () => ({ source: 'local', api: window.nodeTerminal }),
+  sessionForProject: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 
 let root: Root

@@ -11,7 +11,8 @@ import type { ProjectKanban } from '@shared/types'
 import { useAgentStatus } from '../../state/agentStatus'
 
 vi.mock('../../session/session', () => ({
-  useSession: () => ({ source: 'local', api: window.nodeTerminal })
+  useSession: () => ({ source: 'local', api: window.nodeTerminal }),
+  sessionForProject: () => ({ source: 'local', api: window.nodeTerminal })
 }))
 
 let root: Root | null = null
