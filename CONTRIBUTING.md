@@ -2027,3 +2027,9 @@ source tag and with causality after the refusal, then send an addressed project-
 This preserves ordering across pending edits and optimistic deletes. A missing canonical target
 requires an explicit reload notice. The hook grants no backend or storage rights: domain/store
 checks still precede every durable write and physical effect.
+
+Shared headless control (`core/headless-node-factory.ts`) preserves creator scope. Under project
+scope, creator proof requires a unique current placement in the recorded project. Validate every
+close target before any kill and require a currently control-capable source for agent `run` before
+claiming or delivering a launch. Authenticated owner Run now retains its separate unique local
+target and exact-command checks; a plain terminal remains eligible for that explicit owner action.

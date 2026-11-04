@@ -675,7 +675,12 @@ export class HeadlessNodeFactory {
   /** A verified caller may mutate a node it freshly created during this server run — or, under the
    *  `project` scope, any node of its own project (`inCallerProject`). */
   private ownsMutation(sourceNodeId: string, nodeId: string, workspace: Workspace, project: Project): boolean {
-    if (this.ownsSpawn(sourceNodeId, nodeId)) return true
+    if (this.ownsSpawn(sourceNodeId, nodeId)) {
+      if (this.controlScope === 'creator') return true
+      // PTYs are keyed by id: creator proof cannot disambiguate a duplicate or moved target.
+      const holders = nodeProjects(workspace, nodeId)
+      return holders.length === 1 && holders[0].id === this.ownership.ownerOf(nodeId)!.projectId
+    }
     return this.controlScope === 'project' && this.inCallerProject(sourceNodeId, nodeId, workspace, project)
   }
 
@@ -1115,7 +1120,7 @@ export class HeadlessNodeFactory {
         }
         const ownership = this.ownership.ownerOf(id)
         const spawned = !!ownership && ownership.sourceNodeId === sourceNodeId
-        if (!spawned && !this.ownsMutation(sourceNodeId, id, workspace, source.project)) {
+        if (!this.ownsMutation(sourceNodeId, id, workspace, source.project)) {
           return this.controlScope === 'project'
             ? this.ownershipRefusal('close', sourceNodeId, id)
             : {
@@ -1781,12 +1786,18 @@ export class HeadlessNodeFactory {
       const noNode: ServerControlReply = { ok: false, error: `run: no node with id ${id}` }
       let projectId = owner ? holders[0].id : spawned ? this.ownership.ownerOf(id)!.projectId : undefined
       if (projectId !== undefined && args.project !== undefined && args.project !== projectId) return noNode
-      if (projectId === undefined) {
+      // Authenticated owner Run now has its own exact-command checks above. Agent requests
+      // must prove current source eligibility and target placement even with creator evidence.
+      if (!owner && this.controlScope === 'project') {
         const source = sourceProject(workspace, sourceNodeId)
-        if (!source || !this.ownsMutation(sourceNodeId, id, workspace, source.project)) {
+        if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
+        if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
+          return { ok: false, error: 'source node is not a control-capable agent' }
+        }
+        if (!this.ownsMutation(sourceNodeId, id, workspace, source.project)) {
           return this.ownershipRefusal('run', sourceNodeId, id)
         }
-        projectId = source.project.id
+        projectId ??= source.project.id
         if (args.project !== undefined && args.project !== projectId) return noNode
       }
       const project = workspace.projects.find((p) => p.id === projectId)

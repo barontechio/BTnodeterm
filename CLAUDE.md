@@ -11466,3 +11466,9 @@ renderer/Desktop branch path now invokes the same host service through its owner
 That entry uses the real document lifetime and never fabricates an agent caller or creator grant.
 The UI saves first; unsupported hosts or lost replies cannot fall back to raw input. Relay tabs
 omit owner control actions so remote ids cannot target the viewer's local desktop.
+
+Shared headless control (`core/headless-node-factory.ts`) preserves creator scope. Under project
+scope, creator proof requires a unique current placement in the recorded project. Validate every
+close target before any kill and require a currently control-capable source for agent `run` before
+claiming or delivering a launch. Authenticated owner Run now retains its separate unique local
+target and exact-command checks; a plain terminal remains eligible for that explicit owner action.
