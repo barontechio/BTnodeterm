@@ -427,6 +427,10 @@ it('browser joined API cannot fall through to the owning local Server administra
     await expect(handle.api.githubControl.status()).rejects.toMatchObject({ code: E_UNSUPPORTED })
     expect(handle.api.worktree.recovery).toBeUndefined()
     expect(await handle.api.settings.load()).toHaveProperty('fontSize')
+    const retired = buildRelayApi('browser-team-retired', new FakeTransport())
+    expect(retired.api.hosted).toBeDefined()
+    expect(await retired.api.canvasAuthority.governed()).toEqual([])
+    await expect(retired.api.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
     expect(admin).not.toHaveBeenCalled()
   } finally {
     forgetBrowserTeamConnection('browser-isolation')

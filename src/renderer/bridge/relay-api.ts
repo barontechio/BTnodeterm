@@ -85,20 +85,19 @@ export function buildRelayApi(
   transport?: FrameTransport,
   opts?: RelayApiOptions
 ): RelayApiHandle {
-  // The LOCAL preload — this is a desktop-only path (relay hosting/joining is Electron), so
-  // `window.nodeTerminal` is the full real preload, not the browser stub surface.
+  // The owning app supplies only the namespaced relay carrier for browser team tabs.
   const local = (window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal
   const carrier = transport ?? new RelayFrameTransport(connectionId)
   // A hosted tab's role, once the host has said it. Unknown = the lowest role (hosted-gate.ts).
   let hostedRole: HostedRole | null = null
-  const hosted = opts?.hosted === true
+  const browser = isBrowserTeamConnection(connectionId)
+  const hosted = browser || opts?.hosted === true
   const client = hosted ? new RoleGatedRpcClient(carrier, () => hostedRole) : new RpcClient(carrier)
 
   const real = buildRealApi(client) // { pty, workspace, settings, userDataDir }
   const files = buildFilesApi(client) // { fs, git, files, context }
   const github = buildGitHubApi(client)
   const stub = buildStubApi()
-  const browser = isBrowserTeamConnection(connectionId)
   const refuse = () => unsupported('Joined browser local administration')
 
   const api: NodeTerminalApi = {
