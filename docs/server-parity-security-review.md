@@ -1,5 +1,21 @@
 # Server parity security review
 
+## C candidate rebased onto reviewed CI repairs (2026-11-04)
+
+The unpublished C candidate is now based on `cb1758d0`, retaining all seven C commits from the
+archived `eb802ba4` candidate. There were no rebase conflicts. C source integrations are now
+`8f5bb7ac`, `581645a0`, `8565d4c1`, `96a3d2c7`, `8666fd1b`; the old source-to-staging mapping
+below remains history. The complete tree difference from the archived candidate contains only
+three accepted test-file repairs before this documentation update; C production source is unchanged.
+
+Base `6b2607a4` subsequently failed three Linux CI cases. The new base preserves the reviewed
+notification test using the captured API's quiet behavior (`175b6f79`), native SSH jump fixture
+waiting for actual target acceptance instead of a fixed delay (`d86c652e`), and transfer preparation
+assertions before revocation checks (`cb1758d0`). The last change improves diagnostics; it does not
+prove the transfer failure's cause. No production authorization, timeout limit or test assertion
+was weakened. New composition checks and integrated CI remain required; the earlier 192-case
+candidate evidence and all historical failures below belong to their exact snapshots.
+
 ## Worktree C staging candidate (2026-11-04)
 
 This candidate composes reviewed manual shell recovery on base `6b2607a4`, without changing
