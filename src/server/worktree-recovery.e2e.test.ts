@@ -12,9 +12,13 @@ import { IPC } from '../shared/ipc'
 import { WorkspaceStore } from '../core/workspace-store'
 import { WorktreeRemovalJournal } from '../core/worktree-removal-journal'
 import { canvasExecutionBinding } from '../core/canvas-execution-reservations'
-import type { Project } from '../shared/types'
+import { DEFAULT_SETTINGS, type Project } from '../shared/types'
+import { SettingsStore } from '../core/settings-store'
 import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import type { RpcRequest } from '../shared/rpc'
+
+// This suite measures actual plain Linux PTYs, independent of any prior session-host build.
+vi.mock('../core/session-host-backend', async () => (await import('../core/__fixtures__/no-session-host')).noSessionHost())
 
 describe.skipIf(process.platform === 'win32')('owner worktree recovery through a real Server WebSocket', () => {
   it('inspects and keeps the original dirty checkout without replaying Git removal or starting a session', async () => {
@@ -78,12 +82,16 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
     git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid'); git('commit', '--allow-empty', '-m', 'base')
     vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     initPlatform(fakePlatform({ userDataDir: dataDir }))
+    await new SettingsStore().save({ ...DEFAULT_SETTINGS, tmuxEnabled: false })
     const store = new WorkspaceStore()
     const project: Project = { id: 'project', name: 'Project', color: '#fff', cwd: repo, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [
       { id: 'group', kind: 'group', title: 'Feature', color: '#fff', group: null, position: { x: 0, y: 0 }, size: { width: 400, height: 300 },
         worktree: { repoPath: repo, path: checkout, branch: 'feature', baseRef: 'main', createdByApp: true } },
       { id: 'editor', kind: 'editor', title: 'File', color: '#fff', group: null, parentId: 'group', position: { x: 0, y: 0 }, size: { width: 200, height: 100 },
-        filePath: path.join(checkout, 'file') }
+        filePath: path.join(checkout, 'file') },
+      { id: 'resume-terminal', kind: 'terminal', title: 'Shell', color: '#fff', group: null, parentId: 'group',
+        position: { x: 0, y: 0 }, size: { width: 300, height: 200 }, cwd: checkout, shell: '/bin/bash',
+        pendingLaunch: { after: [], command: 'touch FORBIDDEN_REPLAY', attempted: false } }
     ] }
     await store.save({ version: 2, activeProjectId: project.id, projects: [project] })
     const persisted = (await store.load()).projects[0]
@@ -146,6 +154,23 @@ describe.skipIf(process.platform === 'win32')('owner worktree recovery through a
       expect(rebound.projects[0].nodes.find((node) => node.id === 'editor')?.fileMissing).toBe(true)
       expect(await request(IPC.worktreeRecoveryList)).toMatchObject({ ok: true, records: [{ pathRestricted: false }] })
       expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0]).toMatchObject({ phase: 'recovered', rebind: { state: 'bound' } })
+      if (process.platform === 'linux') {
+        const resuming = request(IPC.worktreeRecoveryResume, facts.id, 'resume-terminal')
+        await vi.waitFor(() => expect(prompts).toHaveLength(3), { timeout: 10000 })
+        expect(prompts[2].action).toBe('resume-worktree-terminal')
+        await expect(request(IPC.ptyCreate, { persistKey: 'resume-terminal', cwd: repo, cols: 80, rows: 24 })).rejects.toThrow('worktree-recovery-required')
+        const start = prompts[2]
+        await request(IPC.ownerConfirmationDecide, { id: start.id, token: start.token, proof: start.proof, answer: 'approve' })
+        const result = await resuming
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, outcome: 'resumed' })
+        const created = await request(IPC.ptyCreate, { persistKey: 'resume-terminal', cwd: repo, cols: 80, rows: 24 }) as { sessionId: string; fresh: boolean }
+        expect(created.fresh).toBe(false)
+        expect(created.sessionId).toBeTruthy()
+        expect(await request(IPC.worktreeRecoveryList)).toMatchObject({ ok: true, records: [{ manualStartIds: ['resume-terminal'], manualActiveIds: ['resume-terminal'] }] })
+        expect(fs.existsSync(path.join(repo, 'FORBIDDEN_REPLAY'))).toBe(false)
+        expect(JSON.parse(fs.readFileSync(journal.file, 'utf8')).records[0].manualResume).toMatchObject([{ state: 'observed', evidence: { backend: 'plain' } }])
+      }
+
 
     } finally { socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs() }
   })

@@ -2,6 +2,13 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import type { AccountOwner } from './owner-lifetimes'
 
 export type NodeExecutionKind = 'write' | 'branch' | 'restart' | 'account' | 'worktree'
+/** Actual host dispatch, never caller-provided RPC authorization. A captured target is required
+ * for generation-bound input/co-attach; a physical spawn is a distinct operation. */
+export interface NodeExecutionDispatch {
+  kind: 'create' | 'spawn' | 'input' | 'register'
+  target?: object
+  binding?: string
+}
 export interface NodeExecutionPermit {
   readonly nodeId: string
   readonly kind: NodeExecutionKind
@@ -36,14 +43,14 @@ export class NodeExecutionCoordinator {
   private active = new Map<string, Entry>()
   private context = new AsyncLocalStorage<Entry>()
   private stopped = false
-  private dispatchAdmission: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null = null
+  private dispatchAdmission: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined, dispatch?: NodeExecutionDispatch) => void) | null = null
 
   constructor(private readonly now: () => number = () => Date.now(), private readonly limit = 32) {}
 
   isBusy(nodeId: string): boolean { return this.active.has(nodeId) }
 
   /** Host policy at the actual dispatch boundary. Acquiring a claim grants no exception to it. */
-  setDispatchAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null): void {
+  setDispatchAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined, dispatch?: NodeExecutionDispatch) => void) | null): void {
     this.dispatchAdmission = check
   }
 
@@ -62,9 +69,9 @@ export class NodeExecutionCoordinator {
   }
 
   /** Every mutation checks this at its point of dispatch, including continuations after expiry. */
-  assertAllowed(nodeId: string): void {
+  assertAllowed(nodeId: string, dispatch?: NodeExecutionDispatch): void {
     const entry = this.assertExclusion(nodeId)
-    this.dispatchAdmission?.(nodeId, entry?.permit)
+    this.dispatchAdmission?.(nodeId, entry?.permit, dispatch)
   }
 
   private assertExclusion(nodeId: string): Entry | undefined {

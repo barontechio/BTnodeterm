@@ -1,4 +1,8 @@
 import fs from 'node:fs'
+import { manualCreateBinding, manualProcessBirth } from './worktree-manual-shell'
+import { localNodePtyOptions, HEADLESS_COLS, HEADLESS_ROWS } from '../shared/node-pty-options'
+import type { WorktreeRecoveryResumeReply } from '../shared/worktree-recovery'
+import type { WorktreeManualResume } from './worktree-removal-journal'
 import { randomUUID } from 'node:crypto'
 import { readRegularFileNoFollow } from './read-regular-file'
 import { captureWorktreeGitEvidence, assertWorktreeGitEvidence } from './worktree-git-evidence'
@@ -23,7 +27,8 @@ import type { WorktreeRemovalJournal, WorktreeRemovalRecord, WorktreeRebindPlan 
 
 interface Dependencies {
   journal: WorktreeRemovalJournal
-  pty: Pick<PtyManager, 'runWorktreeAction'> & Partial<Pick<PtyManager, 'recycleWorktreeMember' | 'nodeExecutionIdentity'>>
+  pty: Pick<PtyManager, 'runWorktreeAction'> & Partial<Pick<PtyManager, 'recycleWorktreeMember' | 'nodeExecutionIdentity' |
+    'runNodeActions' | 'prepareManualShell' | 'createManualShell' | 'publishManualShellReady'>>
   git: Pick<GitService, 'worktreeList'> & Partial<Pick<GitService, 'worktreeRecoveryDirectories'>>
   repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
@@ -40,9 +45,13 @@ export class WorktreeRecoveryService {
   private pending = new Set<string>()
   constructor(private readonly deps: Dependencies) {}
 
+  private publicItem(row: WorktreeRemovalRecord): WorktreeRecoveryItem {
+    return { ...item(row), manualActiveIds: row.repair?.manualStart.filter((id) => this.deps.repair?.dispatch.manualSessionActive(id)) ?? [] }
+  }
+
   list(owner: AccountOwner): WorktreeRecoveryList {
     if (!owner.active()) return { ok: false, error: 'worktree-recovery-owner-required' }
-    try { return { ok: true, records: this.deps.journal.list().map(item) } }
+    try { return { ok: true, records: this.deps.journal.list().map((row) => this.publicItem(row)) } }
     catch { return { ok: false, error: 'Worktree recovery state is unavailable. Inspect the host journal before changing it.' } }
   }
 
@@ -465,6 +474,142 @@ export class WorktreeRecoveryService {
     } finally { approval?.cancel(); this.pending.delete(id) }
   }
 
+  /** Explicit owner start. Durable manualStart remains; only this actual Session can accept
+   * ordinary input. A reconstructed host cannot turn recorded observations into authority. */
+  async resume(id: string, nodeId: string, owner: AccountOwner): Promise<WorktreeRecoveryResumeReply> {
+    const refuse = (error: string): WorktreeRecoveryResumeReply => ({ ok: false, outcome: 'refused', error })
+    const domain = this.deps.repair; const pty = this.deps.pty
+    if (!owner.active() || !domain || !pty.runNodeActions || !pty.prepareManualShell || !pty.createManualShell || !pty.nodeExecutionIdentity)
+      return refuse('Verified manual shell creation is unavailable for this owner or host.')
+    if (this.pending.has(id) || this.pending.size >= 32) return refuse('Another recovery is still completing.')
+    this.pending.add(id)
+    let approval: Extract<OwnerPermit, { ok: true }> | undefined
+    let dispatched = false; let ready: object | undefined
+    try {
+      let row = this.row(id)
+      if (row.phase !== 'recovered' || !row.repair?.manualStart.includes(nodeId)) return refuse('This terminal has no recovered manual-start plan.')
+      if (domain.dispatch.manualSessionActive(nodeId)) return refuse('The verified shell is already running. Attach to that terminal.')
+      const workspace = await domain.workspace.load({ sideline: false })
+      const before = this.repairSnapshot(workspace, row, true)
+      const project = workspace.projects.find((entry) => entry.id === row.projectId)!
+      const node = before.nodes.find((entry) => entry.id === nodeId)
+      if (!node || node.kind !== 'terminal' || node.agentModel) return refuse('A plain local terminal is required; agent runtime identities need a separate adapter.')
+      const options = localNodePtyOptions(project, node, { cols: HEADLESS_COLS, rows: HEADLESS_ROWS })
+      const profile = await pty.prepareManualShell(options)
+      const cwd = profile.options.cwd!
+      const stamp = () => {
+        const stat = fs.lstatSync(cwd, { bigint: true })
+        if (!stat.isDirectory() || !stat.ino || path.resolve(cwd) !== cwd || fs.realpathSync.native(cwd) !== cwd)
+          throw new Error('The approved shell directory is unavailable or redirected.')
+        fs.accessSync(cwd, fs.constants.R_OK | fs.constants.X_OK)
+        worktreeRecoveryAdmission(this.deps.journal)(cwd)
+        return `${stat.dev}:${stat.ino}`
+      }
+      const members = before.nodes.map((entry) => ({ nodeId: entry.id, binding: canvasExecutionBinding(project, entry) }))
+      const latest = row.manualResume?.filter((entry) => entry.nodeId === nodeId).at(-1)
+      const physical = new Map(before.nodes.filter((entry) => entry.kind === 'terminal').map((entry) => [entry.id, pty.nodeExecutionIdentity!(entry.id)]))
+      let reconcile = false
+      if (latest && (latest.state === 'dispatching' || latest.state === 'observed')) {
+        if (physical.get(nodeId)) reconcile = true
+        else if (latest.state === 'observed' && latest.evidence) {
+          const ended = (pid: number, birth: string) => {
+            try { return manualProcessBirth(pid) !== birth }
+            catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true; throw error }
+          }
+          const proof = latest.evidence
+          if (proof.backend === 'plain' ? !ended(proof.pid, proof.birth) :
+            !ended(proof.panePid, proof.paneBirth) || !ended(proof.clientPid, proof.clientBirth))
+            return refuse('The previously observed process still exists without a verifiable host Session. Inspect it before another start.')
+        } else return refuse('A previous creation has an uncertain outcome. Inspect the backend; it cannot be retried automatically.')
+      } else if (physical.get(nodeId)) return refuse('An unverified live session already occupies this terminal.')
+      const plan: WorktreeManualResume = { nodeId, nonce: reconcile || latest?.state === 'prepared' ? latest!.nonce : randomUUID(),
+        state: 'prepared', cwd, directoryStamp: stamp(), profile: profile.fingerprint, options: manualCreateBinding(profile.options), members }
+      if ((reconcile || latest?.state === 'prepared') && JSON.stringify({ ...latest, state: 'prepared', evidence: undefined, backendCreated: undefined }) !== JSON.stringify(plan))
+        return refuse('The recorded start profile or saved identities changed. Preserve the previous attempt for explicit reconciliation.')
+      let expectedRecord = JSON.stringify(row)
+      const snapshot = (fresh: Workspace) => {
+        const captured = this.repairSnapshot(fresh, row, true)
+        const targetProject = fresh.projects.find((entry) => entry.id === row.projectId)!
+        if (captured.nodes.some((entry) => canvasExecutionBinding(targetProject, entry) !== members.find((member) => member.nodeId === entry.id)?.binding))
+          throw new Error('The approved saved execution identity changed.')
+      }
+      const current = () => {
+        try { return owner.active() && stamp() === plan.directoryStamp && JSON.stringify(this.row(id)) === expectedRecord &&
+          [...physical].every(([key, target]) => pty.nodeExecutionIdentity!(key) === target) }
+        catch { return false }
+      }
+      const answer = await domain.confirmations.request({ action: 'resume-worktree-terminal',
+        requester: { nodeId, projectId: row.projectId, title: node.title }, binding: { record: expectedRecord, plan },
+        message: `Start the recovered terminal in ${cwd}?`,
+        details: `Uses the verified local ${profile.backend} shell ${profile.options.shell}. Held launch commands stay manual and are not sent. Only this actual shell session receives input permission; another cold start needs confirmation.`,
+        confirmLabel: reconcile ? 'Review existing shell' : 'Start shell', danger: true,
+        checkCurrent: async () => {
+          if (!current()) return false
+          snapshot(await domain.workspace.load({ sideline: false }))
+          const fresh = await pty.prepareManualShell!(options)
+          return fresh.fingerprint === profile.fingerprint && current()
+        }
+      })
+      if (!answer.ok) return refuse(`Owner confirmation ${answer.reason}. No shell was dispatched.`)
+      approval = answer
+      if (!(await answer.consume())) return refuse('The approved shell identity changed or expired.')
+      const writer = new CanvasContentWriter({ workspaceStore: domain.workspace })
+      await pty.runNodeActions(members.map((member) => member.nodeId), 'restart',
+        { owner, current: () => answer.current() && current(), timeoutMs: 120_000 }, async (permit) => {
+          const { value: hold } = await writer.edit((fresh) => {
+            permit.assertCurrent(); snapshot(fresh)
+            return domain.admission.reservations.hold(fresh, members.map((member) => member.nodeId), permit)
+          })
+          try {
+            if (!reconcile) {
+              row = await this.deps.journal.planManualResume(id, plan, permit.assertCurrent)
+              expectedRecord = JSON.stringify(row)
+            }
+            await writer.repairExecution(hold, (fresh) => { permit.assertCurrent(); snapshot(fresh) }, async (_durable, assertDurable) => {
+              const assertCurrent = () => { permit.assertCurrent(); assertDurable() }
+              assertCurrent()
+              if (!reconcile) {
+                row = await this.deps.journal.markManualDispatch(id, plan.nonce, assertCurrent)
+                expectedRecord = JSON.stringify(row)
+              }
+              await domain.dispatch.withManualCreate(permit, nodeId, plan.options, assertCurrent, async () => {
+                const result = await pty.createManualShell!(profile, plan.nonce, permit, (target) => { physical.set(nodeId, target) })
+                if (!result.ok) {
+                  dispatched = result.dispatched || reconcile
+                  if (result.backendCreated) {
+                    row = await this.deps.journal.markManualBackendCreated(id, plan.nonce, result.backendCreated)
+                    expectedRecord = JSON.stringify(row)
+                  }
+                  if (result.evidence) {
+                    row = await this.deps.journal.markManualObserved(id, plan.nonce, result.evidence)
+                    expectedRecord = JSON.stringify(row)
+                  }
+                  if (!dispatched) {
+                    row = await this.deps.journal.markManualRefused(id, plan.nonce)
+                    expectedRecord = JSON.stringify(row)
+                  }
+                  throw new Error(result.error)
+                }
+                dispatched = true
+                row = await this.deps.journal.markManualObserved(id, plan.nonce, result.evidence)
+                expectedRecord = JSON.stringify(row)
+                assertCurrent()
+                domain.dispatch.admitManualSession(permit, nodeId, result.target, result.current)
+                ready = result.target
+              }, physical.get(nodeId))
+            })
+          } finally { hold.release() }
+        })
+      if (!owner.active()) throw new Error('The approving owner departed.')
+      if (ready) pty.publishManualShellReady?.(nodeId, ready)
+      return { ok: true, outcome: 'resumed', message: 'Verified local shell ready. Held commands were not replayed; future cold starts still require confirmation.' }
+    } catch (error) {
+      if (ready) domain.dispatch.revokeManualSession(nodeId, ready)
+      try { this.deps.journal.list() } catch { dispatched = true }
+      return { ok: false, outcome: dispatched ? 'uncertain' : 'refused', error: `Manual shell ${dispatched ? 'may have started; inspect the recorded state before another action' : 'was refused'}: ${error instanceof Error ? error.message : String(error)}` }
+    } finally { approval?.cancel(); this.pending.delete(id) }
+  }
+
   async inspect(id: string, owner: AccountOwner): Promise<WorktreeRecoveryInspection> {
     if (!owner.active()) return { ok: false, error: 'worktree-recovery-owner-required' }
     let row: WorktreeRemovalRecord
@@ -478,7 +623,7 @@ export class WorktreeRecoveryService {
     }
     try {
       if (!owner.active() || JSON.stringify(this.row(id)) !== JSON.stringify(row)) return { ok: false, error: 'Recovery changed during inspection. Reload status.' }
-      return { ok: true, record: item(row), status }
+      return { ok: true, record: this.publicItem(row), status }
     } catch { return { ok: false, error: 'Recovery changed during inspection. Reload status.' } }
   }
 

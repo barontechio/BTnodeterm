@@ -279,7 +279,7 @@ it.each(['folder', 'appdata', 'inline'] as const)('recovers an already missing %
     const row = f.journal.list()[0]
     expect(row).toMatchObject({ phase: 'removed', provenance: { kind: 'observed-missing', ancestor: root } })
     expect(row.directoryStamp).toBeUndefined()
-    expect(JSON.parse(fs.readFileSync(f.journal.file, 'utf8')).version).toBe(4)
+    expect(JSON.parse(fs.readFileSync(f.journal.file, 'utf8')).version).toBe(5)
     return recycle(...args)
   })
   expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })

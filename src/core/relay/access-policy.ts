@@ -383,6 +383,7 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   IPC.worktreeRecoveryDiscover,
   IPC.worktreeRecoveryMissing,
   IPC.worktreeRecoveryRebind,
+  IPC.worktreeRecoveryResume,
   // Host settings, credentials and paths.
   // Agent-integration consent status (#744): host-only, never a viewer's.
   IPC.integrationsStatus,

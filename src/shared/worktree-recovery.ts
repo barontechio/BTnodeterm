@@ -13,6 +13,7 @@ export interface WorktreeRecoveryItem {
   fallbackCwd: string
   memberIds: string[]
   manualStartIds?: string[]
+  manualActiveIds?: string[]
 }
 export type WorktreeRecoveryList = { ok: true; records: WorktreeRecoveryItem[] } | { ok: false; error: string }
 export type WorktreeRecoveryInspection = { ok: true; record: WorktreeRecoveryItem; status: 'kept' | 'missing' | 'changed' | 'unavailable' } |
@@ -24,6 +25,7 @@ export interface WorktreeRecoveryApi {
   list(): Promise<WorktreeRecoveryList | null>
   inspect(id: string): Promise<WorktreeRecoveryInspection>
   keep(id: string): Promise<WorktreeRecoveryKeepReply>
+  resume?(id: string, nodeId: string): Promise<WorktreeRecoveryResumeReply>
   rebind?(id: string): Promise<WorktreeRecoveryRebindReply>
   discoverMissing?(): Promise<WorktreeMissingList>
   recoverMissing?(groupId: string): Promise<WorktreeRecoveryRepairReply>
@@ -37,4 +39,7 @@ export interface WorktreeMissingCandidate { groupId: string; projectId: string; 
 export type WorktreeMissingList = { ok: true; candidates: WorktreeMissingCandidate[] } | { ok: false; error: string }
 
 export type WorktreeRecoveryRebindReply = { ok: true; outcome: 'rebound'; message: string } |
+  { ok: false; outcome: 'refused' | 'uncertain'; error: string }
+
+export type WorktreeRecoveryResumeReply = { ok: true; outcome: 'resumed'; message: string } |
   { ok: false; outcome: 'refused' | 'uncertain'; error: string }

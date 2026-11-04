@@ -134,4 +134,21 @@ describe('owner worktree recovery UI', () => {
     expect(button('Review verified rebinding')).toBeUndefined()
   })
 
+  it('requests one manual start outside the dialog slot and never retries a lost reply', async () => {
+    const api = fixture(); const recovered: WorktreeRecoveryItem = { ...row, phase: 'recovered', manualStartIds: ['terminal'], manualActiveIds: [] }
+    api.list = async () => ({ ok: true, records: [recovered] })
+    api.inspect = async () => ({ ok: true, record: recovered, status: 'missing' })
+    api.resume = vi.fn(async () => {
+      expect(hasOwnerConfirmation()).toBe(false)
+      throw new Error('lost start reply')
+    })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    await act(async () => button('Worktree recovery (1)').click())
+    expect(api.resume).not.toHaveBeenCalled()
+    await act(async () => button('Review shell start: terminal').click())
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.resume).toHaveBeenCalledExactlyOnceWith('record', 'terminal')
+    expect(button('Review shell start: terminal').disabled).toBe(true)
+  })
+
 })

@@ -89,6 +89,24 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
+  const resume = async (nodeId: string) => {
+    if (!api?.resume || !row || row.phase !== 'recovered' || !row.manualStartIds?.includes(nodeId) ||
+      row.manualActiveIds?.includes(nodeId) || keeping.current || message || error) return
+    keeping.current = true; setBusy(true); const started = epoch.current
+    flushSync(close)
+    try {
+      const result = await api.resume(row.id, nodeId)
+      if (started !== epoch.current) return
+      setMessage(result.ok ? result.message : result.error); setInspection(null)
+      if (claimOwnerConfirmation(TICKET)) setOpen(true)
+      await reload.current?.()
+    } catch {
+      if (started === epoch.current) {
+        setMessage('A shell may have started. Refresh its status before another action.'); setInspection(null)
+        if (claimOwnerConfirmation(TICKET)) setOpen(true)
+      }
+    } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
+  }
   const recoverMissing = async (candidate: WorktreeMissingCandidate) => {
     if (!api?.recoverMissing || keeping.current) return
     keeping.current = true; setBusy(true); const started = epoch.current
@@ -107,7 +125,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
   if (!api || (!open && !records.length && !missing.length && !error)) return null
-  const status = canRebind ? 'A checkout is present at the recorded path. Review its actual Git identity before rebinding. Terminals stay manually blocked and their cwd is preserved.' : inspection?.ok ? inspection.status === 'kept'
+  const status = row?.manualActiveIds?.length ? 'Verified shells are running. Other recovered terminals still require an explicit start; held commands stay manual.' : canRebind ? 'A checkout is present at the recorded path. Review its actual Git identity before rebinding. Terminals stay manually blocked and their cwd is preserved.' : inspection?.ok ? inspection.status === 'kept'
     ? 'The original checkout and branch are present. Keep them to release this pending recovery.'
     : inspection.status === 'missing' && row?.phase !== 'recovered' ? 'The checkout is missing. Recover the recorded plain terminals and file notices without retrying Git. Terminals remain blocked for explicit manual start or rebinding.'
     : row?.manualStartIds?.length ? 'Metadata is recovered. Terminals remain blocked on this host until explicit manual start; rebinding does not start them.'
@@ -137,6 +155,12 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
             if (current()) setInspection(result)
           }).catch(() => { if (current()) setInspection({ ok: false, error: 'The checkout could not be inspected. Refresh its status.' }) })
         }}>Refresh status</button>
+        {row.phase === 'recovered' && api.resume && row.manualStartIds?.map((nodeId) => <div key={nodeId}>
+          {row.manualActiveIds?.includes(nodeId) ? <p>Shell running: {visible(nodeId)}</p> :
+            <button className="confirm__btn" disabled={busy || !!message || !!error} onClick={() => { void resume(nodeId) }}>
+              Review shell start: {visible(nodeId)}
+            </button>}
+        </div>)}
         {row.provenance === 'observed-missing' && <p>Recorded as already missing. No earlier directory identity or app deletion is claimed.</p>}
         </>}
         {!!missing.length && <div>

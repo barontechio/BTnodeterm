@@ -7,7 +7,7 @@ function fixture() {
   const blocked = new Set(['member', 'other'])
   const dispatch = new WorktreeRecoveryDispatch({ isNodePending: (id) => blocked.has(id) })
   const coordinator = new NodeExecutionCoordinator()
-  coordinator.setDispatchAdmission((id, permit) => dispatch.assertAllowed(id, permit))
+  coordinator.setDispatchAdmission((id, permit, operation) => dispatch.assertAllowed(id, permit, operation))
   return { blocked, dispatch, coordinator }
 }
 function deferred() {
@@ -86,4 +86,30 @@ describe('pending worktree member dispatch', () => {
     expect(() => coordinator.assertAllowed('member')).not.toThrow()
     expect(() => coordinator.assertAllowed('other')).toThrow('recovery-required')
   })
+})
+
+
+it('separates one actual restart create from input and registers only its captured target', async () => {
+  const { coordinator, dispatch } = fixture(); const target = {}; let alive = true
+  await coordinator.runMany(['member'], 'restart', { current: () => true }, async (permit) => {
+    await dispatch.withManualCreate(permit, 'member', 'approved-options', () => {}, async () => {
+      expect(() => coordinator.assertAllowed('member')).toThrow('recovery-required')
+      expect(() => coordinator.assertAllowed('member', { kind: 'input', target })).toThrow('recovery-required')
+      expect(() => coordinator.assertAllowed('member', { kind: 'create', binding: 'other-options' })).toThrow('recovery-required')
+      coordinator.assertAllowed('member', { kind: 'create', binding: 'approved-options' })
+      coordinator.assertAllowed('member', { kind: 'spawn', binding: 'approved-options' })
+      expect(() => coordinator.assertAllowed('member', { kind: 'spawn', binding: 'approved-options' })).toThrow('already-dispatched')
+      expect(() => dispatch.admitManualSession(permit, 'member', target, () => alive)).toThrow('session-changed')
+      coordinator.assertAllowed('member', { kind: 'register', binding: 'approved-options', target })
+      expect(() => dispatch.admitManualSession({ ...permit }, 'member', target, () => alive)).toThrow('session-changed')
+      dispatch.admitManualSession(permit, 'member', target, () => alive)
+    })
+  })
+  coordinator.assertAllowed('member', { kind: 'input', target })
+  coordinator.assertAllowed('member', { kind: 'create', target })
+  expect(() => coordinator.assertAllowed('member', { kind: 'input', target: {} })).toThrow('recovery-required')
+  expect(() => coordinator.assertAllowed('member', { kind: 'spawn', binding: 'approved-options' })).toThrow('recovery-required')
+  expect(() => coordinator.assertAllowed('member')).toThrow('recovery-required')
+  alive = false
+  expect(() => coordinator.assertAllowed('member', { kind: 'input', target })).toThrow('recovery-required')
 })

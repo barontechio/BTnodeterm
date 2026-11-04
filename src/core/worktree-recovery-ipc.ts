@@ -1,13 +1,13 @@
 import { IPC } from '../shared/ipc'
 import { isSafeNodeId } from '../shared/safe-id'
-import type { WorktreeRecoveryInspection, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply, WorktreeMissingList, WorktreeRecoveryRebindReply } from '../shared/worktree-recovery'
+import type { WorktreeRecoveryInspection, WorktreeRecoveryKeepReply, WorktreeRecoveryList, WorktreeRecoveryRepairReply, WorktreeMissingList, WorktreeRecoveryRebindReply, WorktreeRecoveryResumeReply } from '../shared/worktree-recovery'
 import type { CorePlatform } from './platform'
 import { OwnerLifetimes } from './owner-lifetimes'
 import type { WorktreeRecoveryService } from './worktree-recovery-service'
 
 /** Recovery administration belongs to the physical core owner, never to an agent or relay tab.
  * A request carries only an immutable host record id, not paths, commands or approval flags. */
-export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () => (Pick<WorktreeRecoveryService, 'list' | 'inspect' | 'keep'> & Partial<Pick<WorktreeRecoveryService, 'recover' | 'recoverMissing' | 'discoverMissing' | 'rebind'>>) | null): Pick<OwnerLifetimes, 'forget' | 'dispose'> {
+export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () => (Pick<WorktreeRecoveryService, 'list' | 'inspect' | 'keep'> & Partial<Pick<WorktreeRecoveryService, 'recover' | 'recoverMissing' | 'discoverMissing' | 'rebind' | 'resume'>>) | null): Pick<OwnerLifetimes, 'forget' | 'dispose'> {
   const owners = new OwnerLifetimes()
   const eligible = (sender: number) => platform.clientIds().includes(sender) && platform.isOwnerClient?.(sender) === true
   const owner = (sender: number) => owners.get(sender, () => eligible(sender))
@@ -56,6 +56,13 @@ export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () 
     if (typeof id !== 'string' || !isSafeNodeId(id)) return { ok: false, outcome: 'refused', error: 'worktree-recovery-invalid-reference' }
     try { return await service()?.rebind?.(id, owner(sender)) ?? { ok: false, outcome: 'refused', error: 'Verified rebinding is unavailable.' } }
     catch { return { ok: false, outcome: 'uncertain', error: 'Rebinding may have partially completed. Inspect its status before another action.' } }
+  })
+  platform.handleWithSender(IPC.worktreeRecoveryResume, async (sender, id: unknown, nodeId: unknown): Promise<WorktreeRecoveryResumeReply> => {
+    if (!eligible(sender)) return { ok: false, outcome: 'refused', error: 'worktree-recovery-owner-required' }
+    if (typeof id !== 'string' || !isSafeNodeId(id) || typeof nodeId !== 'string' || !isSafeNodeId(nodeId))
+      return { ok: false, outcome: 'refused', error: 'worktree-recovery-invalid-reference' }
+    try { return await service()?.resume?.(id, nodeId, owner(sender)) ?? { ok: false, outcome: 'refused', error: 'Verified shell start is unavailable.' } }
+    catch { return { ok: false, outcome: 'uncertain', error: 'A shell may have started. Inspect its status before another action.' } }
   })
   return owners
 }

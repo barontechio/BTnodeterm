@@ -27,7 +27,7 @@ export async function initWorktreeRecovery(dataDir: string,
   // The journal itself refuses unavailable state, including ownership lost after boot.
   pty.setWorktreeRecoveryAdmission(worktreeRecoveryAdmission(journal))
   const dispatch = new WorktreeRecoveryDispatch(journal)
-  pty.setNodeExecutionAdmission((nodeId, permit) => dispatch.assertAllowed(nodeId, permit))
+  pty.setNodeExecutionAdmission((nodeId, permit, operation) => dispatch.assertAllowed(nodeId, permit, operation))
   const canvasAdmission = workspace ? installWorktreeCanvasAdmission(workspace, journal) : null
   return { journal, canvasAdmission, dispatch, idle: () => journal.idle() }
 }

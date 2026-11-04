@@ -96,6 +96,7 @@ describe('the run cannot reach a live nodeterm tmux server', () => {
  * a file that deliberately names a live socket owes an explicit statement of where it binds.
  */
 const REAL_SOCKET_ALLOWED = new Map<string, string>([
+  ['src/core/worktree-manual-resume.test.ts', 'real PtyManager manual recovery uses its fixed socket inside the asserted TMUX_TMPDIR sandbox; unique exact session cleanup only'],
   [
     'src/core/agents/pane-owner.test.ts',
     'the production bytes hardcode `-L nodeterm-rmt`; re-spelling it would judge different bytes'

@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { stableStringify } from '../shared/canvas-mutations'
+import { createManualTmux, manualCreateBinding, manualFileStamp, manualProcessBirth, manualTmuxMatches, manualTmuxStillCurrent, type ManualShellProfile, type ManualShellEvidence, type ManualTmuxCreated } from './worktree-manual-shell'
 import { sameLocalTmuxExecution, type LocalTmuxExecution } from './local-tmux-execution'
 import type { ChatPromptBlocked, ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from '../shared/text-delivery'
 import { claudeScreenBlocksInput, readClaudeComposer, readClaudeScreen } from '../shared/agents/claude-screen'
@@ -7,7 +10,7 @@ import path from 'path'
 import { execFile, execFileSync } from 'child_process'
 import { promisify } from 'util'
 import { platform } from './platform'
-import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit, type NodeExecutionBatchPermit } from './node-execution'
+import { NodeExecutionCoordinator, NodeExecutionError, type NodeExecutionKind, type NodeExecutionOptions, type NodeExecutionPermit, type NodeExecutionBatchPermit, type NodeExecutionDispatch } from './node-execution'
 import { sendSettledEnvelope as deliverSettledEnvelope, type SettledEnvelopeOptions } from './settled-envelope'
 import * as pty from 'node-pty'
 import { IPC } from '../shared/ipc'
@@ -1199,12 +1202,141 @@ export class PtyManager {
   setWorktreeRecoveryAdmission(check: ((directory: string) => void) | null): void { this.worktreeRecoveryAdmission = check }
 
   /** Host-only dispatch policy for pending recovery members. A node claim alone cannot waive it. */
-  setNodeExecutionAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined) => void) | null): void {
+  setNodeExecutionAdmission(check: ((nodeId: string, permit: NodeExecutionBatchPermit | undefined, dispatch?: NodeExecutionDispatch) => void) | null): void {
     this.nodeExecution.setDispatchAdmission(check)
   }
 
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
+
+  private readonly manualShellScope = new AsyncLocalStorage<{
+    live: boolean; profile: ManualShellProfile; nonce: string; permit: NodeExecutionBatchPermit;
+    registered(target: object): void; session?: Session; tmux?: ManualTmuxCreated; dispatched: boolean
+  }>()
+  private readonly manualTmuxStarts = new WeakMap<Session, { nonce: string; fingerprint: string; created: ManualTmuxCreated; clientBirth: string }>()
+  private readonly manualShellFacts = new WeakMap<Session, { nonce: string; fingerprint: string; evidence: ManualShellEvidence }>()
+
+  private manualShellFingerprint(options: PtyCreateOptions, overrides: ProjectSpawnOverrides | null | undefined): string {
+    const settings = this.getSettings()
+    const backend = settings.tmuxEnabled ? 'tmux' : 'plain'
+    if (process.platform !== 'linux' || !options.persistKey || !options.ownerProjectId || !options.cwd || !options.shell ||
+      options.agentId || options.agentModel || options.accountId || options.sshRemote || options.requireRemote ||
+      options.shellArgs?.length || !options.newOnly || (backend === 'tmux' && (!this.tmuxPath || this.zellijSelected())))
+      throw new Error('manual-shell-backend-unavailable: only verified local Linux plain/tmux shells are supported')
+    const files = [manualFileStamp(options.shell), ...(backend === 'tmux'
+      ? [manualFileStamp(this.tmuxPath!), manualFileStamp(this.confPath)] : [])]
+    return createHash('sha256').update(stableStringify({ options, settings, overrides, environment: process.env,
+      shellPath: shellPathNow(), tmux: this.tmuxPath, conf: this.confPath, files })).digest('hex')
+  }
+
+  /** Resolve the real host profile before confirmation; no process or user input is created. */
+  async prepareManualShell(options: PtyCreateOptions): Promise<ManualShellProfile> {
+    await resolveShellPath()
+    const overrides = await this.projectSpawnOverrides(options, true)
+    const requested = options.shell ?? overrides?.shell
+    if (requested && safeSessionProgram(requested) !== requested) throw new Error('manual-shell-program-unverifiable')
+    const shell = resolveLocalSessionShell(requested, this.getSettings().defaultShell)
+    const executable = path.isAbsolute(shell) ? shell : findExecutableSync(shell)
+    if (!executable) throw new Error('manual-shell-program-unavailable')
+    fs.accessSync(executable, fs.constants.X_OK)
+    const captured = { ...options, shell: fs.realpathSync.native(executable), newOnly: true }
+    return { backend: this.getSettings().tmuxEnabled ? 'tmux' : 'plain', options: captured,
+      fingerprint: this.manualShellFingerprint(captured, overrides) }
+  }
+
+  /** Host-only acknowledged creation/reconciliation. No caller-provided input or held command. */
+  async createManualShell(profile: ManualShellProfile, nonce: string, permit: NodeExecutionBatchPermit,
+    registered: (target: object) => void): Promise<{
+      ok: true; target: object; evidence: ManualShellEvidence; current(): boolean
+    } | { ok: false; error: string; dispatched: boolean; evidence?: ManualShellEvidence; backendCreated?: ManualTmuxCreated }> {
+    permit.assertCurrent()
+    const options = structuredClone(profile.options); const key = options.persistKey!
+    if (permit.kind !== 'restart' || !permit.nodeIds.includes(key) || this.manualShellScope.getStore())
+      throw new Error('manual-shell-invalid-permit')
+    const scope = { live: true, profile: structuredClone(profile), nonce, permit, registered, dispatched: false,
+      session: undefined as Session | undefined, tmux: undefined as ManualTmuxCreated | undefined }
+    try {
+      const overrides = await this.projectSpawnOverrides(options, true)
+      permit.assertCurrent()
+      if (this.manualShellFingerprint(options, overrides) !== profile.fingerprint) throw new Error('manual-shell-profile-changed')
+      return await this.manualShellScope.run(scope, async () => {
+        const previous = this.liveSessionForNode(key)?.[1]
+        if (previous) {
+          let fact = this.manualShellFacts.get(previous)
+          const start = this.manualTmuxStarts.get(previous)
+          if (!fact && start?.nonce === nonce && start.fingerprint === profile.fingerprint) {
+            const evidence = await this.observeManualTmux(key, previous, start.created, start.clientBirth)
+            fact = { nonce, fingerprint: profile.fingerprint, evidence }; this.manualShellFacts.set(previous, fact)
+          }
+          if (!fact || fact.nonce !== nonce || fact.fingerprint !== profile.fingerprint || !this.manualShellCurrent(key, previous, fact.evidence))
+            throw new Error('manual-shell-existing-generation-unverifiable')
+          registered(previous)
+          this.nodeExecution.assertAllowed(key, { kind: 'register', target: previous, binding: manualCreateBinding(options) })
+          return { ok: true as const, target: previous, evidence: fact.evidence,
+            current: () => this.manualShellCurrent(key, previous, fact.evidence) }
+        }
+        const result = await this.createHeadless(options)
+        const session = this.sessions.get(result.sessionId)
+        if (!session || session !== scope.session || this.liveSessionForNode(key)?.[1] !== session || !result.fresh)
+          throw new Error('manual-shell-create-not-acknowledged')
+        let evidence: ManualShellEvidence
+        if (profile.backend === 'tmux') {
+          const start = this.manualTmuxStarts.get(session)
+          if (!start || !scope.tmux) throw new Error('manual-shell-backend-generation-unverifiable')
+          evidence = await this.observeManualTmux(key, session, scope.tmux, start.clientBirth)
+        } else evidence = { backend: 'plain', pid: session.proc.pid, birth: manualProcessBirth(session.proc.pid) }
+        this.manualShellFacts.set(session, { nonce, fingerprint: profile.fingerprint, evidence })
+        // This records the exact target but does not admit input. The service must durably record
+        // its observation and retain the original owner/metadata proof before admitting it.
+        this.nodeExecution.assertAllowed(key, { kind: 'register', target: session, binding: manualCreateBinding(options) })
+        return { ok: true as const, target: session, evidence,
+          current: () => this.manualShellCurrent(key, session, evidence) }
+      })
+    } catch (error) {
+      // Already observed effects are host facts even if final owner registration expired.
+      let evidence = scope.session && this.manualShellFacts.get(scope.session)?.evidence
+      if (!evidence && scope.session && profile.backend === 'plain') {
+        try {
+          evidence = { backend: 'plain', pid: scope.session.proc.pid, birth: manualProcessBirth(scope.session.proc.pid) }
+          this.manualShellFacts.set(scope.session, { nonce, fingerprint: profile.fingerprint, evidence })
+        } catch { /* Preserve dispatch uncertainty when the process cannot be inspected. */ }
+      }
+      return { ok: false, dispatched: scope.dispatched, evidence, backendCreated: scope.tmux,
+        error: error instanceof Error ? error.message : String(error) }
+    } finally { scope.live = false }
+  }
+
+  private async observeManualTmux(nodeId: string, target: Session, created: ManualTmuxCreated, clientBirth: string): Promise<ManualShellEvidence> {
+    const deadline = Date.now() + 3000
+    do {
+      if (this.liveSessionForNode(nodeId)?.[1] !== target || manualProcessBirth(target.proc.pid) !== clientBirth)
+        throw new Error('manual-shell-backend-generation-changed')
+      const actual = await this.localTmuxExecution(nodeId)
+      if (actual) {
+        if (!manualTmuxMatches(created, actual) || actual.clientPid !== target.proc.pid || actual.clientBirth !== clientBirth)
+          throw new Error('manual-shell-backend-generation-changed')
+        return { backend: 'tmux', socketPath: actual.socketPath, server: actual.server, sessionId: actual.sessionId,
+          paneId: actual.paneId, panePid: actual.panePid, paneBirth: actual.paneBirth,
+          clientPid: actual.clientPid, clientBirth: actual.clientBirth }
+      }
+      // Wait for an actual client-to-pane observation, never treat elapsed time as acknowledgement.
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    } while (Date.now() < deadline)
+    throw new Error('manual-shell-backend-generation-unverifiable')
+  }
+
+  private manualShellCurrent(nodeId: string, target: Session, evidence: ManualShellEvidence): boolean {
+    try {
+      if (this.liveSessionForNode(nodeId)?.[1] !== target) return false
+      if (evidence.backend === 'plain') return target.proc.pid === evidence.pid && manualProcessBirth(evidence.pid) === evidence.birth
+      return !!this.tmuxPath && target.proc.pid === evidence.clientPid && manualTmuxStillCurrent(this.tmuxPath, TMUX_SOCKET, evidence)
+    } catch { return false }
+  }
+
+  /** Notification only, after the actual claim releases and live admission exists. */
+  publishManualShellReady(nodeId: string, target: object): void {
+    if (this.liveSessionForNode(nodeId)?.[1] === target && this.pendingRecycle.has(nodeId)) this.fireRecycled(nodeId, true)
+  }
 
   private readonly localTmuxExecutions = new WeakMap<Session, LocalTmuxExecution>()
 
@@ -2130,7 +2262,7 @@ export class PtyManager {
    *    settles on its own afterwards (nothing is cancelled); this spawn just stops waiting.
    */
   private async projectSpawnOverrides(
-    options: PtyCreateOptions
+    options: PtyCreateOptions, strict = this.manualShellScope.getStore()?.live === true
   ): Promise<ProjectSpawnOverrides | null> {
     const read = this.readProjectSpawnOverrides
     if (!read || !options.ownerProjectId) return null
@@ -2157,13 +2289,14 @@ export class PtyManager {
     try {
       return await Promise.race([
         mine,
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), PROJECT_OVERRIDES_TIMEOUT_MS)
+        new Promise<null>((resolve, reject) => {
+          timer = setTimeout(() => strict ? reject(new Error('manual-shell-profile-unavailable')) : resolve(null), PROJECT_OVERRIDES_TIMEOUT_MS)
           // Never hold the process open for a settings read nobody is waiting on any more.
           timer.unref?.()
         })
       ])
-    } catch {
+    } catch (error) {
+      if (strict) throw error
       return null
     } finally {
       if (timer) clearTimeout(timer)
@@ -2720,7 +2853,7 @@ export class PtyManager {
 
   private async create(clientId: ClientId, options: PtyCreateOptions): Promise<PtyCreateResult> {
     const key = options.persistKey
-    this.nodeExecution.assertAllowed(key ?? '')
+    this.nodeExecution.assertAllowed(key ?? '', { kind: 'create', target: key ? this.liveSessionForNode(key)?.[1] : undefined, binding: manualCreateBinding(options) })
     if (!key) return this.spawnNew(clientId, options)
     if (options.agentId) this.agentByKey.set(key, options.agentId)
     // SECURITY — the choke point for the node id. Every session spawn (local tmux, plain shell,
@@ -2878,6 +3011,7 @@ export class PtyManager {
       existing = existingId ? this.sessions.get(existingId) : undefined
     }
     if (!existingId || !existing) return undefined
+    this.nodeExecution.assertAllowed(persistKey, { kind: 'create', target: existing, binding: manualCreateBinding(options) })
     // A node that lives on a remote host never joins a session that is not on THAT host. The match
     // above is by node id alone, and a LOCAL session can carry a remote node's id (a hosted team
     // tab's node mounted under it, a pre-`requireRemote` orphan), so joining it would put the remote
@@ -4444,7 +4578,7 @@ export class PtyManager {
      *  must join that session, never create a tmux one beside it. */
     zellijBackend?: boolean
   ): string {
-    this.nodeExecution.assertAllowed(options.persistKey ?? '')
+    this.nodeExecution.assertAllowed(options.persistKey ?? '', { kind: 'create', binding: manualCreateBinding(options) })
     if (this.backendStartsPaused) throw new NodeExecutionError('busy')
     if (!options.sshRemote) this.worktreeRecoveryAdmission?.(options.cwd || os.homedir())
     // PRE-FLIGHT — refuse before node-pty is touched, not after it fails.
@@ -5138,6 +5272,23 @@ export class PtyManager {
       args = localSessionArgs
     }
 
+    const manualCreate = this.manualShellScope.getStore()
+    if (manualCreate?.live) {
+      manualCreate.permit.assertCurrent()
+      if (cwd !== manualCreate.profile.options.cwd || useSessionHost || useLocalZellij || options.sshRemote ||
+        (useLocalTmux ? 'tmux' : 'plain') !== manualCreate.profile.backend ||
+        this.manualShellFingerprint(options, overrides) !== manualCreate.profile.fingerprint)
+        throw new Error('manual-shell-profile-changed')
+      this.nodeExecution.assertAllowed(options.persistKey!, { kind: 'spawn', binding: manualCreateBinding(options) })
+      manualCreate.dispatched = true
+      if (useLocalTmux) {
+        manualCreate.tmux = createManualTmux(file, args, manualCreate.nonce, env, localTmuxClientCwd(), () => manualCreate.permit.assertCurrent())
+        // The acknowledged session id, not its reusable name. This command can only attach.
+        args = ['-L', TMUX_SOCKET, 'attach-session', '-E', '-t', manualCreate.tmux.sessionId]
+      }
+      manualCreate.permit.assertCurrent()
+    }
+
     let proc: pty.IPty
     const hostLaunchDialect = useSessionHost
       ? windowsLaunchDialectForShell(localSessionShell, this.runtimePlatform)
@@ -5317,6 +5468,13 @@ export class PtyManager {
     // (relay-served) ptys are deliberately NOT indexed — the relay path keeps its own session,
     // exactly as before, so this change cannot regress it.
     if (session.indexKey) this.byPersistKey.set(session.indexKey, sessionId)
+    const manual = this.manualShellScope.getStore()
+    if (manual?.live) {
+      manual.session = session; manual.registered(session)
+      if (manual.tmux) this.manualTmuxStarts.set(session, { nonce: manual.nonce, fingerprint: manual.profile.fingerprint,
+        created: manual.tmux, clientBirth: manualProcessBirth(session.proc.pid) })
+    }
+
     // This node has a live session again, so it is no longer deleted: drop any tombstone. Only the
     // destroyer can even reach a spawn for a tombstoned node (create() refuses everyone else), so
     // this is exactly "the owner brought the node back" (⌘Z) — and its co-viewers must be able to
@@ -5329,7 +5487,7 @@ export class PtyManager {
     // spawning `nt-<nodeId>` from their own (stale) cwd. This is the whole reason the notice waits.
     // A session-host shim is only provisional until its asynchronous `ready` settles. spawnNew()
     // fires this notice after that barrier; publishing here would wake co-viewers onto a dead id.
-    if (session.indexKey && !session.sessionHost && this.pendingRecycle.has(session.indexKey))
+    if (session.indexKey && !session.sessionHost && !this.manualShellScope.getStore()?.live && this.pendingRecycle.has(session.indexKey))
       this.fireRecycled(session.indexKey, true)
 
     // Registration may itself start driver timers; callbacks also explicitly leave request ALS.
@@ -5798,7 +5956,7 @@ export class PtyManager {
     data = session.daReplies.filterInput(data, Date.now())
     if (!data) return
     const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey ?? ''
-    try { this.nodeExecution.assertAllowed(nodeId) } catch (error) {
+    try { this.nodeExecution.assertAllowed(nodeId, { kind: 'input', target: session }) } catch (error) {
       if (clientId === null) throw error
       this.noticeBlockedInput(clientId, nodeId, error)
       return

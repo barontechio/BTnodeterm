@@ -164,7 +164,7 @@ it('retains private manual-start quarantine after durable repair and host recons
   expect(await restarted.load()).toMatchObject([{ phase: 'recovered', repair: { manualStart: ['group'] } }])
   expect(restarted.isNodePending('group')).toBe(true)
   await expect(restarted.releaseRebound(row.id)).rejects.toThrow('recovery-required')
-  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(4)
+  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(5)
 })
 
 it.each([1, 2, 3])('reads historical version %s without inventing missing provenance and upgrades only on mutation', async (version) => {
@@ -176,7 +176,7 @@ it.each([1, 2, 3])('reads historical version %s without inventing missing proven
   expect(await fresh.load()).toMatchObject([{ directoryStamp: '1:2', provenance: { kind: 'recorded-directory' } }])
   expect(fs.readFileSync(f.file, 'utf8')).toBe(raw)
   await fresh.markRemoved(row.id)
-  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(4)
+  expect(JSON.parse(fs.readFileSync(f.file, 'utf8')).version).toBe(5)
 })
 it('strictly distinguishes observed absence from recorded inode evidence and retains quarantine after lost first acknowledgement', async () => {
   const f = fixture({ persist: async (file, text) => { await writeFileDurableAtomic(file, text, { mode: 0o600 }); throw new Error('ack lost') } })
@@ -194,4 +194,36 @@ it('strictly distinguishes observed absence from recorded inode evidence and ret
   const oldVersion = JSON.parse(fs.readFileSync(f.file, 'utf8')); oldVersion.version = 2
   fs.writeFileSync(f.file, JSON.stringify(oldVersion))
   await expect(fresh.load()).rejects.toThrow('invalid-envelope')
+})
+
+it('retains v5 manual attempts and observations across reload, rejects downgrades and cannot erase an observed effect', async () => {
+  const f = fixture(); await f.journal.load(); const row = await f.journal.prepare(f.intent)
+  await f.journal.markRemoved(row.id)
+  await f.journal.planRepair(row.id, { members: f.intent.members, manualStart: ['group'] }, () => {})
+  await f.journal.markRecovered(row.id)
+  const plan = { nodeId: 'group', nonce: '00000000-0000-4000-8000-000000000001', state: 'prepared' as const,
+    cwd: f.intent.fallbackCwd, directoryStamp: '1:2', profile: 'a'.repeat(64), options: 'b'.repeat(64), members: f.intent.members }
+  await f.journal.planManualResume(row.id, plan, () => {})
+  await f.journal.markManualDispatch(row.id, plan.nonce, () => {})
+  await f.journal.markManualObserved(row.id, plan.nonce, { backend: 'plain', pid: 123, birth: '456' })
+  await expect(f.journal.markManualRefused(row.id, plan.nonce)).rejects.toThrow('invalid-transition')
+  await expect(f.journal.markManualObserved(row.id, plan.nonce, { backend: 'plain', pid: 124, birth: '456' })).rejects.toThrow('evidence-changed')
+  const bytes = fs.readFileSync(f.file, 'utf8'); const envelope = JSON.parse(bytes)
+  expect(envelope.version).toBe(5)
+  const restored = new WorktreeRemovalJournal(f.file, f.config); await restored.load()
+  expect(restored.isNodePending('group')).toBe(true)
+  for (const change of ['version', 'unknown', 'missing-proof', 'extra-proof', 'different-node']) {
+    const bad = JSON.parse(bytes); const attempt = bad.records[0].manualResume[0]
+    if (change === 'version') bad.version = 4
+    if (change === 'unknown') attempt.releaseInput = true
+    if (change === 'missing-proof') delete attempt.evidence
+    if (change === 'extra-proof') attempt.evidence.allow = true
+    if (change === 'different-node') attempt.nodeId = 'other'
+    const text = JSON.stringify(bad); fs.writeFileSync(f.file, text)
+    await expect(restored.load()).rejects.toThrow()
+    expect(restored.isNodePending('group')).toBe(true)
+    expect(fs.readFileSync(f.file, 'utf8')).toBe(text)
+  }
+  fs.writeFileSync(f.file, bytes); await restored.load()
+  expect(restored.list()[0].manualResume).toMatchObject([{ state: 'observed', evidence: { pid: 123 } }])
 })

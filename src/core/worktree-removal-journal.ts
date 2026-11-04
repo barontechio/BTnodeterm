@@ -1,3 +1,4 @@
+import type { ManualShellEvidence, ManualTmuxCreated } from './worktree-manual-shell'
 import { randomUUID } from 'node:crypto'
 import type { GroupWorktree } from '../shared/worktree'
 import type { WorktreeGitEvidence } from './worktree-git-evidence'
@@ -41,6 +42,18 @@ export interface WorktreeRebindPlan {
   members: WorktreeRepairPlan['members']
   staged: WorktreeRepairPlan['members']
 }
+export interface WorktreeManualResume {
+  nodeId: string
+  nonce: string
+  state: 'prepared' | 'dispatching' | 'observed' | 'refused'
+  cwd: string
+  directoryStamp: string
+  profile: string
+  options: string
+  members: WorktreeRepairPlan['members']
+  evidence?: ManualShellEvidence
+  backendCreated?: ManualTmuxCreated
+}
 export type WorktreeProvenance = { kind: 'recorded-directory' } | {
   kind: 'observed-missing'; observedAt: number; ancestor: string; ancestorStamp: string; repoStamp: string; git: WorktreeGitEvidence
 }
@@ -50,6 +63,7 @@ export interface WorktreeRemovalRecord extends Omit<WorktreeRemovalIntent, 'dire
   id: string; createdAt: number; phase: Phase
   repair?: WorktreeRepairPlan
   rebind?: WorktreeRebindPlan
+  manualResume?: WorktreeManualResume[]
 }
 interface Options {
   /** The existing hook/data-directory ownership verdict; a second app instance cannot write. */
@@ -60,7 +74,7 @@ interface Options {
 function record(raw: unknown): WorktreeRemovalRecord {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('worktree-journal-invalid-record')
   const row = raw as WorktreeRemovalRecord
-  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair', 'provenance', 'rebind'])
+  const fields = new Set(['id', 'createdAt', 'phase', 'projectId', 'groupId', 'repoPath', 'worktreePath', 'branch', 'fallbackCwd', 'directoryStamp', 'members', 'repair', 'provenance', 'rebind', 'manualResume'])
   const absolute = (value: unknown) => typeof value === 'string' && value.length <= 4096 && !value.includes('\0') &&
     path.isAbsolute(value) && path.resolve(value) === value && path.parse(value).root !== value
   if (Object.keys(row).some((key) => !fields.has(key)) ||
@@ -118,6 +132,35 @@ function record(raw: unknown): WorktreeRemovalRecord {
       typeof binding.baseRef !== 'string' || !isValidGitRef(binding.baseRef) || binding.createdByApp !== false ||
       !validMembers(plan.members) || !validMembers(plan.staged)) throw new Error('worktree-journal-invalid-rebind')
   }
+  if (row.manualResume !== undefined) {
+    const hash = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)
+    const pid = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0
+    const birth = (value: unknown) => typeof value === 'string' && /^\d+$/.test(value)
+    const tmuxProof = (proof: ManualTmuxCreated): boolean => !!proof && typeof proof === 'object' &&
+      absolute(proof.socketPath) && typeof proof.server === 'string' && /^[1-9]\d*:\d+$/.test(proof.server) &&
+      typeof proof.sessionId === 'string' && /^\$\d+$/.test(proof.sessionId) && typeof proof.paneId === 'string' && /^%\d+$/.test(proof.paneId) &&
+      pid(proof.panePid) && birth(proof.paneBirth)
+    const evidence = (proof: ManualShellEvidence | undefined): boolean => {
+      if (!proof || typeof proof !== 'object') return false
+      if (proof.backend === 'plain') return Object.keys(proof).every((key) => ['backend', 'pid', 'birth'].includes(key)) && pid(proof.pid) && birth(proof.birth)
+      return proof.backend === 'tmux' && Object.keys(proof).every((key) =>
+        ['backend', 'socketPath', 'server', 'sessionId', 'paneId', 'panePid', 'paneBirth', 'clientPid', 'clientBirth'].includes(key)) &&
+        tmuxProof(proof) && pid(proof.clientPid) && birth(proof.clientBirth)
+    }
+    if (row.phase !== 'recovered' || !row.repair || !Array.isArray(row.manualResume) || row.manualResume.length > 128 ||
+      new Set(row.manualResume.map((attempt) => attempt?.nonce)).size !== row.manualResume.length || row.manualResume.some((attempt) =>
+        !attempt || Object.keys(attempt).some((key) => !['nodeId', 'nonce', 'state', 'cwd', 'directoryStamp', 'profile', 'options', 'members', 'evidence', 'backendCreated'].includes(key)) ||
+        !row.repair!.manualStart.includes(attempt.nodeId) || typeof attempt.nonce !== 'string' || !/^[0-9a-f-]{36}$/.test(attempt.nonce) ||
+        !['prepared', 'dispatching', 'observed', 'refused'].includes(attempt.state) || !absolute(attempt.cwd) || !stamp(attempt.directoryStamp) ||
+        !hash(attempt.profile) || !hash(attempt.options) || !Array.isArray(attempt.members) || attempt.members.length !== row.members.length ||
+        new Set(attempt.members.map((member) => member?.nodeId)).size !== row.members.length || attempt.members.some((member) =>
+          !member || Object.keys(member).some((key) => !['nodeId', 'binding'].includes(key)) || !hash(member.binding) || !row.members.some((old) => old.nodeId === member.nodeId)) ||
+        (attempt.backendCreated !== undefined && (!['dispatching', 'observed'].includes(attempt.state) ||
+          !tmuxProof(attempt.backendCreated) ||
+          Object.keys(attempt.backendCreated).some((key) => !['socketPath', 'server', 'sessionId', 'paneId', 'panePid', 'paneBirth'].includes(key)))) ||
+        (attempt.state === 'observed' ? !evidence(attempt.evidence) : attempt.evidence !== undefined)))
+      throw new Error('worktree-journal-invalid-manual-resume')
+  }
   return structuredClone(row)
 }
 const overlaps = (a: string, b: string) => isAncestorPath(a, b) || isAncestorPath(b, a)
@@ -167,9 +210,11 @@ export class WorktreeRemovalJournal {
           next = []
         } else {
           const parsed = JSON.parse(raw)
-          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3, 4].includes(parsed.version) ||
+          if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3, 4, 5].includes(parsed.version) ||
             !Array.isArray(parsed.records) || parsed.records.length > MAX_RECORDS) throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version >= 3 && Object.keys(parsed).some((key) => !['kind', 'version', 'records'].includes(key)))
+            throw new Error('worktree-journal-invalid-envelope')
+          if (parsed.version < 5 && parsed.records.some((row: WorktreeRemovalRecord) => row?.manualResume !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version < 4 && parsed.records.some((row: WorktreeRemovalRecord) => row?.rebind !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
@@ -210,7 +255,7 @@ export class WorktreeRemovalJournal {
   }
   private async commit(next: WorktreeRemovalRecord[], assertCurrent?: () => void): Promise<void> {
     this.ready()
-    const data = JSON.stringify({ kind: 'worktree-removals', version: 4, records: next })
+    const data = JSON.stringify({ kind: 'worktree-removals', version: 5, records: next })
     if (Buffer.byteLength(data) > MAX_BYTES) throw new Error('worktree-journal-capacity')
     try {
       if (await this.read() !== this.persisted) throw new Error('worktree-journal-changed: reload before writing')
@@ -306,6 +351,66 @@ export class WorktreeRemovalJournal {
       await this.commit(next, assertCurrent); return structuredClone(next[index])
     })
   }
+  planManualResume(id: string, plan: WorktreeManualResume, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    const captured = structuredClone(plan)
+    return this.serial(async () => {
+      this.ready(); assertCurrent()
+      const index = this.rows.findIndex((row) => row.id === id)
+      if (index < 0 || captured.state !== 'prepared') throw new Error('worktree-journal-invalid-transition')
+      const next = structuredClone(this.rows)
+      const prior = next[index].manualResume?.find((attempt) => attempt.nonce === captured.nonce)
+      if (prior) {
+        if (JSON.stringify(prior) !== JSON.stringify(captured)) throw new Error('worktree-journal-manual-plan-changed')
+        return structuredClone(next[index])
+      }
+      next[index].manualResume = [...(next[index].manualResume ?? []), captured]
+      next[index] = record(next[index]); await this.commit(next, assertCurrent)
+      return structuredClone(next[index])
+    })
+  }
+
+  markManualDispatch(id: string, nonce: string, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {
+    return this.manualState(id, nonce, 'dispatching', undefined, assertCurrent)
+  }
+  /** Observed effects are facts even after the approving owner departs; no input admission here. */
+  markManualObserved(id: string, nonce: string, evidence: ManualShellEvidence): Promise<WorktreeRemovalRecord> {
+    return this.manualState(id, nonce, 'observed', structuredClone(evidence))
+  }
+  markManualBackendCreated(id: string, nonce: string, proof: ManualTmuxCreated): Promise<WorktreeRemovalRecord> {
+    const captured = structuredClone(proof)
+    return this.serial(async () => {
+      this.ready()
+      const next = structuredClone(this.rows); const index = next.findIndex((row) => row.id === id)
+      const attempt = next[index]?.manualResume?.find((entry) => entry.nonce === nonce)
+      if (!attempt || !['dispatching', 'observed'].includes(attempt.state) ||
+        (attempt.backendCreated && JSON.stringify(attempt.backendCreated) !== JSON.stringify(captured)))
+        throw new Error('worktree-journal-invalid-transition')
+      attempt.backendCreated = captured
+      next[index] = record(next[index]); await this.commit(next)
+      return structuredClone(next[index])
+    })
+  }
+  markManualRefused(id: string, nonce: string): Promise<WorktreeRemovalRecord> {
+    return this.manualState(id, nonce, 'refused')
+  }
+  private manualState(id: string, nonce: string, state: WorktreeManualResume['state'], evidence?: ManualShellEvidence,
+    assertCurrent?: () => void): Promise<WorktreeRemovalRecord> {
+    return this.serial(async () => {
+      this.ready(); assertCurrent?.()
+      const next = structuredClone(this.rows); const index = next.findIndex((row) => row.id === id)
+      const attempt = next[index]?.manualResume?.find((entry) => entry.nonce === nonce)
+      if (!attempt || (state === 'dispatching' ? attempt.state !== 'prepared' : state === 'refused' ? attempt.state !== 'dispatching' : !['dispatching', 'observed'].includes(attempt.state)))
+        throw new Error('worktree-journal-invalid-transition')
+      if (attempt.state === 'observed' && JSON.stringify(attempt.evidence) !== JSON.stringify(evidence))
+        throw new Error('worktree-journal-manual-evidence-changed')
+      attempt.state = state
+      if (evidence) attempt.evidence = evidence
+      else delete attempt.evidence
+      next[index] = record(next[index]); await this.commit(next, assertCurrent)
+      return structuredClone(next[index])
+    })
+  }
+
   /** Caller already proved a new binding; never use this to dismiss an uncertain deletion. */
   releaseRebound(id: string): Promise<void> {
     return this.serial(async () => {
