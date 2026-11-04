@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { AsyncResource } from 'node:async_hooks'
 import { OwnerConfirmationBroker, type ConfirmationIntent } from './owner-confirmation'
 import { IPC } from '../shared/ipc'
 import type { OwnerConfirmation } from '../shared/owner-confirmation'
@@ -100,4 +101,74 @@ describe.skipIf(process.platform !== 'linux')('independent final publication adv
     await vi.waitFor(() => expect(fs.readFileSync(path.join(f.repo, 'established-session.txt'), 'utf8')).toBe('established'))
   })
 
+})
+
+it.skipIf(process.platform !== 'linux')('review: changed actual project settings must refuse final admission', async () => {
+  const { makeProjectSpawnOverrides } = await import('./project-spawn-overrides')
+  const { ProjectTrustStore, localTrustKey, hashTrustContent } = await import('./project-trust-store')
+  const { projectTrustContent } = await import('../shared/project-settings')
+  const f = await fixture()
+  const original = { agents: { env: { REVIEW_PROFILE: 'approved' } } }
+  expect(await f.store.writeProjectSettings('project', original)).toBe(true)
+  const trust = new ProjectTrustStore()
+  await trust.record(localTrustKey(f.repo), 'agents', hashTrustContent(projectTrustContent('agents', original)!), new Date().toISOString())
+  const read = makeProjectSpawnOverrides({ captureSettings: id => f.store.captureProjectSpawnSettings(id), readSettings: id => f.store.readProjectSettings(id),
+    targetInfo: id => f.store.projectTargetInfo(id), trust })
+  f.manager.setProjectSpawnOverrides(read)
+  expect(await read('project')).toEqual({ env: { REVIEW_PROFILE: 'approved' } })
+  const observed = f.journal.markManualObserved.bind(f.journal)
+  vi.spyOn(f.journal, 'markManualObserved').mockImplementationOnce(async (...args) => {
+    const result = await observed(...args)
+    expect(await f.store.writeProjectSettings('project', { agents: { env: { REVIEW_PROFILE: 'changed' } } })).toBe(true)
+    expect(await read('project')).toBeNull()
+    return result
+  })
+  const result = await f.service.resume(f.row.id, f.key, f.owner)
+  if (result.ok) {
+    const joined = await f.manager.createHeadless({ persistKey: f.key, cols: 80, rows: 24 })
+    f.manager.write(null, joined.sessionId, 'printf admitted > stale-project-profile.txt\r')
+    await vi.waitFor(() => expect(fs.readFileSync(path.join(f.repo, 'stale-project-profile.txt'), 'utf8')).toBe('admitted'))
+    console.log('REVIEW_ACTUAL_STALE_PROJECT_INPUT', result, f.dispatch.manualSessionActive(f.key), f.journal.list()[0].repair?.manualStart)
+  }
+  expect(f.journal.list()[0].manualResume?.[0].state).toBe('observed')
+  expect(result).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(f.dispatch.manualSessionActive(f.key)).toBe(false)
+})
+
+for (const change of ['none', 'trust', 'local'] as const) it.skipIf(process.platform !== 'linux')(`pins actual project profile sources through final publication (${change})`, async () => {
+  const { makeProjectSpawnOverrides } = await import('./project-spawn-overrides')
+  const { ProjectTrustStore, localTrustKey, hashTrustContent } = await import('./project-trust-store')
+  const { projectTrustContent } = await import('../shared/project-settings')
+  const f = await fixture(); const original = { agents: { env: { REVIEW_PROFILE: 'approved' } } }
+  expect(await f.store.writeProjectSettings('project', original)).toBe(true)
+  const trust = new ProjectTrustStore(); const key = localTrustKey(f.repo)
+  await trust.record(key, 'agents', hashTrustContent(projectTrustContent('agents', original)!), new Date().toISOString())
+  f.manager.setProjectSpawnOverrides(makeProjectSpawnOverrides({ captureSettings: id => f.store.captureProjectSpawnSettings(id),
+    readSettings: id => f.store.readProjectSettings(id), targetInfo: id => f.store.projectTargetInfo(id), trust }))
+  const observed = f.journal.markManualObserved.bind(f.journal)
+  let localWrite: Promise<boolean> | undefined
+  const externalWriter = new AsyncResource('manual-profile-independent-settings-writer')
+  vi.spyOn(f.journal, 'markManualObserved').mockImplementationOnce(async (...args) => {
+    const result = await observed(...args)
+    if (change === 'trust') await trust.revoke(key, 'agents')
+    // The actual API changes the live overlay before queueing its index write. Await that write
+    // only after the held FIFO releases; publication must see the change even before disk does.
+    if (change === 'local') localWrite = externalWriter.runInAsyncScope(() =>
+      f.store.updateLocalProjectSettings('project', { agents: { env: { REVIEW_PROFILE: 'changed' } } }))
+    return result
+  })
+  const result = await f.service.resume(f.row.id, f.key, f.owner)
+  if (localWrite) expect(await localWrite).toBe(true)
+  externalWriter.emitDestroy()
+  expect(f.journal.list()[0].manualResume?.[0].state).toBe('observed')
+  if (change === 'none') {
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: true })
+    const joined = await f.manager.createHeadless({ persistKey: f.key, cols: 80, rows: 24 })
+    f.manager.write(null, joined.sessionId, 'printf "$REVIEW_PROFILE" > actual-profile.txt\r')
+    await vi.waitFor(() => expect(fs.readFileSync(path.join(f.repo, 'actual-profile.txt'), 'utf8')).toBe('approved'))
+  } else {
+    expect(result, JSON.stringify(result)).toMatchObject({ ok: false, outcome: 'uncertain' })
+    expect(f.dispatch.manualSessionActive(f.key)).toBe(false)
+    await expect(f.manager.createHeadless({ persistKey: f.key, cols: 80, rows: 24 })).rejects.toThrow('recovery-required')
+  }
 })

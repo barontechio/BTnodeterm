@@ -1,3 +1,4 @@
+import { captureManualProfileFile } from './worktree-manual-shell'
 import type { CanvasExecutionHold } from './canvas-execution-reservations'
 import type { SshConnection } from '../shared/ssh'
 import { promises as fs } from 'fs'
@@ -862,6 +863,25 @@ export class WorkspaceStore {
       const cached = e.ssh ? this.settingsCacheByProject.get(e.id) : undefined
       if (cached) e.settingsCache = cached
       else delete e.settingsCache
+    }
+  }
+
+  /** Host-only profile source fence. Local overlays can change before their queued index
+   * write; shared settings writes have their own IO. Pin both at manual-shell publication. */
+  captureProjectSpawnSettings(projectId: string): () => void {
+    const snapshot = () => {
+      const entries = this.index?.entries.filter((entry) => entry.id === projectId) ?? []
+      if (entries.length !== 1 || entries[0].ssh) throw new Error('manual-shell-project-source-unavailable')
+      const entry = entries[0]
+      return JSON.stringify({ root: settingsRootFor(entry), target: this.projectTargetInfo(projectId),
+        local: this.localSettingsByProject.get(projectId) })
+    }
+    const captured = snapshot()
+    const root = settingsRootFor(this.index!.entries.find((entry) => entry.id === projectId)!)
+    const assertFile = root ? captureManualProfileFile(projectSettingsPath(root)) : () => {}
+    return () => {
+      if (snapshot() !== captured) throw new Error('manual-shell-project-source-changed')
+      assertFile()
     }
   }
 

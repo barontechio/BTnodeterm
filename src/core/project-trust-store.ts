@@ -1,4 +1,7 @@
-import { promises as fs } from 'fs'
+import { promises as fs, lstatSync } from 'fs'
+import { captureManualProfileFile } from './worktree-manual-shell'
+import { stableStringify } from '../shared/canvas-mutations'
+import { readRegularFileNoFollow } from './read-regular-file'
 import { createHash } from 'node:crypto'
 import path from 'path'
 import type { ProjectTrustFamily } from '../shared/project-settings'
@@ -80,6 +83,27 @@ export class ProjectTrustStore {
       this.cache = {}
     }
     return this.cache
+  }
+
+  /** Read-only original trust-source fence for a verified manual shell profile. Neither a
+   * cached grant nor a later disk snapshot can silently stand in for the other. */
+  async captureCurrent(): Promise<() => void> {
+    const cache = await this.load()
+    const file = this.filePath; const assertFile = captureManualProfileFile(file)
+    const raw = await readRegularFileNoFollow(file, 1024 * 1024)
+    assertFile()
+    if (raw === null) {
+      try { lstatSync(file); throw new Error('manual-shell-trust-source-unreadable') }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+    }
+    const disk = raw === null ? {} : JSON.parse(raw)
+    const captured = stableStringify(cache)
+    if (!disk || typeof disk !== 'object' || Array.isArray(disk) || stableStringify(disk) !== captured)
+      throw new Error('manual-shell-trust-source-unverifiable')
+    return () => {
+      if (this.filePath !== file || stableStringify(this.cache) !== captured) throw new Error('manual-shell-trust-source-changed')
+      assertFile()
+    }
   }
 
   async isTrusted(key: string, family: ProjectTrustFamily, contentHash: string): Promise<boolean> {

@@ -511,6 +511,7 @@ export async function startServer(
   })
   ptyManager.setProjectSpawnOverrides(
     makeProjectSpawnOverrides({
+      captureSettings: (projectId) => workspaceStore.captureProjectSpawnSettings(projectId),
       readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
       targetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
       trust: projectTrustStore,

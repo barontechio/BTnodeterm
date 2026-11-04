@@ -180,10 +180,10 @@ describe.skipIf(process.platform !== 'linux')('manual recovery with real local p
     expect(f.dispatch.manualSessionActive(f.key)).toBe(false)
   })
 
-  it('refuses an unreadable host project profile instead of approving its fallback', async () => {
+  it('refuses an unverified custom host profile reader instead of approving its fallback', async () => {
     const f = await fixture()
     f.manager.setProjectSpawnOverrides(async () => { throw new Error('profile read failed') })
-    expect(await f.service.resume(f.row.id, f.key, f.owner)).toMatchObject({ ok: false, outcome: 'refused', error: expect.stringContaining('manual-shell-verification-failed') })
+    expect(await f.service.resume(f.row.id, f.key, f.owner)).toMatchObject({ ok: false, outcome: 'refused', error: expect.stringContaining('manual-shell-profile-source-unavailable') })
     expect(f.confirmations.request).not.toHaveBeenCalled()
     expect(f.journal.list()[0].manualResume).toBeUndefined()
   })

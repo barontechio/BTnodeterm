@@ -1211,8 +1211,9 @@ export class PtyManager {
 
   private readonly manualShellScope = new AsyncLocalStorage<{
     live: boolean; profile: ManualShellProfile; nonce: string; permit: NodeExecutionBatchPermit;
-    registered(target: object): void; session?: Session; tmux?: ManualTmuxCreated; dispatched: boolean
+    registered(target: object): void; assertSources(): void; session?: Session; tmux?: ManualTmuxCreated; dispatched: boolean
   }>()
+  private readonly manualProfileSources = new WeakMap<ManualShellProfile, () => void>()
   private readonly manualTmuxStarts = new WeakMap<Session, { nonce: string; fingerprint: string; created: ManualTmuxCreated; clientBirth: string }>()
   private readonly manualShellFacts = new WeakMap<Session, { nonce: string; fingerprint: string; evidence: ManualShellEvidence }>()
 
@@ -1232,7 +1233,15 @@ export class PtyManager {
   /** Resolve the real host profile before confirmation; no process or user input is created. */
   async prepareManualShell(options: PtyCreateOptions): Promise<ManualShellProfile> {
     await resolveShellPath()
+    const reader = this.readProjectSpawnOverrides
+    if (reader && !reader.captureCurrent) throw new Error('manual-shell-profile-source-unavailable')
+    const sources = reader ? await reader.captureCurrent!(options.ownerProjectId!) : () => {}
+    const assertSources = () => {
+      if (this.readProjectSpawnOverrides !== reader) throw new Error('manual-shell-profile-source-changed')
+      sources()
+    }
     const overrides = await this.projectSpawnOverrides(options, true)
+    assertSources()
     const requested = options.shell ?? overrides?.shell
     if (requested && safeSessionProgram(requested) !== requested) throw new Error('manual-shell-program-unverifiable')
     const shell = resolveLocalSessionShell(requested, this.getSettings().defaultShell)
@@ -1240,8 +1249,10 @@ export class PtyManager {
     if (!executable) throw new Error('manual-shell-program-unavailable')
     fs.accessSync(executable, fs.constants.X_OK)
     const captured = { ...options, shell: fs.realpathSync.native(executable), newOnly: true }
-    return { backend: this.getSettings().tmuxEnabled ? 'tmux' : 'plain', options: captured,
+    const profile: ManualShellProfile = { backend: this.getSettings().tmuxEnabled ? 'tmux' : 'plain', options: captured,
       fingerprint: this.manualShellFingerprint(captured, overrides) }
+    this.manualProfileSources.set(profile, assertSources)
+    return profile
   }
 
   /** Host-only acknowledged creation/reconciliation. No caller-provided input or held command. */
@@ -1253,12 +1264,16 @@ export class PtyManager {
     const options = structuredClone(profile.options); const key = options.persistKey!
     if (permit.kind !== 'restart' || !permit.nodeIds.includes(key) || this.manualShellScope.getStore())
       throw new Error('manual-shell-invalid-permit')
-    const scope = { live: true, profile: structuredClone(profile), nonce, permit, registered, dispatched: false,
+    const assertSources = this.manualProfileSources.get(profile)
+    if (!assertSources) throw new Error('manual-shell-profile-source-unavailable')
+    assertSources()
+    const scope = { live: true, profile: structuredClone(profile), nonce, permit, registered, assertSources, dispatched: false,
       session: undefined as Session | undefined, tmux: undefined as ManualTmuxCreated | undefined }
     try {
       const overrides = await this.projectSpawnOverrides(options, true)
       permit.assertCurrent()
       const assertProfileCurrent = () => {
+        assertSources()
         if (this.manualShellFingerprint(options, overrides) !== profile.fingerprint) throw new Error('manual-shell-profile-changed')
       }
       assertProfileCurrent()
@@ -2276,14 +2291,14 @@ export class PtyManager {
     // terminals' arrival at the spawn gate over ~1.3 s, in node order, so the on-screen ones came
     // last. Joining an IN-FLIGHT read only (nothing is cached past its settle) keeps every
     // freshness property the per-spawn read had: a create that starts after it settles reads anew.
-    let shared = this.overridesInFlight.get(projectId)
+    let shared = strict ? undefined : this.overridesInFlight.get(projectId)
     if (!shared) {
       const p = Promise.resolve()
         .then(() => read(projectId))
         .finally(() => {
-          if (this.overridesInFlight.get(projectId) === p) this.overridesInFlight.delete(projectId)
+          if (!strict && this.overridesInFlight.get(projectId) === p) this.overridesInFlight.delete(projectId)
         })
-      this.overridesInFlight.set(projectId, p)
+      if (!strict) this.overridesInFlight.set(projectId, p)
       shared = p
     }
     // Each spawn gets its own copy: the answer is shared, the object must not be.
@@ -5277,7 +5292,7 @@ export class PtyManager {
 
     const manualCreate = this.manualShellScope.getStore()
     if (manualCreate?.live) {
-      manualCreate.permit.assertCurrent()
+      manualCreate.permit.assertCurrent(); manualCreate.assertSources()
       if (cwd !== manualCreate.profile.options.cwd || useSessionHost || useLocalZellij || options.sshRemote ||
         (useLocalTmux ? 'tmux' : 'plain') !== manualCreate.profile.backend ||
         this.manualShellFingerprint(options, overrides) !== manualCreate.profile.fingerprint)

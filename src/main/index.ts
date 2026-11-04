@@ -779,6 +779,7 @@ registerProjectLaunchInfoHandlers(corePlatform, workspaceStore, projectTrustStor
 // wherever their stores happen to be constructed.
 ptyManager.setProjectSpawnOverrides(
   makeProjectSpawnOverrides({
+    captureSettings: (projectId) => workspaceStore.captureProjectSpawnSettings(projectId),
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
     targetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
     trust: projectTrustStore,

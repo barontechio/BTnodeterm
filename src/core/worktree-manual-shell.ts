@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { stableStringify } from '../shared/canvas-mutations'
@@ -88,4 +89,37 @@ export function manualTmuxStillCurrent(file: string, socket: string, expected: M
     return actual.socketPath === expected.socketPath && actual.server === expected.server && actual.sessionId === expected.sessionId &&
       actual.paneId === expected.paneId && actual.panePid === expected.panePid && actual.paneBirth === expected.paneBirth
   } catch { return false }
+}
+
+/** Read-only freshness of an actual profile source, including proven absence. A missing file
+ * must keep the same searchable canonical ancestor; a failed read is never absence. */
+export function captureManualProfileFile(file: string): () => void {
+  const inspect = (): string => {
+    try {
+      const stamp = manualFileStamp(file)
+      const parent = fs.realpathSync.native(path.dirname(file))
+      if (parent !== path.dirname(file) || fs.realpathSync.native(file) !== file) throw new Error('manual-shell-profile-source-redirected')
+      const stat = fs.statSync(parent, { bigint: true })
+      return `file:${stamp}:${stat.dev}:${stat.ino}`
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+      // Distinguish a missing target from an existing dangling symlink or inaccessible parent.
+      try { fs.lstatSync(file); throw new Error('manual-shell-profile-source-unverifiable') }
+      catch (missing) { if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing }
+      let parent = path.dirname(file)
+      for (let depth = 0; depth < 128; depth++) {
+        try {
+          const stat = fs.lstatSync(parent, { bigint: true })
+          if (!stat.isDirectory() || !stat.ino || stat.isSymbolicLink() || fs.realpathSync.native(parent) !== parent)
+            throw new Error('manual-shell-profile-source-redirected')
+          fs.accessSync(parent, fs.constants.R_OK | fs.constants.X_OK)
+          return `absent:${parent}:${stat.dev}:${stat.ino}`
+        } catch (missing) { if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing }
+        const next = path.dirname(parent); if (next === parent) break; parent = next
+      }
+      throw new Error('manual-shell-profile-source-unverifiable')
+    }
+  }
+  const captured = inspect()
+  return () => { if (inspect() !== captured) throw new Error('manual-shell-profile-source-changed') }
 }
