@@ -1,5 +1,24 @@
 # Server capability parity implementation plan
 
+## Reviewed D composition candidate (2026-11-04)
+
+The isolated D candidate adds reviewed source commits `34fddff3` and `f908b09d` onto C
+`6d231fff` as `2f23c129` and `4ac9e585`. Only three documentation files conflicted;
+both existing integration invariants and D removal documentation were retained. Production
+composition was additive, including existing browser transfer and notification behavior.
+
+Independent D correction review passed 35 focused tests at unchanged deadlines, including the
+original configured-account-root reproduction and an account-source mutation after durable
+intent preparation. The corrected author component passed 94 focused tests, types and both
+builds. The combined candidate passed 296 tests across 18 files with `--maxWorkers=4`, followed
+sequentially by typechecking, Desktop build and Server build. This documentation update changes
+no product source. Prior failed local gates remain historical failed evidence; these focused
+passes do not establish a full aggregate gate or explain all earlier timeouts/assertions.
+
+Promotion requires coordinator review and C dedicated CI; D then requires its own aggregate CI.
+No production activation or complete agent/account restart recovery is claimed. E infrastructure
+and truthful legacy account outcomes are separate pending slices.
+
 ## C candidate rebased onto reviewed CI repairs (2026-11-04)
 
 The unpublished C candidate is now based on `cb1758d0`, retaining all seven C commits from the
