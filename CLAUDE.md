@@ -8,6 +8,11 @@ Codex parser handles the returned window. Revalidate saved harness/account/sessi
 generation and requester lifetime after IO; remote failure never authorizes local history reads.
 This does not grant agent context-link permission or start continuous meters.
 
+Development preview transport is not enabled yet. `core/development-previews.ts` requires a
+host-only approved-record authority with fresh process/socket and execution-generation proof;
+`DevPortsReport` alone is not that proof. Keep static HTML previews script-disabled. See
+`docs/development-preview-gateway.md` for deployment, credential filtering and remaining gates.
+
 Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
 planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,
 ordering, card membership and audit diffs also live in shared modules. Renderer compatibility

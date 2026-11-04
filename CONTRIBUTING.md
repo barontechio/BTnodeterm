@@ -8,6 +8,11 @@ Codex parser handles the returned window. Revalidate saved harness/account/sessi
 generation and requester lifetime after IO; remote failure never authorizes local history reads.
 This does not grant agent context-link permission or start continuous meters.
 
+Development preview transport is not enabled yet. `core/development-previews.ts` requires a
+host-only approved-record authority with fresh process/socket and execution-generation proof;
+`DevPortsReport` alone is not that proof. Keep static HTML previews script-disabled. See
+`docs/development-preview-gateway.md` for deployment, credential filtering and remaining gates.
+
 Thanks for looking. This file is the short door: enough to get running, plus the house rules that
 actually get a pull request sent back. The long version — every subsystem and the reasoning behind
 its invariants — lives in `CLAUDE.md` at the repo root, which is also loaded automatically if you
