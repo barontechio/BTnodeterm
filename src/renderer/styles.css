@@ -7857,7 +7857,12 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 90%;
+  flex-wrap: wrap;
+  /* The transformed border box must stay inside the frame, including its left inset.
+     Reserve the right-hand Ungroup control as well; percentages alone ignore the boost. */
+  box-sizing: border-box;
+  width: max-content;
+  max-width: calc((100% - 56px) / var(--group-label-boost, 1));
   padding: 5px 14px;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
@@ -7878,7 +7883,7 @@ body,
 
 /* A tooltip wraps its trigger in a span, so inside the pill, the worktree chip and the actions row
    the WRAPPER is the flex item, not the button. Without this the fixed-size buttons would shrink
-   under the 180px name input instead of holding their 11px / 22px boxes. */
+   under the name input instead of holding their 11px / 22px boxes. */
 .group-node__label > .tooltip-trigger,
 .group-node__wt > .tooltip-trigger,
 .group-node__actions > .tooltip-trigger {
@@ -7895,14 +7900,38 @@ body,
   cursor: pointer;
 }
 
+.group-node__name-size {
+  position: relative;
+  min-width: 0;
+  width: max-content;
+  /* Keep the dot and name together even when a long title consumes the whole row. */
+  max-width: calc(100% - 19px);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/* Browser text shaping handles wide glyphs, Unicode and repeated/trailing spaces. Both
+   elements share metrics; the input stays editable and scrolls when the frame caps it. */
+.group-node__name-mirror {
+  display: block;
+  visibility: hidden;
+  white-space: pre;
+  min-width: 64px;
+  padding: 1px 3px;
+}
+
 .group-node__name {
-  width: 180px;
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: 1px 3px;
   background: transparent;
   border: none;
   outline: none;
   color: var(--text);
-  font-size: 16px;
-  font-weight: 600;
+  font: inherit;
   cursor: text;
 }
 
@@ -7911,7 +7940,10 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  flex: none;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .group-node__branch {

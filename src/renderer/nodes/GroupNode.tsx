@@ -194,12 +194,19 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
             }}
           />
         )}
-        <input
-          className="group-node__name nodrag"
-          value={data.title}
-          spellCheck={false}
-          onChange={(e) => updateNodeData(id, { title: e.target.value })}
-        />
+        <span className="group-node__name-size">
+          <span className="group-node__name-mirror" aria-hidden="true">
+            {data.title || '\u00a0'}
+          </span>
+          <input
+            className="group-node__name nodrag"
+            aria-label="Group name"
+            title={data.title}
+            value={data.title}
+            spellCheck={false}
+            onChange={(e) => updateNodeData(id, { title: e.target.value })}
+          />
+        </span>
         {wt && (
           <div className="group-node__wt nodrag">
             {stale ? (
