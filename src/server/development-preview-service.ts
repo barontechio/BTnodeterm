@@ -21,7 +21,7 @@ export function registerDevelopmentPreviewService(options: {
       const matches = workspace.getProjectNodesForHostAction(scope.projectId)?.filter(node => node.id === scope.nodeId)
       const node = matches?.length === 1 ? matches[0] : undefined
       return ids.length === 1 && ids[0] === scope.projectId && !!node && node.kind === 'terminal' &&
-        !node.ssh && !node.sshFs && !node.sshRemoteTmux && pty.nodeExecutionIdentity(scope.nodeId) === execution
+        !node.ssh && !node.sshFs && !node.sshRemoteTmux && execution.current()
     },
     execution: async scope => {
       const saved = await workspace.load({ sideline: false })
@@ -29,7 +29,7 @@ export function registerDevelopmentPreviewService(options: {
       if (matches.length !== 1) return undefined
       const { project, node } = matches[0]
       if (project.id !== scope.projectId || project.ssh || project.unavailable || node.ssh || node.sshFs || node.sshRemoteTmux || node.kind !== 'terminal') return undefined
-      return pty.nodeExecutionIdentity(scope.nodeId)
+      return pty.localTmuxExecution(scope.nodeId)
     }
   }) : undefined
   const previews = authority ? new DevelopmentPreviews(config!.origin, appOrigin!, authority) : undefined

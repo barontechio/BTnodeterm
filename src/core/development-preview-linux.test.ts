@@ -3,11 +3,11 @@ import path from 'node:path'
 import http from 'node:http'
 import net from 'node:net'
 import { once } from 'node:events'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { afterAll, describe, expect, it } from 'vitest'
 import WebSocket from 'ws'
 import { testTmpDir } from './test-tmp'
-import type { PtyManager } from './pty-manager'
+import { PtyManager } from './pty-manager'
 import { fakePlatform } from './platform-fake'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { WorkspaceStore } from './workspace-store'
@@ -50,8 +50,14 @@ describe.skipIf(process.platform !== 'linux' || !hasTmux)('real local tmux devel
     for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
     expect(fs.existsSync(ready)).toBe(true)
     const { pid } = JSON.parse(fs.readFileSync(ready, 'utf8'))
-    const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean)
-    let generation: object | undefined = {}
+    const argv = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').slice(0, -1).split('\0')
+    const client = spawn('script', ['-q', '-c', `tmux -L ${tmuxSocket} attach-session -t nt-web`, '/dev/null'], { stdio: ['pipe', 'ignore', 'ignore'], env: { ...process.env, TERM: 'xterm' } })
+    let clientPid = 0
+    for (let i = 0; i < 100 && !clientPid; i++) {
+      clientPid = Number(execFileSync('tmux', ['-L', tmuxSocket, 'list-clients', '-F', '#{client_pid}'], { encoding: 'utf8' }).trim())
+      if (!clientPid) await new Promise(resolve => setTimeout(resolve, 20))
+    }
+    expect(clientPid).toBeGreaterThan(0)
     let owner = true
     const wrapper = path.join(root, 'tmux-wrapper')
     fs.writeFileSync(wrapper, `#!/bin/sh
@@ -65,8 +71,12 @@ exit 1
     await workspace.save({ version: 2, activeProjectId: 'p', projects: [{ id: 'p', name: 'Preview', color: '#6ac4dc',
       viewport: { x: 0, y: 0, zoom: 1 }, nodes: [{ id: 'web', kind: 'terminal', title: 'dev', group: null,
         color: '#6ac4dc', size: { width: 720, height: 520 }, position: { x: 0, y: 0 } }] }] })
-    const service = registerDevelopmentPreviewService({ platform, workspace,
-      pty: { getTmuxBin: () => wrapper, nodeExecutionIdentity: () => generation } as unknown as PtyManager,
+    const pty = new PtyManager()
+    const internal = pty as unknown as { tmuxPath: string; sessions: Map<string, unknown> }
+    internal.tmuxPath = wrapper
+    const live = () => ({ nodeId: 'web', persistKey: 'web', tmuxBacked: true, proc: { pid: clientPid } })
+    internal.sessions.set('preview-fixture', live())
+    const service = registerDevelopmentPreviewService({ platform, workspace, pty,
       config: { origin: 'https://preview.example.net', approved: [{ projectId: 'p', nodeId: 'web', port, argv }] },
       appOrigin: 'https://app.example.com', managementPorts: () => [] })
     const transport = service.transport!
@@ -81,6 +91,11 @@ exit 1
     try {
       expect(() => platform.handlers[IPC.developmentPreviewList](2, { projectId: 'p', nodeId: 'web' })).toThrow('owner-required')
       expect(await list('other')).toEqual([])
+      for (const backend of [{ zellij: true }, { sessionHost: true }, { tmuxBacked: false }, { sshRemote: {} }]) {
+        internal.sessions.set('preview-fixture', { ...live(), ...backend })
+        expect(await list()).toEqual([])
+      }
+      internal.sessions.set('preview-fixture', live())
       const records = await list()
       expect(records).toHaveLength(1)
       const origin = await open(records[0].id)
@@ -89,6 +104,20 @@ exit 1
         http.get({ host: '127.0.0.1', port: gatewayPort, path: '/login', headers: { host: 'unknown.preview.example.net:444' } }, res => { res.resume(); resolve(res.statusCode!) }).on('error', reject)
       })
       expect(reserved).toBe(403)
+      for (const alias of ['preview.example.net.', 'unknown.preview.example.net.', `${host}.`, 'UNKNOWN.PREVIEW.EXAMPLE.NET.:443']) {
+        const status = await new Promise<number>((resolve, reject) => {
+          http.get({ host: '127.0.0.1', port: gatewayPort, path: '/login', headers: { host: alias } }, res => { res.resume(); resolve(res.statusCode!) }).on('error', reject)
+        })
+        expect(status).toBe(403)
+        const upgrade = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws`, { headers: { host: alias } })
+        const outcome = await new Promise<string>(resolve => {
+          upgrade.on('open', () => resolve('opened'))
+          upgrade.on('unexpected-response', (_req, res) => { res.resume(); resolve(`app-response-${res.statusCode}`) })
+          upgrade.on('error', () => resolve('refused'))
+        })
+        upgrade.terminate()
+        expect(outcome).toBe('refused')
+      }
       const response = await new Promise<{ body: string; csp: string; cors: string }>((resolve, reject) => {
         http.get({ host: '127.0.0.1', port: gatewayPort, headers: { host, origin: 'null' } }, res => {
           let body = ''; res.on('data', chunk => { body += chunk }); res.on('end', () => resolve({ body, csp: String(res.headers['content-security-policy']), cors: String(res.headers['access-control-allow-origin']) }))
@@ -100,7 +129,7 @@ exit 1
       ws = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws`, { headers: { host, origin: 'null' } })
       await once(ws, 'open')
       const reply = once(ws, 'message'); ws.send('hmr'); expect((await reply)[0].toString()).toBe('hmr')
-      const closed = once(ws, 'close'); generation = {}; await closed
+      const closed = once(ws, 'close'); internal.sessions.set('preview-fixture', live()); await closed
       await expect(open(records[0].id)).rejects.toThrow()
       const newer = await list()
       expect(newer).toHaveLength(1)
@@ -109,6 +138,9 @@ exit 1
       for (let attempt = 0; attempt < 100 && !fs.existsSync(ready); attempt++) await new Promise(resolve => setTimeout(resolve, 20))
       expect(JSON.parse(fs.readFileSync(ready, 'utf8')).pid).not.toBe(pid)
       await expect(open(newer[0].id)).rejects.toThrow()
+      // A replaced physical pane cannot be adopted by the old painter lifetime.
+      expect(await list()).toEqual([])
+      internal.sessions.set('preview-fixture', live())
       const finalRecords = await list()
       const finalOrigin = await open(finalRecords[0].id)
       ws = new WebSocket(`ws://127.0.0.1:${gatewayPort}/ws`, { headers: { host: new URL(finalOrigin).host, origin: 'null' } })
@@ -121,6 +153,7 @@ exit 1
       ws?.terminate(); service.stop(); appSockets.close(); gateway.closeAllConnections()
       await new Promise<void>(resolve => gateway.close(() => resolve()))
       execFileSync('tmux', ['-L', tmuxSocket, 'kill-session', '-t', '=nt-web'])
+      client.stdin.end(); client.kill()
       resetPlatformForTests()
     }
   }, 20_000)

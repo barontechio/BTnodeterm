@@ -53,7 +53,8 @@ export async function proveLinuxListener(owner: DevPortOwner): Promise<LinuxPrev
   try {
     const before = await processStat(owner.pid)
     const pane = await processStat(owner.panePid)
-    const argv = (await bounded(`/proc/${owner.pid}/cmdline`, 64 * 1024)).split('\0').filter(Boolean)
+    const cmdline = await bounded(`/proc/${owner.pid}/cmdline`, 64 * 1024)
+    const argv = (cmdline.endsWith('\0') ? cmdline.slice(0, -1) : cmdline).split('\0')
     const listeners = parseProcNetTcp(await bounded('/proc/net/tcp'))
     const matches = [...listeners.entries()].filter(([, row]) => row.port === owner.port && row.address === owner.address)
     // SO_REUSEPORT and ambiguous wildcard/loopback bindings do not prove a destination.
@@ -65,7 +66,7 @@ export async function proveLinuxListener(owner: DevPortOwner): Promise<LinuxPrev
   } catch { return null }
 }
 export function sameLinuxProof(a: LinuxPreviewProof, b: LinuxPreviewProof): boolean {
-  return a.pid === b.pid && a.panePid === b.panePid && a.nodeId === b.nodeId && a.port === b.port &&
+  return a.socket === b.socket && a.session === b.session && a.pid === b.pid && a.panePid === b.panePid && a.nodeId === b.nodeId && a.port === b.port &&
     a.address === b.address && a.birth === b.birth && a.paneBirth === b.paneBirth && a.inode === b.inode &&
     JSON.stringify(a.argv) === JSON.stringify(b.argv)
 }

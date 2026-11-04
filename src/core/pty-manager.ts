@@ -1,3 +1,4 @@
+import { sameLocalTmuxExecution, type LocalTmuxExecution } from './local-tmux-execution'
 import type { ChatPromptBlocked, ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from '../shared/text-delivery'
 import { claudeScreenBlocksInput, readClaudeComposer, readClaudeScreen } from '../shared/agents/claude-screen'
 import os from 'os'
@@ -1204,6 +1205,49 @@ export class PtyManager {
 
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
+
+  private readonly localTmuxExecutions = new WeakMap<Session, LocalTmuxExecution>()
+
+  /** Read-only, host-private preview seam. Bind the actual PTY client, never a name alone.
+   * Only a single-pane local tmux session is supported. First physical identity is pinned
+   * for this painter lifetime; later reads cannot silently adopt a replacement backend. */
+  async localTmuxExecution(nodeId: string): Promise<LocalTmuxExecution | undefined> {
+    const session = this.liveSessionForNode(nodeId)?.[1]
+    if (process.platform !== 'linux' || !this.tmuxPath || !session || !session.tmuxBacked ||
+      session.zellij || session.sessionHost || session.sshRemote || session.persistKey !== nodeId) return undefined
+    const clientPid = session.proc.pid
+    const current = () => this.liveSessionForNode(nodeId)?.[1] === session &&
+      session.proc.pid === clientPid && session.tmuxBacked && !session.zellij &&
+      !session.sessionHost && !session.sshRemote && session.persistKey === nodeId
+    const birth = async (pid: number): Promise<string> => {
+      if (!Number.isSafeInteger(pid) || pid < 1) throw new Error('invalid tmux process')
+      const stat = await fs.promises.readFile(`/proc/${pid}/stat`, 'utf8')
+      const value = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19]
+      if (!/^\d+$/.test(value)) throw new Error('invalid tmux process birth')
+      return value
+    }
+    try {
+      const clientBirth = await birth(clientPid)
+      const run = async (args: string[]) => (await runAsync(this.tmuxPath!, ['-L', TMUX_SOCKET, ...args],
+        { timeout: 2000, maxBuffer: 65536 })).stdout.trim().split('\n')
+      const clients = await run(['list-clients', '-F', '#{client_pid}|#{session_id}|#{session_name}'])
+      const matches = clients.map(row => row.split('|')).filter(row => row[0] === String(clientPid))
+      if (matches.length !== 1 || matches[0][2] !== sessionName(nodeId) || !/^\$\d+$/.test(matches[0][1])) return undefined
+      const panes = await run(['list-panes', '-s', '-t', matches[0][1], '-F', '#{socket_path}|#{pid}|#{session_id}|#{session_name}|#{pane_id}|#{pane_pid}'])
+      if (panes.length !== 1) return undefined
+      const [socketPath, serverPid, sessionId, name, paneId, rawPid] = panes[0].split('|')
+      if (!socketPath || sessionId !== matches[0][1] || name !== sessionName(nodeId) || !/^%\d+$/.test(paneId)) return undefined
+      const panePid = Number(rawPid)
+      const descriptor: LocalTmuxExecution = Object.freeze({ socket: TMUX_SOCKET, socketPath,
+        server: `${serverPid}:${await birth(Number(serverPid))}`, session: name, sessionId, paneId,
+        panePid, paneBirth: await birth(panePid), clientPid, clientBirth, current })
+      if (await birth(clientPid) !== clientBirth || !current()) return undefined
+      const pinned = this.localTmuxExecutions.get(session)
+      if (pinned) return sameLocalTmuxExecution(pinned, descriptor) ? pinned : undefined
+      this.localTmuxExecutions.set(session, descriptor)
+      return descriptor
+    } catch { return undefined }
+  }
 
   /** Host services acquire before inspecting/dispatching an action; never a callback RPC. */
   runNodeAction<T>(nodeId: string, kind: NodeExecutionKind, options: NodeExecutionOptions,

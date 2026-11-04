@@ -305,9 +305,9 @@ function namesAgree(toolName: string, psName: string | undefined): boolean {
 
 /** `node id → ports`, from the three facts. Pure. */
 /** Host-private association evidence; never added to DevPortsReport or the public scan RPC. */
-export interface DevPortOwner { nodeId: string; panePid: number; pid: number; port: number; address: string }
+export interface DevPortOwner { socket?: string; session?: string; nodeId: string; panePid: number; pid: number; port: number; address: string }
 export function assembleDevPorts(
-  panes: readonly PaneRef[],
+  panes: readonly (PaneRef & { socket?: string })[],
   procs: readonly ProcRow[],
   listeners: readonly Listener[],
   observe?: (owner: DevPortOwner) => void
@@ -316,7 +316,7 @@ export function assembleDevPorts(
   const commandOf = new Map(procs.map((p) => [p.pid, p.command]))
   // pid → owning node. Every pane of a session counts (a session can carry a lead pane), and a
   // `seen` set guards the walk against a cyclic ppid chain captured mid-recycle.
-  const owner = new Map<number, { nodeId: string; panePid: number }>()
+  const owner = new Map<number, { nodeId: string; panePid: number; socket?: string; session?: string }>()
   for (const pane of panes) {
     if (!pane.session.startsWith('nt-')) continue
     const nodeId = pane.session.slice('nt-'.length)
@@ -325,7 +325,7 @@ export function assembleDevPorts(
     while (stack.length > 0) {
       const pid = stack.pop() as number
       if (owner.has(pid)) continue
-      owner.set(pid, { nodeId, panePid: pane.panePid })
+      owner.set(pid, { nodeId, panePid: pane.panePid, ...(pane.socket ? { socket: pane.socket, session: pane.session } : {}) })
       for (const k of kids.get(pid) ?? []) stack.push(k)
     }
   }
@@ -335,7 +335,7 @@ export function assembleDevPorts(
     if (holder === undefined) continue
     const pid = holder.pid
     const { nodeId, panePid } = owner.get(pid)!
-    observe?.({ nodeId, panePid, pid, port: l.port, address: l.address })
+    observe?.({ ...owner.get(pid)!, pid, port: l.port, address: l.address })
     let ports = byNode.get(nodeId)
     if (!ports) byNode.set(nodeId, (ports = new Map()))
     const existing = ports.get(l.port)
@@ -373,7 +373,9 @@ export function parseDevPortsProbe(stdout: string, sockets: readonly string[] = 
   if (iPanes < 0 || iProcs < 0 || iListen < 0 || iEnd < 0) return fail('unreachable')
   if (!(iPanes < iProcs && iProcs < iListen && iListen < iEnd)) return fail('unreachable')
 
-  const { answered, panes } = parseFencedPanes(lines.slice(iPanes + 1, iProcs), sockets)
+  const section = lines.slice(iPanes + 1, iProcs)
+  const { answered } = parseFencedPanes(section, sockets)
+  const panes = sockets.flatMap(socket => parseFencedPanes(section, [socket]).panes.map(pane => ({ ...pane, socket })))
   if (answered === 0) return fail('unreachable')
   const procs = parseProcRows(lines.slice(iProcs + 1, iListen).join('\n'))
   if (procs.length === 0) return fail('unreachable')

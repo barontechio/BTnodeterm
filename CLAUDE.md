@@ -21,6 +21,10 @@ records, fresh process/pane birth and listener identity, and accepted-socket pro
 bytes. The optional owner namespace never reaches relay guests. Keep static HTML script-disabled.
 Use separate PSL-validated registrable domains and opaque sandboxed active previews; cookies,
 storage and workers are unavailable. DNS grant names must never replace a live registry entry.
+The host-private PTY descriptor pins the actual local tmux client, server, session and single
+pane identity; remote, Zellij, session-host, raw and multi-pane backends are refused. Discovery
+retains its socket identity. Empty argv entries are significant. DNS-equivalent reserved-host
+aliases are rejected before application routing and do not become grant keys.
 Disabled mode starts no discovery or gateway. See `docs/development-preview-gateway.md` for the
 configuration, deployment acceptance and unsupported SSH/platform/storage cases.
 

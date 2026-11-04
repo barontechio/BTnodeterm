@@ -120,7 +120,8 @@ export class DevelopmentPreviews {
   ownsHost(host: string): boolean {
     try {
       const url = new URL(`https://${host}`)
-      return /^[a-z0-9.-]+(?::[0-9]+)?$/i.test(host) && (url.hostname === this.base.hostname || url.hostname.endsWith(`.${this.base.hostname}`))
+      const hostname = url.hostname.replace(/\.+$/, '').toLowerCase()
+      return /^[a-z0-9.-]+(?::[0-9]+)?$/i.test(host) && (hostname === this.base.hostname || hostname.endsWith(`.${this.base.hostname}`))
     } catch { return false }
   }
   async acquire(host: string, close: () => void): Promise<Readonly<DevelopmentTarget> | null> {

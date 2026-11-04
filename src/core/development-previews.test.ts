@@ -30,3 +30,17 @@ describe('development preview DNS grant identity', () => {
     expect(closed).toHaveBeenCalledOnce()
   })
 })
+
+it('reserves all DNS-equivalent preview aliases while keeping bearer lookup strict', async () => {
+  const previews = service('https://preview.example.net')
+  const host = new URL(await previews.issue('owner', 'record')).host
+  for (const name of ['preview.example.net', 'unknown.preview.example.net', host]) {
+    for (const alias of [name + '.', name.toUpperCase(), name + ':443', name.toUpperCase() + '.:443']) {
+      expect(previews.ownsHost(alias)).toBe(true)
+      expect(await previews.acquire(alias, () => {})).toBeNull()
+    }
+  }
+  expect(previews.ownsHost('preview.example.net.evil.org')).toBe(false)
+  previews.revoke('owner', `https://${host}`)
+  expect(previews.ownsHost(host + '.')).toBe(true)
+})

@@ -97,3 +97,28 @@ SSH previews remain unsupported. A future adapter must retain the existing SSH t
 prove remote process birth/listener/accepted-socket ownership and close forwards on revocation.
 Current same-port forwarding alone is insufficient. Windows, macOS, IPv6-only services,
 non-tmux sessions and an optional controlled-browser worker remain separate follow-up adapters.
+
+
+### Physical execution and reserved-host boundary
+
+`PtyManager.localTmuxExecution` is a read-only, host-private seam. It checks the live
+backend flags, matches the actual PTY client PID against tmux's client inventory, and
+pins the physical socket path, server birth, session ID, pane ID/PID/birth and client
+birth for that painter lifetime. It does not return a raw Session or accept client proof.
+A same-name session on `nodeterm-rmt` cannot substitute for `node-terminal`. Discovery
+retains socket/session evidence and the authority compares it with that descriptor
+before Linux listener proof. Async revalidation compares the pinned physical identity;
+synchronous dispatch, stream and message guards retain the original painter lifetime.
+Periodic active checks close connections after external physical changes. Zellij, raw,
+remote, session-host and multi-pane sessions are explicitly unsupported in this slice.
+
+The exact `/proc` argv comparison removes only its final NUL delimiter. Empty interior
+and trailing arguments remain meaningful. Reserved-host classification normalizes DNS
+case and terminal dots, independently of strict bearer-grant lookup: base, unknown,
+expired and noncanonical grant names cannot route to the application HTTP/WS plane.
+
+Regression coverage includes a real attached tmux client and actual manager lookup with
+a seeded Session entry (not a native node-pty launch), real process/listener/accepted
+socket proofs, unsupported backends, a foreign same-name socket, exact empty argv and
+HTTP/upgrade aliases. The separate Chromium fixture exercises real module/fetch/PUT/HMR
+and opaque storage restrictions with fixture authority callbacks, not OS authority.
