@@ -18,7 +18,8 @@ import {
   sweepStaleTempFiles,
   tempNameFor,
   writeFileAtomic,
-  writeFileDurableAtomic
+  writeFileDurableAtomic,
+  syncFileDurable
 } from './fs-atomic'
 
 let dir: string
@@ -528,5 +529,39 @@ describe('clearAtomicTarget', () => {
     expect(result.canonicalRemoved).toBe(false)
     expect(result.retainedTempCount).toBe(0)
     expect(await fs.readFile(target, 'utf8')).toBe('republished')
+  })
+})
+
+
+describe.skipIf(process.platform === 'win32')('durability acknowledgement of existing metadata', () => {
+  it('flushes a regular file and its directory without rewriting bytes', async () => {
+    const file = join(dir, 'repaired.json'); await fs.writeFile(file, 'repaired')
+    const before = await fs.stat(file)
+    await syncFileDurable(file)
+    expect(await fs.readFile(file, 'utf8')).toBe('repaired')
+    expect((await fs.stat(file)).ino).toBe(before.ino)
+  })
+  it('refuses symlink files and directories without touching the referenced data', async () => {
+    const file = join(dir, 'original'); await fs.writeFile(file, 'keep')
+    const alias = join(dir, 'alias'); await fs.symlink(file, alias)
+    await expect(syncFileDurable(alias)).rejects.toThrow()
+    const parent = join(dir, 'parent'); await fs.mkdir(parent); await fs.writeFile(join(parent, 'file'), 'keep')
+    const redirected = join(dir, 'redirected'); await fs.symlink(parent, redirected)
+    await expect(syncFileDurable(join(redirected, 'file'))).rejects.toThrow()
+    expect(await fs.readFile(file, 'utf8')).toBe('keep')
+  })
+  it('refuses a path replaced after the file flush instead of acknowledging the replacement', async () => {
+    const file = join(dir, 'repaired.json'); await fs.writeFile(file, 'old')
+    const open = fs.open
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      if (args[0] === file) {
+        const sync = handle.sync.bind(handle)
+        vi.spyOn(handle, 'sync').mockImplementation(async () => { await sync(); await writeFileAtomic(file, 'replacement') })
+      }
+      return handle
+    })
+    await expect(syncFileDurable(file)).rejects.toThrow('file-changed')
+    expect(await fs.readFile(file, 'utf8')).toBe('replacement')
   })
 })

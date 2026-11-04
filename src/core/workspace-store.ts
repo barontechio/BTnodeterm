@@ -3,7 +3,7 @@ import type { SshConnection } from '../shared/ssh'
 import { promises as fs } from 'fs'
 import { createHash, randomUUID } from 'node:crypto'
 import path from 'path'
-import { renameAtomic, sweepForeignTempFiles, writeFileAtomic } from './fs-atomic'
+import { renameAtomic, sweepForeignTempFiles, writeFileAtomic, syncFileDurable } from './fs-atomic'
 import { IPC } from '../shared/ipc'
 import { platform } from './platform'
 import {
@@ -1287,9 +1287,29 @@ export class WorkspaceStore {
    * INSIDE this FIFO step and ends before the next queued writer can run. */
   updateWorkspaceForExecutionRepair(hold: CanvasExecutionHold, edit: (fresh: Workspace) => Workspace,
     beforeSave?: (current: Workspace, next: Workspace) => void): Promise<{ saved: boolean; workspace: Workspace }> {
-    const run = this.saveChain.then(() => hold.repair((transition) => this.updateWorkspaceNow((fresh) => {
-      const next = edit(fresh); transition(next); return next
-    }, beforeSave, {})))
+    const run = this.saveChain.then(() => hold.repair(async (transition) => {
+      const result = await this.updateWorkspaceNow((fresh) => {
+        const next = edit(fresh); transition(next); return next
+      }, beforeSave, {})
+      // Normal saves are atomic, not fsync acknowledgements. Keep the hold and FIFO through
+      // durability of both content and the private execution overlay before journal completion.
+      const files = new Set([this.indexPath])
+      for (const id of hold.projectIds) {
+        const entry = this.index?.entries.find((candidate) => candidate.id === id)
+        if (!entry || entry.ssh || entry.handedOffTo) throw new Error('workspace-repair-storage-unavailable')
+        if (entry.dataFile) {
+          if (!isInlineProjectFileId(id)) throw new Error('workspace-repair-storage-unavailable')
+          files.add(inlineFilePath(id))
+        } else {
+          const cwd = folderFileCwd(entry)
+          if (cwd) files.add(projectFilePath(cwd))
+          else if (!entry.project) throw new Error('workspace-repair-storage-unavailable')
+        }
+      }
+      for (const file of files) { this.executionAdmission?.assertCurrent(); await syncFileDurable(file) }
+      this.executionAdmission?.assertCurrent()
+      return result
+    }))
     this.saveChain = run.catch(() => {})
     return run
   }

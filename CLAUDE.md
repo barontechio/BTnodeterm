@@ -11513,3 +11513,9 @@ notice. Keep v2-capable hosts while these records exist; older hosts reject v2 r
 manual restrictions. Downgrade requires offline operator reconciliation of the journal, including
 an empty v2 envelope. V1 facts remain readable and are upgraded only by an acknowledged mutation.
 Missing-before-recording provenance, agent recovery and confirmed deletion remain separate gates.
+
+Recovery's reserved FIFO write explicitly fsyncs the affected local content files, the private
+execution index and their parent directories. An ordinary atomic save is not that acknowledgement.
+Unsupported flushes, replacement identities and lost acknowledgements retain the repair plan and
+manual restrictions; they never publish recovered completion. This barrier does not lock external
+filesystem writers and does not change ordinary autosave durability or remote storage semantics.

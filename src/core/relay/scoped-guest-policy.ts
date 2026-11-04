@@ -511,6 +511,7 @@ export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.worktreeRecoveryList,
   IPC.worktreeRecoveryInspect,
   IPC.worktreeRecoveryKeep,
+  IPC.worktreeRecoveryRepair,
   // A whole-workspace write from a peer would replace the host's other projects.
   IPC.workspaceSave,
   // Moving a project's storage writes and deletes host files (issue #1145); host-only.

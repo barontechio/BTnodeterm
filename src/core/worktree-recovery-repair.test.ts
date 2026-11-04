@@ -21,7 +21,7 @@ beforeEach(() => {
   root = fs.realpathSync(testTmpDir('worktree-repair-'))
   fs.mkdirSync(path.join(root, 'data')); initPlatform(fakePlatform({ userDataDir: path.join(root, 'data') })); initCanvasSync()
 })
-afterEach(() => resetPlatformForTests())
+afterEach(() => { resetPlatformForTests(); vi.restoreAllMocks() })
 const node = (id: string, kind: CanvasNodeState['kind'], extra: Partial<CanvasNodeState> = {}): CanvasNodeState => ({
   id, kind, title: id, color: '#fff', group: null, position: { x: 0, y: 0 }, size: { width: 300, height: 200 }, ...extra
 })
@@ -137,6 +137,22 @@ describe.skipIf(process.platform === 'win32')('recorded missing-checkout recover
     expect(f.confirmations.request).toHaveBeenCalledTimes(2)
     expect(f.journal.isNodePending('terminal')).toBe(true)
     expect(f.git.worktreeList).not.toHaveBeenCalled()
+  })
+
+  it.each(['file', 'directory'])('keeps recovery pending when the repaired %s cannot acknowledge durability', async (part) => {
+    const f = await fixture(); const open = fs.promises.open
+    const target = part === 'file' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(f.repo, '.nodeterm')
+    const flushed = vi.fn(async () => { throw new Error('flush acknowledgement unavailable') })
+    vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      if (args[0] === target) vi.spyOn(handle, 'sync').mockImplementation(flushed)
+      return handle
+    })
+    expect(await f.service.recover(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain', error: expect.stringContaining('flush acknowledgement') })
+    expect(flushed).toHaveBeenCalledOnce(); expect(f.recycle).toHaveBeenCalledOnce()
+    expect(f.store.getNodeForHostAction('group')?.worktree).toBeUndefined()
+    expect(f.journal.list()[0].phase).toBe('removed')
+    expect(f.journal.isNodePending('terminal')).toBe(true)
   })
 
 })

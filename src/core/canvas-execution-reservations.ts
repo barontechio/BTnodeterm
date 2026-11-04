@@ -24,6 +24,7 @@ interface Source {
 interface RepairScope { release: object; live: boolean; permit: NodeExecutionBatchPermit }
 interface Held { project: Location; node: CanvasNodeState; binding: string; release: object; previous?: string; repair?: RepairScope }
 export interface CanvasExecutionHold {
+  readonly projectIds: readonly string[]
   release(): void
   /** The transition callback belongs inside the actual workspace writer FIFO. Await its complete
    * persistence; previous-cache recognition cannot escape this live repair scope. */
@@ -79,6 +80,7 @@ export class CanvasExecutionReservations {
       ...target, binding: canvasExecutionBinding(target.project, target.node), release })
     let released = false; let repairing = false
     return {
+      projectIds: Object.freeze([...new Set(selected.map((target) => target.project.id))]),
       release: () => {
         if (repairing) throw new Error('canvas-execution-repair-in-flight')
         released = true
