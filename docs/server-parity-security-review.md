@@ -1,6 +1,44 @@
 # Server parity security review
 
-## Current candidate: four fixture findings (2026-11-04)
+## Follow-up scan and current corrections (2026-11-04)
+
+The result gate [126780177650](https://github.com/barontechio/BTnodeterm/runs/126780177650) on
+`94baab42` reports three high and two medium findings. Its Linux quality and dependency review pass;
+successful CodeQL analysis still does not mean the result gate passed. Previous shell/cookie
+annotations are absent. The five remaining annotations are being addressed without suppression:
+
+- Two high reports point to `core/transcript-index.ts`: pathname stat followed by separate open or
+  unbounded read can use a replaced/grown file. Candidate `3de4de23`, composed as `ff3b7399`, opens
+  before fstat, validates a regular file and reads at most 5 MiB through that descriptor, retaining
+  short-read byte counts and closing on every path. Author evidence is 205 focused checks, typecheck
+  and both builds; eight predecessor failures distinguish its bounds/error/nonregular behavior.
+  Independent review and a fresh CodeQL result remain required. Parent symlinks are not a newly
+  established containment boundary, and Windows has no equivalent no-follow guarantee here.
+- One high report remains in the atomic-file fixture's second pathname open. `7f6e7859` reads bytes
+  from the retained original descriptor and verifies the current named inode afterward, preserving
+  the unchanged-file assertion without a later path open.
+- Two medium reports point to generated JavaScript in preview process fixtures. `7f6e7859` writes
+  fixed fixture programs and supplies values through actual process arguments (the test dependency
+  path uses an explicit fixture environment variable). Exact empty argv cases remain covered.
+
+Windows quality also found a newly added test requiring successful directory fsync where the
+platform returns `EPERM`. `7f6e7859` keeps that real-flush expiry schedule POSIX-specific and adds
+an all-platform unsupported-flush refusal/handle-cleanup test. Production still refuses publication
+without its durability acknowledgement; no Windows durability support is inferred from a mock.
+Merged typecheck and filesystem-focused tests pass; actual gateway OS rechecks encountered local
+PTY exhaustion, so fresh Linux/Windows CI is still required for this composition.
+
+A fresh `npm audit --package-lock-only` now reports six moderate entries, zero high/critical.
+All six derive from one [minimatch amplification advisory](https://github.com/advisories/GHSA-g3hv-75wg-m249)
+updated November 4. It affects the Desktop packaging dependency chain (`minimatch`,
+`@electron/universal`, `app-builder-lib`, `dmg-builder`, `electron-builder` and its Squirrel adapter).
+The advisory lists 11.0.1 as fixed. Installed packaging consumers require minimatch 9/10, and current
+electron-builder 26.18.0 still has those ranges. No forced major override or downgrade to builder
+24 has been applied without compatibility evidence. Earlier patch-only zero-audit results below
+are historical. The default branch's 27 alerts concern its older lockfile; this branch retains
+DOMPurify 3.4.17, Sharp 0.35.5, Vite 7.3.7, fast-uri 3.1.9 and undici 6.29.1/7.30.1/8.12.3.
+
+## Previous scan: four fixture findings (2026-11-04)
 
 CodeQL result check [126744604453](https://github.com/barontechio/BTnodeterm/runs/126744604453)
 on `4df5b36c` failed with one high and three medium findings. Linux/Windows quality, dependency

@@ -33,9 +33,10 @@ Additional accepted deliveries are integrated independently:
 | Remote agent context links | `46b1a20e`, `f85613d3` | `79389a95`, `d1c45507` | Separately verified agent proof, original edge revision and full caller/target identity retained through final HTTP publication; 106 independent checks and differential disclosure regressions |
 | SSH protocol fixture isolation | `77094cfd`, `e2cdc90d`, `c878b835` | `00d93d2a`, `599a77d6`, `c878b835` | Real executable-level temporary configuration for both clients, pinned host checks, partial-setup cleanup and primary-error preservation; no production transport policy change |
 
-The latest frozen integration `c878b835` passes 24,769 tests (109 skipped), typecheck, 73 focused
-checks and both production builds on Linux. Documentation-only delivery updates preserve this
-source snapshot. Fresh remote CI is required for its pushed head. Earlier snapshots `bb90eade`
+Frozen integration `94baab42` (source `a92a1d95`) passes 24,822 tests (109 skipped), typecheck and
+both production builds on Linux; remote Linux quality and dependency review also pass. Its remote
+Windows and CodeQL findings require the separate corrections described below. Previous source
+`c878b835` passed 24,769 tests, 73 focused checks, typecheck and both builds. Earlier snapshots `bb90eade`
 and `1a2a57a9` passed 24,667 and 24,691 tests respectively, with 109 skipped each.
 
 An earlier SSH fixture did not forward its temporary `-F` configuration at the executable boundary;
@@ -56,7 +57,8 @@ Chromium checks cover 504 layout cases, editing and external title updates, drag
 and a differential regression proving all four focused arrow keys leave canvas geometry unchanged.
 This is renderer verification on Linux, not a claim of a native device run or production deployment.
 
-The following reviewed candidates are composed locally and await a fresh aggregate gate:
+The following deliveries are composed in the locally validated `94baab42` snapshot. Security
+analysis is tracked independently from its passing Linux aggregate:
 
 | Candidate | Reviewed source / integration | Scope and remaining gate |
 | --- | --- | --- |
@@ -70,14 +72,32 @@ session mocks omitted `sessionForProject`, plus one unchanged session-host timeo
 correction is `a92a1d95`; all 59 targeted checks, including the unchanged timed-out fixture, pass.
 The earlier focused attempt also encountered local PTY exhaustion; availability recovered without
 changing system limits or terminating unrelated sessions. Neither failed run is a green aggregate
-certificate. The actual known-host file remained unchanged. The next frozen aggregate covers the
-corrected composition; remote CodeQL must also confirm the fixture corrections.
+certificate. The subsequent `94baab42` aggregate passes all 24,822 tests and both builds; actual
+known-host contents remain unchanged. Observed-missing recovery and the local gateway are accepted
+for isolated next-slice work. Remote security and supported-platform gates remain separate.
+
+New candidates are composed after that frozen aggregate and require a fresh merged gate:
+
+| Candidate | Reviewed source / integration | Evidence and boundary |
+| --- | --- | --- |
+| SSH connection lifetime and physical disconnect completion | `d417a102`, `49a10890`, `b5accce1`, `4e338a8e`, `c3711cbc` / `eeca50c4`, `0070dab3`, `e7d628ad`, `5e7f430e`, `236c4c46` | Independent 202 focused checks (three skipped), unchanged six-case matrix, five extra queue/close/joiner schedules and typecheck. Both prior P2s reproduced on the predecessor and corrected; cleanup ownership never confers application authority. |
+| Owner-lived SSH context meters | `c01c8ba8` / `905d8c88` | Independent 103 checks and typecheck; author 281 focused checks and both builds. Bounded renewable owner demand, original runtime/account/session/endpoint proof, addressed existing context-store observations and immediate cookie-revocation cleanup; no local or quota fallback. |
+| Security and Windows fixture corrections | `7f6e7859` | Fixed gateway fixture programs receive values as arguments instead of generated source. The expiry schedule requiring successful directory fsync is POSIX-specific; an all-platform failure test asserts no durable authority publication and handle cleanup on unsupported fsync. No production durability error is swallowed. |
+| Descriptor-bounded local transcript index | `3de4de23` / `ff3b7399` | Author 205 focused checks, typecheck and both builds; independent review pending. Open/fstat/read one regular-file descriptor, at most 5 MiB, actual short-read bytes, no-follow/nonblocking where supported and unconditional close. This does not create a new parent-path containment or Windows no-follow guarantee. |
+
+The new composition passes merged typecheck. Local preview OS rechecks later hit PTY exhaustion
+again; fresh-runner CI is required rather than changing resource limits, skipping durability or
+killing unrelated sessions. A prior merged focused run also returned an empty first OpenSSH chat;
+the unchanged protocol rerun passed all four transport cases. Its cause is not established.
+Neither partial run establishes an aggregate pass. The new CodeQL result and Windows run must
+confirm their corrections. The lock audit now reports six moderate packaging-chain entries from
+one minimatch advisory updated on November 4; see the security review, not historical zero-audit text.
 
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
-| Worktrees and sessions | Accept the composed first-observed recovery candidate, then verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
-| SSH | Reviewed connection-completion correction, continuous meters/tails, streaming transfers/media and additional readers where suitable shared parsers exist | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
-| Web and collaboration | Accept the composed opt-in local gateway, then optional isolated browser worker/control, browser team joining and supported notifications | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
+| Worktrees and sessions | Verified rebinding, explicit manual resume, supported agent recovery, confirmed clean removal and coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
+| SSH | Gate the composed connection/meter candidates; streaming transfers/media and additional readers where suitable parsers exist | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
+| Web and collaboration | Browser team joining, supported notifications and optional isolated worker/control where an actual runtime is available | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
 
 Removal must preserve sessions when Git refuses. A real Git fixture confirmed that ordinary
 `git worktree remove` can delete ignored files; consent must disclose that loss or refuse those
