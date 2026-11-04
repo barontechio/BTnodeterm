@@ -1,3 +1,4 @@
+import { RemoteUploadUncertainError } from '../../lib/remote-transfers'
 import { useContextEnsure } from '../../terminal/useContextEnsure'
 import { transcriptSessionFor } from '../../lib/transcriptSession'
 import { FIND_DECORATIONS } from '../../lib/palette'
@@ -235,6 +236,7 @@ export function ModalTerminal({
   glassRef.current = glass
   const [dropping, setDropping] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [uploadFailure, setUploadFailure] = useState('')
   const pasteReceipt = usePasteReceipt()
   // Same copy feedback as the canvas node — a copy here is the same act as a copy there, including
   // the agent gate: a claude card stays silent because claude prints its own copy line.
@@ -730,8 +732,13 @@ export function ModalTerminal({
       // Uploads go over the master this card's PTY runs on — its scope, not the project's.
       const projectId = nodeUploadScope(spawn.ssh)
       setUploading(true)
+      setUploadFailure('')
       try {
-        paths = await droppedPaths(files, { sshRemoteTmux: true, projectId })
+        paths = await droppedPaths(files, { sshRemoteTmux: true, projectId, nodeId })
+        if (!paths.length) setUploadFailure('Remote attachment upload unavailable.')
+      } catch (error) {
+        paths = []
+        setUploadFailure(error instanceof RemoteUploadUncertainError ? error.message : 'Upload failed')
       } finally {
         setUploading(false)
       }
@@ -800,7 +807,8 @@ export function ModalTerminal({
       onDrop={onDrop}
       onPasteCapture={onPaste}
     >
-      {uploading && <div className="kanban-modal__upload">Uploading…</div>}
+      {uploading && <div className="kanban-modal__upload">{spawn.sshRemoteTmux && isBrowserRuntime() ? 'Creating remote attachment…' : 'Uploading…'}</div>}
+      {uploadFailure && <div className="kanban-modal__upload" role="alert" onClick={() => setUploadFailure('')}>{uploadFailure}</div>}
       {/* Same pill, same class, same corner as the canvas node — one session seen twice should
           not speak in two different voices. */}
       {copy.feedback && (

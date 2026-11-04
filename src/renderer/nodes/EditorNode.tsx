@@ -1,3 +1,4 @@
+import { browserRemoteMedia, remoteTransferReference } from '../lib/remote-transfers'
 import { IMAGE_MIME } from '@shared/image-preview'
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
@@ -115,6 +116,23 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     // either open a silently-blank buffer (text) or chase a "couldn't read" error we already know
     // the reason for (image).
     if (!filePath || fileMissing) return
+
+    if (isImage && data.sshFs && activeProjectId && api.remoteTransfers) {
+      const transfers = api.remoteTransfers
+      let disposed = false, reference: string | null = null
+      let renew: ReturnType<typeof setInterval> | undefined
+      void browserRemoteMedia(transfers, activeProjectId, id, filePath).then(url => {
+        reference = remoteTransferReference(url)
+        if (disposed) { if (reference) void transfers.release(reference); return }
+        setImageSrc(url)
+        renew = setInterval(() => {
+          if (reference) void transfers.renew(reference).then(ok => {
+            if (!ok && !disposed) { setImageSrc(''); setImageError('Remote image reference expired.') }
+          }).catch(() => { if (!disposed) { setImageSrc(''); setImageError('Remote image unavailable.') } })
+        }, 60_000)
+      }).catch(() => { if (!disposed) setImageError('Remote image unavailable.') })
+      return () => { disposed = true; clearInterval(renew); if (reference) void transfers.release(reference).catch(() => {}) }
+    }
 
     // Images: load as a data URL and render an <img> preview (no Monaco).
     if (isImage) {

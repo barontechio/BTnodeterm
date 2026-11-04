@@ -1653,6 +1653,11 @@ export class SshProjectManager {
     return key
   }
 
+  /** Bulk application IO must not borrow an entry retained only for teardown. */
+  connectionReadyForWork(projectId: string): boolean {
+    return this.conns.get(projectId)?.setupDone === true && !this.disconnects.has(projectId)
+  }
+
   connectionKeyForControlPath(controlPath: string): string | undefined {
     for (const [projectId, connection] of this.conns) {
       if (connection.controlPath === controlPath) return this.connectionKeyFor(projectId)

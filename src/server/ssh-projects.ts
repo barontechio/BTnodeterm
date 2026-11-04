@@ -26,6 +26,7 @@ export interface ServerSshProjects {
   readonly manager: SshProjectManager
   readonly fs: SshFs
   withQueuedExecutionCheck: ScopedSshProjectRunners['withQueuedExecutionCheck']
+  stream: ScopedSshProjectRunners['stream']
   refForProject(projectId: string): ReturnType<SshProjectManager['refForProject']>
   refForEndpoint(endpoint: Parameters<SshProjectManager['refForEndpoint']>[0]): ReturnType<SshProjectManager['refForEndpoint']>
   spawnRefFor(scopeId: string): ReturnType<SshProjectManager['spawnRefFor']>
@@ -211,7 +212,7 @@ export function registerServerSshProjects(deps: {
   for (const channel of [IPC.sshUploadFile, IPC.sshDownloadFile, IPC.sshMediaAllow]) {
     handle(channel, () => { throw new Error('ssh-transfer-unavailable: this host does not yet provide browser SSH transfers or media') })
   }
-  return { manager, fs: remoteFs, withQueuedExecutionCheck: runners.withQueuedExecutionCheck, refForProject: verifiedRef,
+  return { manager, fs: remoteFs, stream: runners.stream, withQueuedExecutionCheck: runners.withQueuedExecutionCheck, refForProject: verifiedRef,
     refForEndpoint: (endpoint) => {
       const wanted = manager.refForEndpoint(endpoint)
       if (!wanted) return undefined

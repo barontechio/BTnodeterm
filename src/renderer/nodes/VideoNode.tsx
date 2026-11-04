@@ -1,3 +1,4 @@
+import { browserRemoteMedia, remoteTransferReference } from '../lib/remote-transfers'
 import { useEffect, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
 import { MaximizeButton } from './MaximizeButton'
@@ -34,17 +35,26 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
     let allowedUrl = ''
     let renewal: ReturnType<typeof setInterval> | undefined
     const media = window.nodeTerminal.media
-    const release = (url: string) => { if (url) void media.release?.(url).catch(() => {}) }
+    const transfers = window.nodeTerminal.remoteTransfers
+    const release = (url: string) => {
+      const reference = remoteTransferReference(url)
+      if (reference && transfers) void transfers.release(reference).catch(() => {})
+      else if (url) void media.release?.(url).catch(() => {})
+    }
+    const renew = (url: string) => {
+      const reference = remoteTransferReference(url)
+      return reference && transfers ? transfers.renew(reference) : media.renew?.(url) ?? Promise.resolve(true)
+    }
     const accept = (url: string) => {
       if (!alive) { release(url); return }
       allowedUrl = url
       setSrc(url)
-      if (media.renew) {
+      if (media.renew || transfers) {
         let renewing = false
         renewal = setInterval(() => {
           if (renewing) return
           renewing = true
-          void media.renew!(url).then((valid) => {
+          void renew(url).then((valid) => {
             if (!valid && alive) { setSrc(''); setError('Playback access expired. Reopen this media file.'); clearInterval(renewal) }
           }).catch(() => {}).finally(() => { renewing = false })
         }, 60_000)
@@ -59,9 +69,10 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
         return
       }
       setFetching(true)
-      window.nodeTerminal.media
-        .allowSsh(projectId, filePath)
-        .then((r) => {
+      const allowed = transfers
+        ? browserRemoteMedia(transfers, projectId, id, filePath).then(url => ({ok: true as const, url}))
+        : media.allowSsh(projectId, filePath)
+      allowed.then((r) => {
           if (!alive) { if (r.ok) release(r.url); return }
           setFetching(false)
           if (r.ok) accept(r.url)

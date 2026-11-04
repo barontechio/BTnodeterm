@@ -1,5 +1,7 @@
 import { registerBrowserJoin } from './browser-join'
 import { registerDevelopmentPreviewService } from './development-preview-service'
+import { createServerRemoteTransfers } from './remote-transfers'
+import { TransferPrincipals } from './transfer-principals'
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
@@ -693,6 +695,11 @@ export async function startServer(
       return (map[callerId] ?? []).filter((entry) => entry.id === targetId).length === 1
     } })
   const remoteMeters = createServerRemoteMeters(platform, remoteTranscripts.captureMeter)
+  const transferPrincipals = new TransferPrincipals(token => auth.validateSession(token))
+  const remoteTransfers = createServerRemoteTransfers({platform, enabled: config.sshProjects === true,
+    principals: transferPrincipals, workspace: workspaceStore, pty: ptyManager,
+    settings: () => settingsStore.get(), sessionOf: id => mirrorEntry(id)?.sessionId,
+    runtimeIdentity: id => ptyManager.nodeExecutionIdentity(id), ssh: sshProjects})
   const {
     contextTail,
     geminiContextTail,
@@ -1162,6 +1169,7 @@ export async function startServer(
     licenseClient?.forgetClient(uiId)
     gitRouting.forgetClient(uiId)
     sshProjects?.forgetClient(uiId)
+    remoteTransfers.forgetClient(uiId)
     remoteMeters.forgetClient(uiId)
     remoteTranscripts.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
@@ -1295,6 +1303,7 @@ export async function startServer(
     if ((err as { code?: unknown } | null)?.code === 'E_ADMIN_SOCKET_BUSY') otherServerHere = true
     console.error(`[hosted-team] team admin socket disabled: ${err instanceof Error ? err.message : String(err)}`)
     stopSessionNameSweep()
+    remoteTransfers.dispose()
     remoteMeters.dispose()
     remoteTranscripts.dispose()
     return { close: async (): Promise<void> => {} }
@@ -1388,6 +1397,7 @@ export async function startServer(
       port: 0, // nothing bound
       async close() {
         stopSessionNameSweep()
+        remoteTransfers.dispose()
         remoteMeters.dispose()
         remoteTranscripts.dispose()
         mediaReferences.dispose()
@@ -1446,6 +1456,7 @@ export async function startServer(
       publicOrigin: config.publicOrigin,
       downloadTickets,
       mediaReferences,
+      remoteTransfers: {transfers: remoteTransfers.transfers, principals: transferPrincipals},
       webPreviews,
       developmentPreviews: developmentPreviews.transport
     })
@@ -1458,7 +1469,8 @@ export async function startServer(
     platform,
     auth,
     onClientGone: dropUiClient,
-    onClientRevoked: (id) => remoteMeters.forgetClient(id),
+    onClientAuthenticated: (id, token) => transferPrincipals.attach(id, token),
+    onClientRevoked: (id) => { remoteTransfers.forgetClient(id); remoteMeters.forgetClient(id) },
     trustProxy: config.trustProxy,
     publicOrigin: config.publicOrigin
   })
@@ -1478,6 +1490,7 @@ export async function startServer(
     port,
     async close() {
       stopSessionNameSweep()
+      remoteTransfers.dispose()
       remoteMeters.dispose()
       remoteTranscripts.dispose()
       mediaReferences.dispose()

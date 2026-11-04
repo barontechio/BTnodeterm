@@ -1,3 +1,4 @@
+import { RemoteUploadUncertainError } from '../lib/remote-transfers'
 import { elementOnScreen } from '../terminal/on-screen'
 import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
 import { useContextEnsure } from '../terminal/useContextEnsure'
@@ -1511,7 +1512,7 @@ export function TerminalNode({
   // primitive selectors, not the project object — that is rebuilt on every node serialization.
   const activeProjectId = useProjects((s) => s.activeProjectId)
   const activeIsSsh = useProjects((s) => !!s.projects.find((p) => p.id === s.activeProjectId)?.ssh)
-  const linkDlCtx = { browser: isBrowserRuntime(), ssh: activeIsSsh, source: session.source }
+  const linkDlCtx = { browser: isBrowserRuntime(), ssh: activeIsSsh, source: session.source, remoteTransfers: !!api.remoteTransfers }
   const linkDownloads = useDownloads({
     route: downloadRoute(linkDlCtx),
     projectId: activeProjectId || undefined,
@@ -5897,16 +5898,20 @@ export function TerminalNode({
       const projectId = dropProjectId()
       if (uploadNoteTimer.current) clearTimeout(uploadNoteTimer.current)
       setUploadNote({
-        text: `Uploading ${files.length === 1 ? files[0].name : `${files.length} files`}…`,
+        text: `${isBrowserRuntime() ? 'Creating remote attachment' : 'Uploading'} ${files.length === 1 ? files[0].name : `${files.length} files`}…`,
       })
+      let uploadError = 'Upload failed', uncertain = false
       try {
-        paths = await droppedPaths(files, { sshRemoteTmux: true, projectId })
+        paths = await droppedPaths(files, { sshRemoteTmux: true, projectId, nodeId: id })
+      } catch (error) {
+        paths = []
+        if (error instanceof RemoteUploadUncertainError) { uploadError = error.message; uncertain = true }
       } finally {
         setUploadNote(null)
       }
       if (!paths.length) {
-        setUploadNote({ text: 'Upload failed', failed: true })
-        uploadNoteTimer.current = setTimeout(() => setUploadNote(null), 2500)
+        setUploadNote({ text: uploadError, failed: true })
+        uploadNoteTimer.current = setTimeout(() => setUploadNote(null), uncertain ? 15000 : 2500)
       }
     } else if (needsWrite) {
       if (uploadNoteTimer.current) clearTimeout(uploadNoteTimer.current)
@@ -7002,6 +7007,7 @@ export function TerminalNode({
                 pathsForFiles={(files) =>
                   droppedPaths(files, {
                     sshRemoteTmux: !!data.sshRemoteTmux,
+                    nodeId: id,
                     projectId: data.sshRemoteTmux ? dropProjectId() : '',
                     // The composer feeds the agent CLI, never the shell.
                     dialect: dropDialectFor(true)

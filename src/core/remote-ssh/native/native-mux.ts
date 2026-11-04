@@ -284,13 +284,16 @@ export class NativeMux {
     open: (client: Client, cb: (err: Error | undefined, ch: T) => void) => void,
     /** Runs INSIDE ssh2's callback, before any await: a consumer attached later can miss the
      *  channel's exit and close, which may arrive in the same read as the open confirmation. */
-    onOpen?: (ch: T) => void
+    onOpen?: (ch: T) => void,
+    admission?: { current(): boolean; existingOnly: boolean }
   ): Promise<T> {
     for (let attempt = 0; attempt <= MAX_OVERFLOW_CONNECTIONS + 1; attempt++) {
+      if (admission && (!admission.current() || this.conns.get(controlPath) !== primary)) throw new Error('ssh-stream-stale')
       if (!primary.alive) throw new Error(noMasterMessage(controlPath))
       const group = [primary, ...(this.overflow.get(controlPath) ?? [])].filter((c) => c.alive)
       let conn = group.find((c) => !c.full)
       if (!conn) {
+        if (admission?.existingOnly) throw new Error('ssh-stream-capacity')
         const extra = this.overflow.get(controlPath) ?? []
         if (extra.length >= MAX_OVERFLOW_CONNECTIONS) {
           throw new Error('ssh: channel open failed: the server refused more sessions (MaxSessions)')
@@ -307,6 +310,7 @@ export class NativeMux {
         })
       }
       await conn.ready
+      if (admission && (!admission.current() || this.conns.get(controlPath) !== primary)) throw new Error('ssh-stream-stale')
       const c = conn
       try {
         return await new Promise<T>((resolve, reject) =>
@@ -411,11 +415,13 @@ export class NativeMux {
    */
   async channel(
     p: Extract<ParsedSsh, { kind: 'exec' }>,
-    pty?: { cols: number; rows: number; term?: string }
+    pty?: { cols: number; rows: number; term?: string },
+    admission?: { current(): boolean; existingOnly: boolean }
   ): Promise<ClientChannel> {
     const cp = p.options.controlPath
     if (!cp) throw new Error('ssh: a pty needs a ControlPath')
     if (!this.conns.get(cp)?.alive) {
+      if (admission?.existingOnly) throw new Error(noMasterMessage(cp))
       if (p.options.controlMaster === 'no') throw new Error(noMasterMessage(cp))
       await this.master(cp, p.target, p.options)
     }
@@ -448,7 +454,7 @@ export class NativeMux {
         else client.shell(ptyOpts, cb)
       }
       open(owner?.agentForward === true)
-    })
+    }, undefined, admission)
   }
 
   /** The connection (primary or overflow) of `controlPath` that owns `client`. */

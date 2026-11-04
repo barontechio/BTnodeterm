@@ -1,3 +1,4 @@
+import { RemoteUploadUncertainError } from '../lib/remote-transfers'
 import { TEXT_NOT_SUBMITTED } from '@shared/text-delivery'
 import {
   useCallback,
@@ -261,13 +262,15 @@ export function ChatComposer({
       if (!files.length || !pathsForFiles) return
       setAttachNote({ text: `Attaching ${files.length === 1 ? files[0].name || 'file' : `${files.length} files`}…` })
       let paths: string[] = []
+      let failure = 'Could not attach'
       try {
         paths = await pathsForFiles(files)
-      } catch {
+      } catch (error) {
         paths = []
+        if (error instanceof RemoteUploadUncertainError) failure = error.message
       }
       if (!paths.length) {
-        setAttachNote({ text: 'Could not attach', failed: true })
+        setAttachNote({ text: failure, failed: true })
         return
       }
       setAttachNote(null)

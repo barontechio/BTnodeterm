@@ -77,6 +77,8 @@ export interface WsServerOpts {
   onClientGone?: (uiId: number) => void
   /** Revoke owner leases immediately, before the socket close handshake completes. */
   onClientRevoked?: (uiId: number) => void
+  /** Host-only cookie binding for bulk HTTP references; null for proxy-only authentication. */
+  onClientAuthenticated?: (uiId: number, cookieToken: string | null) => void
   /** TEST ONLY: shorten the heartbeat period. Production always uses WS_HEARTBEAT_MS. */
   heartbeatMs?: number
   /** Reverse-proxy SSO trust (issue #29) — same object the HTTP handler gets. */
@@ -228,6 +230,7 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
       { owner: true }
     )
     uiIdOf.set(ws, uiId)
+    opts.onClientAuthenticated?.(uiId, tokenOf.get(ws) ?? null)
     // Team presence: each authenticated socket is one peer. Joining AFTER attach means the hub's
     // `presence:sync` sendTo lands on a live sink; the browser bridge buffers it until the app
     // subscribes. The peer stays nameless ("Someone") until it sends `presence:hello`.

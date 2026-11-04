@@ -10,6 +10,7 @@ import { MASTER_STDERR_CAP } from './ssh-project-limits'
 import type { SshProjectRunners } from './ssh-project'
 import type { AppSshAgent } from './ssh-agent'
 import type { AskpassServer } from './ssh-askpass'
+import { streamSshCommand, openNativeBulk, openOpenSshBulk, type BulkStreamRunner } from './ssh-bulk-stream'
 
 // One process-wide budget for all callers sharing a ControlMaster.
 const sshChildGate = new SshChildGate()
@@ -48,6 +49,7 @@ export interface SshProcessRunnerOptions extends Omit<SshProjectRunners, Transpo
   captureExecutionCheck?(args: readonly string[]): () => boolean
 }
 export interface ScopedSshProjectRunners extends SshProjectRunners {
+  stream: BulkStreamRunner
   /** Host-only request identity for queued commands; composes with transport generation checks. */
   withQueuedExecutionCheck<T>(current: () => boolean, work: () => Promise<T> | T, options?: { signal?: AbortSignal }): Promise<T>
 }
@@ -63,6 +65,19 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
   const scopes = new AsyncLocalStorage<CommandScope>()
   return {
     ...rest,
+    stream: (argv, streamOptions) => {
+      const args = [...argv]
+      const generation = captureExecutionCheck?.(args)
+      const scope = scopes.getStore()
+      const current = () => {
+        try { return scopeCurrent(scope) && (!generation || generation()) && streamOptions.current() }
+        catch { return false }
+      }
+      const signal = scope ? AbortSignal.any([streamOptions.signal, scope.abort.signal]) : streamOptions.signal
+      return streamSshCommand(sshChildGate, args, { ...streamOptions, current, signal }, (command, allowed) =>
+        scopes.exit(() => native ? openNativeBulk(nativeMux(), command, allowed)
+          : openOpenSshBulk(ssh, command, { ...process.env, ...appSshAgent.env() })))
+    },
     withQueuedExecutionCheck: async (current, work, options) => {
       const scope: CommandScope = { current, active: true, parent: scopes.getStore(), abort: new AbortController() }
       const cleanups: Array<() => void> = []

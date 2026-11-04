@@ -1405,7 +1405,7 @@ export function buildTranscriptApi(
 }
 
 /** Server-owned account lifecycle; never install on a joined relay API. */
-export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 'sshProject' | 'sshFs'> {
+export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 'sshProject' | 'sshFs' | 'remoteTransfers'> {
   let promptReady: Promise<string> | null = null
   return {
     ssh: {
@@ -1413,6 +1413,15 @@ export function buildSshApi(client: RpcClient): Pick<NodeTerminalApi, 'ssh' | 's
       save: (server) => client.request(IPC.sshSave, server) as ReturnType<NodeTerminalApi['ssh']['save']>,
       remove: (id) => client.request(IPC.sshDelete, id) as ReturnType<NodeTerminalApi['ssh']['remove']>,
       importCandidates: () => client.request(IPC.sshImport) as ReturnType<NodeTerminalApi['ssh']['importCandidates']>
+    },
+    remoteTransfers: {
+      prepare: (request) => client.request(IPC.sshTransferPrepare, request).catch(error => {
+        if ((error as {code?: string}).code === E_NO_HANDLER) return {status: 'unavailable'}
+        throw error
+      }) as Promise<import('@shared/remote-transfers').RemoteTransferPrepared>,
+      status: (reference) => client.request(IPC.sshTransferStatus, reference) as Promise<import('@shared/remote-transfers').RemoteUploadOutcome>,
+      renew: (reference) => client.request(IPC.sshTransferRenew, reference) as Promise<boolean>,
+      release: (reference) => client.request(IPC.sshTransferRelease, reference) as Promise<void>
     },
     sshProject: {
       capabilities: () => client.request(IPC.sshProjectCapabilities).catch((error) => {

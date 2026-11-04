@@ -114,6 +114,7 @@ export function buildRelayApi(
     } : local),
     // Host owner actions must never fall through to the viewer's local desktop under a remote id.
     control: { capabilities: async () => null },
+    remoteTransfers: undefined,
     worktree: { ...(browser ? stub.worktree : local.worktree), recovery: undefined },
 
     // ── CORE-BOUND: route to the REMOTE core over the relay RpcClient. ──

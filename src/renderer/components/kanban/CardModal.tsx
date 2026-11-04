@@ -846,6 +846,7 @@ export function CardModal({ session, projectId, projectName, projectColor, colum
                             pathsForFiles={async (files) =>
                               droppedPaths(files, {
                                 sshRemoteTmux: !!session.spawn.sshRemoteTmux,
+                                nodeId: session.id,
                                 projectId: session.spawn.sshRemoteTmux ? nodeUploadScope(session.spawn.ssh) : '',
                                 dialect: dropDialect({
                                   corePlatform: await hostPlatformFor(api),

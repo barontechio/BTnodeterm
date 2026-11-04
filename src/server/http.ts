@@ -74,6 +74,7 @@ export interface HttpHandlerOpts {
    *  exercise it — the route then simply doesn't exist. */
   downloadTickets?: DownloadTickets
   mediaReferences?: MediaReferences
+  remoteTransfers?: import('./remote-transfer-http').RemoteTransferHttp
   webPreviews?: WebPreviews
   developmentPreviews?: DevelopmentPreviewTransport
   /**
@@ -647,6 +648,10 @@ export function createHttpHandler(
     }
 
     // Authenticated: an Explorer download redeems its one-shot ticket here (see download.ts).
+    if (opts.remoteTransfers && url.pathname === '/ssh-transfer') {
+      const { handleRemoteTransfer } = await import('./remote-transfer-http')
+      if (await handleRemoteTransfer(req, res, url, opts.remoteTransfers, proxyAuthed ? undefined : token, publicOrigin)) return
+    }
     if (downloadTickets && (await handleDownload(req, res, url, downloadTickets))) return
     if (mediaReferences && (await handleMedia(req, res, url, mediaReferences))) return
 

@@ -4611,6 +4611,8 @@ export interface NodeTerminalApi {
   speech: SpeechApi
   ssh: SshApi
   sshProject: SshProjectApi
+  /** Optional browser bulk HTTP transfers; never available through relay/local fallback. */
+  remoteTransfers?: import('./remote-transfers').RemoteTransfersApi
   sshFs: SshFsApi
   git: GitApi
   clipboard: ClipboardApi

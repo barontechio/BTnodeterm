@@ -246,8 +246,8 @@ export function ExplorerPanel({
   // transport differs per shell — the whole decision is the pure `downloadRoute` (lib/download.ts).
   const session = useSession()
   const dlCtx = useMemo(
-    () => ({ browser: isBrowserRuntime(), ssh: !!ssh, source: session.source }),
-    [ssh, session.source]
+    () => ({ browser: isBrowserRuntime(), ssh: !!ssh, source: session.source, remoteTransfers: !!session.api.remoteTransfers }),
+    [ssh, session.source, session.api.remoteTransfers]
   )
   const route = downloadRoute(dlCtx)
   const { downloads, rowDl, download, downloadTo, dismiss } = useDownloads({
