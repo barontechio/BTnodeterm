@@ -105,7 +105,7 @@ describe('bulk move', () => {
     const { summarizeBulkSwitch } = await import('./claude-account-switch')
     expect(summarizeBulkSwitch([{ kind: 'switched' }, { kind: 'switched' }], 0, 'Work')).toEqual({
       kind: 'info',
-      text: 'Moved 2 sessions to Work.'
+      text: '2 copied to Work with account update requested and restart step completed. Conversation resumption is not verified.'
     })
     const mixed = summarizeBulkSwitch(
       [
@@ -118,7 +118,7 @@ describe('bulk move', () => {
     )
     expect(mixed.kind).toBe('error')
     expect(mixed.text).toBe(
-      'Moved 1 session to Work · 1 resumed on their old account (the conversation could not be copied) · 2 skipped (busy, not attached or without a conversation yet).'
+      '1 copied to Work with account update requested and restart step completed · 2 copy outcomes unconfirmed (partial copies may remain) · 1 refused before switch dispatch. Conversation resumption is not verified.'
     )
   })
 

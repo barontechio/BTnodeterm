@@ -11627,3 +11627,12 @@ through deferred project landing; disposal, replacement, removal or offline stat
 Keep offline stubs inert and native Desktop behavior unchanged. Settings points to browser site
 permissions, not OS settings. This does not implement Service Worker/Web Push, closed-page delivery
 or private mobile notification support. Existing consent and entitlement gates still apply.
+
+Ordinary account-switch notices retain actual compatibility-flow observations separately: exposure
+dispatch/acknowledgement, requested node account update, restart result and reservation finalization.
+Codex rollback only releases a reservation; it never removes an exposed rollout or compensates
+node/runtime effects. A lost commit/remote reply can follow publication. Claude copy facts survive
+recycle failure, including bulk reports; a failed copy may be partial. Renderer restart completion
+is not verified conversation resumption, and a requested canvas update is not a durable host receipt.
+Keep existing eligibility, authority and effect ordering; these notices grant no new restart,
+whole-node coordination or durable recovery capability.

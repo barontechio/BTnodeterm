@@ -1,3 +1,4 @@
+import { runCodexSwitch, runRemoteCodexSwitch, codexSwitchNotice } from './codex-switch-outcome'
 import { installBrowserNotificationRouter } from '../bridge/browser-notifications'
 import { captureNotificationTarget } from './browserNotificationTarget'
 import { notificationMembership } from './notificationMembership'
@@ -985,7 +986,8 @@ import {
   startBulkSwitch,
   summarizeBulkSwitch,
   switchOutcomeNotice,
-  type ClaudeSwitchOutcome
+  type ClaudeSwitchOutcome,
+  runClaudeSwitch
 } from './claude-account-switch'
 import {
   isBusyState,
@@ -8984,114 +8986,42 @@ export function Canvas() {
           .getState()
           .settings.codexAccounts.filter((a) => a.host === hostKey && !a.pending)
           .map((a) => a.id)
-        try {
-          await codexApi.switchThreadRemote(plan.sessionId, plan.targetAccountId, hostAccountIds, {
-            projectId
-          })
-        } catch {
-          setNotice({
-            kind: 'error',
-            text:
-              `The Codex account switch failed on ${hostKey} — the conversation could not be made ` +
-              'available to that account (is Codex set up on the host?). Nothing was changed.'
-          })
-          return
-        }
-        // The exposure took seconds. The linked rollout is harmless on its own (both accounts now
-        // see the same conversation), but the pane is only recycled if it is STILL the exact idle
-        // conversation the user chose.
-        if (!codexAccountSwitchStillEligible(plan.expected, snapshot())) {
-          setNotice({
-            kind: 'error',
-            text: 'This session changed while the switch was preparing — nothing was changed.'
-          })
-          return
-        }
-        usePendingPause.getState().remove([nodeId]) // the switch restarts the CLI
-        const fn = agentRestartFn(nodeId)
-        // The rebind rides the closure's own node update (`beforeRecycle`), so the respawn is
-        // guaranteed to launch under the target account — a separate setNodes in the same tick can
-        // be dropped by React Flow's update queue.
-        const outcome = fn
-          ? await settleRestart(() =>
-              fn(undefined, undefined, true, undefined, async () => ({
-                accountId: plan.targetAccountId
-              }))
-            )
-          : 'not-eligible'
-        if (outcome === 'restarted') markDirty()
-        setNotice(
-          outcome === 'restarted'
-            ? { kind: 'info', text: 'Codex account switched — conversation resumed.' }
-            : {
-                kind: 'error',
-                text:
-                  outcome === 'not-eligible'
-                    ? 'Switch skipped: this session is busy or not attached — try again once its turn is done.'
-                    : 'Switch skipped: Codex did not quit in time. Nothing was changed.'
-              }
-        )
+        const facts = await runRemoteCodexSwitch({
+          expose: () => codexApi.switchThreadRemote(plan.sessionId, plan.targetAccountId, hostAccountIds, { projectId }),
+          eligible: () => codexAccountSwitchStillEligible(plan.expected, snapshot()),
+          restart: async (metadataRequested) => {
+            usePendingPause.getState().remove([nodeId])
+            const fn = agentRestartFn(nodeId)
+            return fn ? settleRestart(() => fn(undefined, undefined, true, undefined, async () => {
+              metadataRequested()
+              return { accountId: plan.targetAccountId }
+            })) : 'not-eligible'
+          },
+          markDirty
+        })
+        setNotice(codexSwitchNotice(facts))
         return
       }
-      let token: string | undefined
-      try {
-        const res = await codexApi.switchThread(
-          plan.sessionId,
-          plan.cwd,
-          plan.sourceAccountId,
-          plan.targetAccountId
-        )
-        token = res.rollbackToken
-        // A no-op or unreserved answer (no token) means main-side did not stage an exposure — done.
-        if (!token) return
-        // The fork took seconds — refuse to recycle unless the pane is STILL the exact idle
-        // conversation the user chose (Corvin's #112 recycle guard). Else roll the reservation back.
-        if (!codexAccountSwitchStillEligible(plan.expected, snapshot())) {
-          await codexApi.rollbackSwitch(token)
-          setNotice({
-            kind: 'error',
-            text: 'This session changed while the switch was preparing — nothing was changed.'
-          })
-          return
+      const facts = await runCodexSwitch({
+        prepare: async () => (await codexApi.switchThread(
+          plan.sessionId, plan.cwd, plan.sourceAccountId, plan.targetAccountId
+        )).rollbackToken,
+        commit: (token) => codexApi.commitSwitch(token),
+        release: (token) => codexApi.rollbackSwitch(token),
+        finish: (token) => codexApi.finishSwitch(token),
+        eligible: () => codexAccountSwitchStillEligible(plan.expected, snapshot()),
+        requestMetadata: () => {
+          setNodes((ns) => ns.map((x) => x.id === nodeId && x.type === 'terminal'
+            ? { ...x, data: { ...x.data, accountId: plan.targetAccountId } } : x))
+          markDirty()
+        },
+        restart: async () => {
+          usePendingPause.getState().remove([nodeId])
+          const fn = agentRestartFn(nodeId)
+          return fn ? settleRestart(() => fn(undefined, undefined, true)) : 'not-eligible'
         }
-        await codexApi.commitSwitch(token)
-        // Bind the node to the target account, THEN recycle its shell so codex relaunches under the
-        // target CODEX_HOME and `--resume <sessionId>` resumes the SAME conversation from it.
-        setNodes((ns) =>
-          ns.map((x) =>
-            x.id === nodeId && x.type === 'terminal'
-              ? { ...x, data: { ...x.data, accountId: plan.targetAccountId } }
-              : x
-          )
-        )
-        markDirty()
-        usePendingPause.getState().remove([nodeId]) // the switch restarts the CLI
-        const fn = agentRestartFn(nodeId)
-        const outcome = fn ? await settleRestart(() => fn(undefined, undefined, true)) : 'not-eligible'
-        await codexApi.finishSwitch(token)
-        setNotice(
-          outcome === 'restarted'
-            ? { kind: 'info', text: 'Codex account switched — conversation resumed.' }
-            : {
-                kind: 'error',
-                text:
-                  'Codex account switched, but the pane could not be relaunched — restart the ' +
-                  'agent to resume on the new account.'
-              }
-        )
-      } catch {
-        if (token) {
-          try {
-            await codexApi.rollbackSwitch(token)
-          } catch {
-            // Best-effort rollback; the reservation also releases on its TTL / owner destruction.
-          }
-        }
-        setNotice({
-          kind: 'error',
-          text: 'The Codex account switch failed and was rolled back. Nothing was changed.'
-        })
-      }
+      })
+      if (facts) setNotice(codexSwitchNotice(facts))
     },
     [setNodes, markDirty, connectedProjectIdForHost]
   )
@@ -9143,26 +9073,14 @@ export function Canvas() {
       const fn = agentRestartFn(nodeId)
       if (!fn) return { kind: 'refused', reason: 'not-attached' }
       const { plan } = decision
-      let copy: ClaudeSessionCopyResult | undefined
-      const outcome = await settleRestart(() =>
-        fn(undefined, undefined, true, undefined, async () => {
-          copy = await window.nodeTerminal.claudeAccounts
-            .copySession(plan.sessionId, plan.sourceAccountId, plan.targetAccountId, ctx)
-            .catch((): ClaudeSessionCopyResult => ({ ok: false, reason: 'failed' }))
-          if (!copy.ok) return
-          // Returned, not set here: the closure merges it into the SAME node update as its respawn
-          // bump, so the respawn launches under the target's config dir (see `beforeRecycle`).
-          return { accountId: plan.targetAccountId }
-        })
-      )
-      if (copy?.ok) markDirty()
-      // `host-unsupported` only comes from the terminate leg (model switch / clearEnv), which this
-      // restartShell path never takes; folded into the refusal it would be if it ever did.
-      if (outcome !== 'restarted') {
-        return { kind: 'not-restarted', outcome: outcome === 'host-unsupported' ? 'not-eligible' : outcome }
-      }
-      const moved = copy as ClaudeSessionCopyResult | undefined
-      return moved?.ok ? { kind: 'switched' } : { kind: 'copy-failed', reason: moved?.ok === false ? moved.reason : 'failed' }
+      return runClaudeSwitch({
+        copy: () => window.nodeTerminal.claudeAccounts.copySession(
+          plan.sessionId, plan.sourceAccountId, plan.targetAccountId, ctx
+        ),
+        restart: (beforeRecycle) => fn(undefined, undefined, true, undefined, beforeRecycle),
+        targetAccountId: plan.targetAccountId,
+        markDirty
+      })
     },
     [markDirty, session.source, connectedProjectIdForHost]
   )
