@@ -96,6 +96,8 @@ describe('the run cannot reach a live nodeterm tmux server', () => {
  * a file that deliberately names a live socket owes an explicit statement of where it binds.
  */
 const REAL_SOCKET_ALLOWED = new Map<string, string>([
+  ['src/core/worktree-clean-removal.test.ts', 'each fixture uses makeTmuxTmpdir with both sandbox environment variables; exact session and owned private server cleanup runs before environment restoration'],
+  ['src/server/worktree-clean-removal.e2e.test.ts', 'each fixture uses makeTmuxTmpdir with both sandbox environment variables; server cleanup explicitly targets its owned TMUX_TMPDIR before environment restoration'],
   ['src/core/worktree-manual-resume.test.ts', 'real PtyManager manual recovery uses its fixed socket inside the asserted TMUX_TMPDIR sandbox; unique exact session cleanup only'],
   [
     'src/core/agents/pane-owner.test.ts',
