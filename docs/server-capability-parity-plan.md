@@ -1,5 +1,29 @@
 # Server capability parity implementation plan
 
+## D and account-outcome composition candidate (2026-11-04)
+
+Published C `6d231fff` subsequently passed dedicated Linux CI: 25,084 tests passed,
+82 skipped, 1,797 files passed/eight skipped; types and Desktop/Server builds succeeded.
+Windows passed 1,107 tests with 31 skips across 84 files. CodeQL analysis and its result
+passed with the same two reviewed warnings. This supersedes its pending-CI status below;
+its earlier failed local focused gate remains historical evidence.
+
+The isolated next candidate adds E1 `8cfa04c9` and presentation correction `d4ebf6c7` onto
+reviewed D `b0f1239f` as `cd443ce8` and `7e1af603`, without conflicts. All six E1 product/test
+files are byte-identical to reviewed `d4ebf6c7`; only the two instruction documents compose
+additions, and all other D/C/base paths remain unchanged. Independent final E1 review passed
+66 focused tests plus the unchanged two-case notice reproduction. Existing switch notices
+preserve partial-effect facts without claiming rollback, durable binding or verified resumption.
+
+The new 23-file composition check at default deadlines and `--maxWorkers=4` FAILED:
+355 passed, seven timed out at five seconds (two clean-removal, two missing-recovery repair,
+three journal cases). All E1 tests passed. Types and Desktop/Server builds then passed
+sequentially. No timeout increase or repeated acceptance attempt was used; no host-load cause
+is established. These results do not inherit D's prior 296-pass focused gate. This subsequent
+documentation update changes no product source. Coordinator review and dedicated aggregate CI
+for this concrete combination remain required. E2 infrastructure/effect adapters and E3 remain
+separate, unpublished work; no production activation is included.
+
 ## Reviewed D composition candidate (2026-11-04)
 
 The isolated D candidate adds reviewed source commits `34fddff3` and `f908b09d` onto C
