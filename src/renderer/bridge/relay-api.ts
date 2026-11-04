@@ -260,6 +260,7 @@ export function buildRelayApi(
   if (notifications) {
     api.notify = notifications.notify
     client.onClose(notifications.dispose)
+    if (client.isClosed) notifications.dispose()
   }
 
   return {

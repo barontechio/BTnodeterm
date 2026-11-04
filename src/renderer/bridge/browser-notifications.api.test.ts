@@ -39,3 +39,19 @@ it('relay API owns notices, closes on carrier/handle close and never calls owner
     expect(close).toHaveBeenCalledTimes(2)
   } finally { off(); handle.close() }
 })
+
+it('a carrier closed during construction never gains notification authority', async () => {
+  markBrowserTeamConnection('notices-api')
+  window.nodeTerminal = buildStubApi() as NodeTerminalApi
+  vi.stubGlobal('isSecureContext', true)
+  const constructor = vi.fn()
+  vi.stubGlobal('Notification', class {
+    static permission = 'granted'
+    constructor() { constructor() }
+  })
+  const transport: FrameTransport = { send() {}, onMessage() {}, onClose(cb) { cb() }, ready: async () => {} }
+  const handle = buildRelayApi('notices-api', transport)
+  expect(await handle.api.notify({ title: '', body: '', nodeId: '', force: true })).toBe('skipped')
+  expect(constructor).not.toHaveBeenCalled()
+  handle.close()
+})

@@ -132,12 +132,17 @@ export class RpcClient {
   // `await ready()`) would otherwise miss it. Buffered here (capped) and flushed on subscribe.
   private early: Array<{ channel: string; args: unknown[] }> = []
   private closeCbs = new Set<() => void>()
+  private carrierClosed = false
+
+  /** Also covers carriers already closed during API construction. */
+  get isClosed(): boolean { return this.carrierClosed }
 
   constructor(transport: FrameTransport | string) {
     this.transport =
       typeof transport === 'string' ? new WebSocketFrameTransport(transport) : transport
     this.transport.onMessage((data) => this.onMessage(data))
     this.transport.onClose(() => {
+      this.carrierClosed = true
       // Fail the in-flight requests BEFORE the overlay hooks: a response can only arrive over the
       // carrier that carried the request, so once it is gone they are unanswerable.
       this.failPending()
@@ -1736,6 +1741,7 @@ export async function installWsBridge(): Promise<boolean> {
   const notifications = createBrowserNotifications(() => api)
   api.notify = notifications.notify
   client.onClose(notifications.dispose)
+  if (client.isClosed) notifications.dispose()
   const ownerPtyData = api.pty.onData
   api.pty.onData = (key, listener) => key.startsWith('relay:browser-team-') ? browserTeams.onPtyData(key, listener) : ownerPtyData(key, listener)
   ;(window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal = api
