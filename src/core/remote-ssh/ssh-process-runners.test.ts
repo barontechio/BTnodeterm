@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { makeSshProjectRunners } from './ssh-process-runners'
 import { SSH_CHILD_CONCURRENCY } from './ssh-child-gate'
+import { testTmpDir } from '../test-tmp'
+import { writeFileSync } from 'node:fs'
+import path from 'node:path'
 
 const pending = vi.hoisted(() => [] as Array<() => void>)
 const commands = vi.hoisted(() => [] as string[][])
@@ -25,6 +28,17 @@ function factory() {
 const args = ['-o', 'ControlPath=/fixture', 'fixture@host', 'printf executed']
 
 describe('SSH execution destination at the queue boundary', () => {
+  it('confirms only checked local socket absence, not an existing path or an invalid probe', async () => {
+    vi.stubEnv('NODETERM_NATIVE_SSH', '0')
+    const root = testTmpDir('ssh-presence-')
+    const file = path.join(root, 'present')
+    writeFileSync(file, '')
+    const runners = factory()
+    expect(await runners.masterAbsent!(path.join(root, 'missing'))).toBe(true)
+    expect(await runners.masterAbsent!(file)).toBe(false)
+    expect(await runners.masterAbsent!('\0')).toBe(false)
+  })
+
   it('captures before queueing and refuses an old generation without spawning a command', async () => {
     vi.stubEnv('NODETERM_NATIVE_SSH', '0')
     let generation = 1

@@ -59,7 +59,9 @@ configuration paths, and `SshConnection.extraArgs` is not forwarded by the Contr
 Disconnect completion includes the actual mux exit command. Reconnects queued behind a close
 wait for it; another disconnect or host shutdown cancels those queued requests. A failed exit
 retains the old identity and reports an unconfirmed disconnect, requiring an explicit disconnect
-retry before reconnecting. Delayed cleanup checks the original connection before changing state.
+retry before reconnecting, unless the transport confirms that the mux is already absent. A
+failed presence probe never counts as absence. Delayed cleanup checks the original connection
+before changing state.
 
 
 ## Owner Codex conversation pages

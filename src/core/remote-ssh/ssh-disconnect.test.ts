@@ -4,7 +4,7 @@ import { SshProjectManager } from './ssh-project'
 const project = 'disconnect-fixture'
 const endpoint = { host: 'fixture.invalid', user: 'fixture' }
 
-async function fixture() {
+async function fixture(masterAbsent?: () => Promise<boolean>) {
   let release!: () => void
   const gate = new Promise<void>((resolve) => { release = resolve })
   let exitCode = 0
@@ -13,7 +13,7 @@ async function fixture() {
   const spawnMaster = vi.fn(() => ({ kill, on: vi.fn() }))
   const onIdle = vi.fn()
   const manager = new SshProjectManager({
-    userDataDir: '/fixture', spawnMaster, onIdle,
+    userDataDir: '/fixture', spawnMaster, onIdle, masterAbsent,
     run: async (args) => {
       if (args.includes('-O') && args.includes('exit')) {
         entered = true
@@ -107,6 +107,32 @@ describe('SSH disconnect completion', () => {
     f.release()
     await Promise.all([closing, reconnect])
     expect(f.spawnMaster).toHaveBeenCalledTimes(1)
+  })
+
+  it('releases an already-absent transport after a failed exit when absence is positively checked', async () => {
+    const f = await fixture(async () => true)
+    f.setExitCode(255)
+    const closing = f.manager.disconnect(project)
+    await f.entered()
+    f.release()
+    await closing
+    expect(f.manager.refForProject(project)).toBeUndefined()
+    await f.manager.connect(project, endpoint)
+    expect(f.spawnMaster).toHaveBeenCalledTimes(2)
+    f.manager.disconnectAll()
+  })
+
+  it('does not turn a failed presence probe into absence', async () => {
+    const f = await fixture(async () => { throw new Error('probe failed') })
+    const original = f.manager.connectionKeyFor(project)
+    f.setExitCode(255)
+    const closing = f.manager.disconnect(project)
+    await f.entered()
+    f.release()
+    await closing
+    expect(f.manager.connectionKeyFor(project)).toBe(original)
+    await expect(f.manager.connect(project, endpoint)).rejects.toThrow('unconfirmed')
+    f.manager.disconnectAll()
   })
 
   it('close cancels queued reconnects and old completion cannot publish or kill again', async () => {

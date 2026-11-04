@@ -230,6 +230,11 @@ export class NativeMux {
     return this.conns.get(controlPath)?.alive === true
   }
 
+  /** Registry presence, including an authenticating connection; false confirms mux absence. */
+  hasMaster(controlPath: string): boolean {
+    return this.conns.has(controlPath)
+  }
+
   /** End the shared connection (`-O exit`). Resolves once it is closed. */
   async exit(controlPath: string): Promise<boolean> {
     const c = this.conns.get(controlPath)

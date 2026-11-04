@@ -148,6 +148,8 @@ export interface SshProjectRunners {
   /** Synchronous one-shot ssh, for `disconnectAll()` only: `before-quit` is sync, so an awaited
    *  `-O exit` never lands and the daemonized ControlPersist master survives the app. */
   runSync?: (args: string[]) => void
+  /** True only for checked local mux absence. False/rejection means present or unknown. */
+  masterAbsent?: (controlPath: string) => Promise<boolean>
   /** Did the user decline the passphrase prompt raised by THIS master? Distinguishes "needs its
    *  passphrase" from a genuine auth failure in the error message. Takes the master's pid because
    *  the identity file is not a usable key here: a server with none only learns which key ssh
@@ -646,17 +648,21 @@ export class SshProjectManager {
     opts?: { quiet?: boolean; current?: () => boolean }
   ): Promise<ConnectResult> {
     if (opts?.current && !opts.current()) return Promise.reject(new Error('SSH connect cancelled'))
+    if (opts?.quiet) this.quiet.add(projectId)
+    else this.quiet.delete(projectId)
     const closing = this.disconnects.get(projectId)
     if (closing) {
       const revision = closing.revision
       return closing.promise.then(() => {
         if (closing.revision !== revision) throw new Error('SSH connect cancelled')
-        if (closing.uncertain) throw new Error('SSH disconnect is unconfirmed; retry disconnect before reconnecting')
+        if (closing.uncertain) {
+          const error = 'SSH connection cannot start: disconnect is unconfirmed; retry disconnect before reconnecting'
+          this.emitStatus({ projectId, status: 'error', error })
+          throw new Error(error)
+        }
         return this.connect(projectId, conn, remoteCwd, opts)
       })
     }
-    if (opts?.quiet) this.quiet.add(projectId)
-    else this.quiet.delete(projectId)
     const inFlight = this.inFlight.get(projectId)
     if (inFlight) {
       if (sameEndpoint(inFlight.conn, conn)) {
@@ -2693,7 +2699,9 @@ export class SshProjectManager {
     // reconnect adopt the closing socket, or lets a delayed exit kill its replacement.
     const result = await this.r.run(exitMasterArgs(c.conn, c.controlPath)).catch(() => ({ code: 255 }))
     if (this.conns.get(projectId) !== c) return
-    if (result.code !== 0) {
+    const absent = result.code !== 0 && await this.r.masterAbsent?.(c.controlPath).catch(() => false)
+    if (this.conns.get(projectId) !== c) return
+    if (result.code !== 0 && absent !== true) {
       closing.uncertain = true
       this.emitStatus({ projectId, status: 'error', error: 'SSH disconnect is unconfirmed; retry disconnect before reconnecting' })
       return // retain the old identity; never treat a failed exit as an absent master

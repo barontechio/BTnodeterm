@@ -24,6 +24,7 @@ import type { PtyManager } from '../core/pty-manager'
 import { remoteCodexHome } from '../core/codex-accounts-core'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 import { posixQuote } from '../shared/ssh'
+import { exitMasterArgs } from '../core/remote-ssh/control-master'
 
 // HOME does not redirect OpenSSH's passwd-derived ~/.ssh paths. The shared ControlMaster
 // builders do not forward extraArgs, so a caller-supplied -F is not a fixture sandbox. Route the real
@@ -40,7 +41,10 @@ vi.mock('../core/exec-path', async (original) => {
 
 /** Real SSH authentication and exec channels; all commands run under a temporary remote HOME. */
 describe.skipIf(process.platform === 'win32')('Server SSH transport composition', () => {
-  it.each(['0', '1'])('unlocks, reads/writes and reconnects over transport %s', async (native) => {
+  it.each([
+    { native: '0', alreadyClosed: false }, { native: '1', alreadyClosed: false },
+    { native: '0', alreadyClosed: true }, { native: '1', alreadyClosed: true }
+  ])('unlocks, reads/writes and reconnects over transport $native (already closed: $alreadyClosed)', async ({ native, alreadyClosed }) => {
     const previous = process.env.NODETERM_NATIVE_SSH
     const previousConfig = process.env.NODETERM_TEST_SSH_CONFIG
     const previousCalls = process.env.NODETERM_TEST_SSH_CALLS
@@ -224,7 +228,11 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       savedTarget = { server: { ...connection, identityFile: '/different-key' }, remoteCwd: remote }
       expect(service.refForProject('fixture')).toBeUndefined()
       savedTarget = { server: connection, remoteCwd: remote }
-      if (native === '0') {
+      if (alreadyClosed) {
+        const old = service.refForProject('fixture')!
+        expect((await service.manager.sshRun(exitMasterArgs(old.conn, old.controlPath))).code).toBe(0)
+      }
+      if (native === '0' && !alreadyClosed) {
         // Hold the actual mux exit, without a timing sleep. An awaited disconnect must not
         // publish completion while this old socket can still be adopted by a reconnect.
         const release = `${config}.release`

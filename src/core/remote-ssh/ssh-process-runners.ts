@@ -1,5 +1,6 @@
 import { spawn, execFile, execFileSync } from 'node:child_process'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { lstat } from 'node:fs/promises'
 import { findSshBinary, nativeMux, useNativeSsh } from './native/native-runtime'
 import { runScpArgv, runSshArgv, startNativeMaster } from './native/native-invoke'
 import { findExecutableSync, shellPathNow } from '../exec-path'
@@ -38,7 +39,7 @@ function scpBin(): string {
 }
 
 type TransportField = 'spawnMaster' | 'masterEnvFor' | 'ensureAgent' | 'probeAgentSock' | 'onIdle' |
-  'askpassWasCancelled' | 'askpassIsPrompting' | 'askpassAsked' | 'runSync' | 'run' | 'probe' | 'runScp'
+  'askpassWasCancelled' | 'askpassIsPrompting' | 'askpassAsked' | 'runSync' | 'run' | 'probe' | 'runScp' | 'masterAbsent'
 export interface SshProcessRunnerOptions extends Omit<SshProjectRunners, TransportField> {
   agent: Pick<AppSshAgent, 'env' | 'start' | 'scheduleStop'>
   askpass: Pick<AskpassServer, 'envFor' | 'wasCancelledBy' | 'isPromptingAny' | 'askedBy'>
@@ -75,6 +76,11 @@ export function makeSshProjectRunners(options: SshProcessRunnerOptions): ScopedS
         if (!scopeCurrent(scope)) throw new Error('ssh-request-stale')
         return await scopes.run(scope, work)
       } finally { scope.active = false; scope.abort.abort(); for (const cleanup of cleanups) cleanup() }
+    },
+    masterAbsent: async (controlPath) => {
+      if (native) return !nativeMux().hasMaster(controlPath)
+      try { await lstat(controlPath); return false }
+      catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' }
     },
     spawnMaster: native ? (args) => startNativeMaster(nativeMux(), args) : (args, env) => {
       // Capture the master's stderr (stdin/stdout stay ignored) so a failed connect can report the
