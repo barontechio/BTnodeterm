@@ -2038,6 +2038,13 @@ Clean host worktree removal requires the approved directory stamp and a host dis
 callback. The local Git runner invokes that callback immediately before each subprocess; removal
 also rechecks the canonical inode after asynchronous probes. This is not a filesystem lock against
 external writers. Git's no-force removal deletes ignored files: the conservative host path refuses
-all ignored entries, including directories, without a disposable-filename allowlist. The legacy
+all observed ignored entries, including directories, without a disposable-filename allowlist. The legacy
 Desktop explicit dirty/force flow is unchanged. These guards supply no owner consent, protected-root
 policy, durable intent or canvas/session recovery; the domain adapter must still provide them.
+
+The clean-removal runner rechecks the linked Git marker and expected symbolic HEAD after the
+ignored-file probe, pinning their stamps through the final synchronous dispatch check. An external
+writer can still race the eventual Git operation; these observations are not OS-wide locks.
+Once removal dispatch occurs, failed acknowledgement or unavailable absence verification reports
+`recoveryRequired`, never no-effect reassurance or retry permission. A failed stat is not absence;
+only verified absence sets `worktreeGone`. Retain the branch after an uncertain removal reply.

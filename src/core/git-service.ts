@@ -15,6 +15,7 @@ import { directExecutableInvocation } from './exec-path'
 import { ghPath } from './gh-path'
 import { gitEnv } from './git-env'
 import { worktreeTargetRefusal } from './worktree-target'
+import { readRegularFileNoFollow } from './read-regular-file'
 import {
   isValidCloneUrl,
   expandCloneUrl,
@@ -371,6 +372,7 @@ export class GitService {
   async worktreeRemoveClean(repoPath: string, wtPath: string, expectedBranch: string,
     deleteBranch: boolean, proof: { directoryStamp: string; assertCurrent(): void }): Promise<worktreeOps.WorktreeOpResult> {
     if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return REMOTE_WORKTREE_REFUSAL()
+    let removalDispatched = false
     try {
       // Capture the host approval before any asynchronous probe. Never adopt a replacement inode.
       const approvedStamp = proof.directoryStamp
@@ -381,9 +383,16 @@ export class GitService {
           `${stat.dev}:${stat.ino}` !== approvedStamp || fs.realpathSync.native(wtPath) !== path.resolve(wtPath))
           throw new Error('The approved worktree directory changed before removal.')
       }
+      const fileStamp = (file: string) => {
+        const stat = fs.lstatSync(file, { bigint: true })
+        if (!stat.isFile() || stat.ino === 0n) throw new Error('Git identity is unavailable.')
+        return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+      }
       assertCurrent(); checkDirectory()
+      const marker = path.join(wtPath, '.git'); const markerStamp = fileStamp(marker)
       const checkedGit: worktreeOps.GitExecutor = async (directory, args) => {
         const removing = args[0] === 'worktree' && args[1] === 'remove'
+        let checkGitIdentity = () => {}
         if (removing) {
           // Git's no-force check does NOT preserve ignored files. Refuse every ignored entry,
           // including directories; no filename allowlist can establish that their contents are disposable.
@@ -392,15 +401,28 @@ export class GitService {
           })
           if (!ignored.ok || ignored.out.length) return { ok: false, out: '',
             err: 'Ignored files may be removed by Git. Move them outside the checkout before clean removal.' }
+          const gitDirectory = await git(wtPath, ['rev-parse', '--absolute-git-dir'], () => {
+            assertCurrent(); checkDirectory()
+          })
+          if (!gitDirectory.ok || !path.isAbsolute(gitDirectory.out))
+            return { ok: false, out: '', err: 'The linked Git directory could not be verified.' }
+          const gitRoot = fs.realpathSync.native(gitDirectory.out)
+          const head = path.join(gitRoot, 'HEAD'); const headStamp = fileStamp(head)
+          const branch = await readRegularFileNoFollow(head, 4096)
+          checkGitIdentity = () => {
+            if (fileStamp(marker) !== markerStamp || fileStamp(head) !== headStamp ||
+              fs.realpathSync.native(gitDirectory.out) !== gitRoot || branch?.trim() !== `ref: refs/heads/${expectedBranch}`)
+              throw new Error('The approved linked Git identity or branch changed before removal.')
+          }
         }
         if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return { ok: false, out: '', err: REMOTE_WORKTREE_REFUSAL().message }
         return git(directory, args, () => {
           // Runs synchronously immediately before execFile, after every asynchronous probe.
           assertCurrent()
-          if (removing) checkDirectory()
+          if (removing) { checkDirectory(); checkGitIdentity(); removalDispatched = true }
         })
       }
-      return await worktreeOps.worktreeRemoveClean(checkedGit, repoPath, wtPath, os.homedir(), expectedBranch, deleteBranch,
+      const result = await worktreeOps.worktreeRemoveClean(checkedGit, repoPath, wtPath, os.homedir(), expectedBranch, deleteBranch,
         async (directory) => {
           try { return (await fs.promises.stat(directory)).isDirectory() }
           catch (error) {
@@ -408,7 +430,12 @@ export class GitService {
             throw error
           }
         })
+      if (!result.ok && removalDispatched) return { ...result, recoveryRequired: true,
+        message: `${result.message} Removal was dispatched and may have completed. Inspect recovery state; do not retry deletion.` }
+      return result
     } catch (error) {
+      if (removalDispatched) return { ok: false, recoveryRequired: true,
+        message: 'Worktree removal was dispatched, but its outcome could not be verified. The checkout may be gone. Inspect recovery state; do not retry deletion.' }
       return { ok: false, message: `Clean worktree removal could not be verified: ${(error as NodeJS.ErrnoException).code ?? 'unavailable'}. Nothing was intentionally discarded.` }
     }
   }

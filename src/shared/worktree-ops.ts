@@ -22,6 +22,8 @@ export interface WorktreeOpResult {
    * failing and the dead path keeps being handed to new terminals.
    */
   worktreeGone?: boolean
+  /** Host clean removal was dispatched but could not be acknowledged; never retry blindly. */
+  recoveryRequired?: boolean
 }
 
 /**
