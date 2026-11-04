@@ -188,9 +188,29 @@ describe.skipIf(process.platform !== 'linux')('SSH bulk transfers over encrypted
       expect(await other.rpc(IPC.sshTransferRenew, media.reference)).toBe(false)
       fs.renameSync(node.filePath!, node.filePath! + '.old'); fs.writeFileSync(node.filePath!, movie)
       expect((await request(media.url)).status).toBe(503)
+      expect(await owner.rpc(IPC.sshTransferRenew, media.reference)).toBe(false)
       const runtimeRef = await prepare('media', 'movie.mp4', {nodeId: node.id})
       runtime = {}
       expect((await request(runtimeRef.url)).status).toBe(404)
+      // Observe a transient source change in the Server adapter BEFORE its guard calls Core.
+      // Restoring equivalent state must not resurrect that captured source or its reference.
+      const guardRef = await prepare('media', 'movie.mp4', {nodeId: node.id})
+      const originalStream = service.stream, originalRuntime = runtime
+      let checked = false
+      service.stream = (args, options) => {
+        if (!checked) {
+          checked = true
+          runtime = {}
+          expect(options.current()).toBe(false)
+          runtime = originalRuntime
+          expect(options.current()).toBe(false)
+        }
+        return originalStream(args, options)
+      }
+      try { expect((await request(guardRef.url)).status).toBe(503) }
+      finally {service.stream = originalStream; runtime = originalRuntime}
+      expect(checked).toBe(true)
+      expect(await owner.rpc(IPC.sshTransferRenew, guardRef.reference)).toBe(false)
       // An incomplete HTTP request must not publish even when its socket disappears.
       const interrupted = await prepare('upload', 'interrupted.bin', {bytes: 1024 * 1024})
       await new Promise<void>(resolve => {

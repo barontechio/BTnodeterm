@@ -76,9 +76,13 @@ export class RemoteTransfers {
     // No timer or SSH work until the first explicit request.
   }
   private current(entry: Entry): boolean {
-    try { return !this.stopped && !entry.abort.signal.aborted && this.now() < entry.expiresAt &&
-      entry.caller.owner.active() && entry.caller.principal.current() && entry.source.current() }
-    catch { return false }
+    if (entry.abort.signal.aborted) return false
+    try {
+      if (!this.stopped && this.now() < entry.expiresAt && entry.caller.owner.active() &&
+        entry.caller.principal.current() && entry.source.current()) return true
+    } catch { /* A rejected authority cannot revive when fields later happen to match. */ }
+    entry.abort.abort()
+    return false
   }
   private sweep(): void { for (const entry of this.entries.values()) if (!this.current(entry)) this.drop(entry) }
   private drop(entry: Entry): void {
@@ -185,7 +189,7 @@ export class RemoteTransfers {
           const {header, body} = await readHeader(output)
           const h = header as {ok?: unknown; bytes?: unknown; identity?: unknown}
           if (!this.current(entry) || h?.ok !== true || h.bytes !== length || JSON.stringify(h.identity) !== JSON.stringify(entry.stat!.identity)) {
-            body.destroy(); throw new Error('remote-transfer-stale-read')
+            this.drop(entry); body.destroy(); throw new Error('remote-transfer-stale-read')
           }
           published = true
           await consume(body, () => this.current(entry))
@@ -193,7 +197,11 @@ export class RemoteTransfers {
         options.signal = AbortSignal.any([signal, options.signal]); options.maxOutputBytes = length + 32768
         const result = await entry.source.stream(transferFileCommand({root: entry.source.root, relativePath: entry.source.relativePath,
           operation: 'read', identity: entry.stat!.identity, offset, length}), options)
-        return published && result.code === 0 && !result.interrupted && this.current(entry)
+        const ok = published && result.code === 0 && !result.interrupted && this.current(entry)
+        // A failed read proof/protocol needs fresh preparation. Only a caller's ordinary
+        // cancellation may keep a media reference; it cannot undo a latched source failure.
+        if (!ok && !signal.aborted) this.drop(entry)
+        return ok
       })
     } catch { return false }
     finally { if (entry.kind === 'download') this.drop(entry) }

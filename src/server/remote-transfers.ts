@@ -70,7 +70,13 @@ export function createServerRemoteTransfers(deps: Dependencies) {
     if (!initial) return null
     const identity = stableStringify(initial)
     const runtime = request.nodeId ? deps.runtimeIdentity(request.nodeId) : undefined
-    const current = () => { try { return (!request.nodeId || deps.runtimeIdentity(request.nodeId) === runtime) && stableStringify(snapshot(request)) === identity } catch { return false } }
+    let valid = true
+    const current = () => {
+      if (!valid) return false
+      try { valid = (!request.nodeId || deps.runtimeIdentity(request.nodeId) === runtime) && stableStringify(snapshot(request)) === identity }
+      catch { valid = false }
+      return valid
+    }
     return {root: initial.root, relativePath: request.relativePath, path: initial.file, current,
       stream: (command, options) => deps.ssh.stream(childArgs(initial.ref.conn, initial.ref.controlPath, command),
         {...options, current: () => current() && options.current()})}

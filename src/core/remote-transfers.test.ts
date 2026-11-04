@@ -34,7 +34,7 @@ function fixture() {
         })}
   })
   cleanup.push(() => { service.dispose(); owners.dispose() })
-  return {root, caller, owners, service, change: () => generation++, loseReceipt: () => { lostReceipt = true }, dispatched: () => dispatched}
+  return {root, caller, owners, service, change: () => generation++, restore: () => { generation = 1 }, loseReceipt: () => { lostReceipt = true }, dispatched: () => dispatched}
 }
 
 describe.skipIf(process.platform !== 'linux')('remote transfer reference authority with actual descriptor helper', () => {
@@ -89,4 +89,49 @@ describe.skipIf(process.platform !== 'linux')('remote transfer reference authori
     expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, async () => { published = true }, new AbortController().signal)).toBe(false)
     expect(published).toBe(false)
   })
+})
+
+// Independent review schedules. Expectations state the required safe behavior.
+describe.skipIf(process.platform !== 'linux')('reference invalidation schedules', () => {
+  it('permanently revokes media after the publication guard observes a stale source', async () => {
+    const f = fixture()
+    await fs.writeFile(path.join(f.root, 'movie.mp4'), '0000ftyp1234567890abcdef')
+    const ready = await f.service.prepare(f.caller, {projectId: 'p', kind: 'media', relativePath: 'movie.mp4', nodeId: 'v'})
+    expect(ready.status).toBe('ready'); if (ready.status !== 'ready') return
+    const ok = await f.service.download(ready.reference, f.caller.principal, 0, 4, async (body, current) => {
+      f.change()
+      expect(current()).toBe(false) // actually observed invalidation, not an unseen ABA
+      f.restore()
+      body.destroy()
+      throw new Error('publication refused')
+    }, new AbortController().signal)
+    expect(ok).toBe(false)
+    const renewed = f.service.renew(f.caller, ready.reference)
+    const republished = await f.service.download(ready.reference, f.caller.principal, 0, 4, async body => {for await (const _ of body) {}}, new AbortController().signal)
+    expect(renewed).toBe(false)
+    expect(republished).toBe(false)
+    expect(f.service.info(ready.reference, f.caller.principal)).toBeNull()
+  })
+  it('permanently revokes media after an immutable file replacement is detected', async () => {
+    const f = fixture()
+    const p = path.join(f.root, 'movie.mp4')
+    await fs.writeFile(p, '0000ftyp1234567890abcdef')
+    const ready = await f.service.prepare(f.caller, {projectId: 'p', kind: 'media', relativePath: 'movie.mp4', nodeId: 'v'})
+    expect(ready.status).toBe('ready'); if (ready.status !== 'ready') return
+    await fs.rename(p, p + '.old'); await fs.writeFile(p, '0000ftyp1234567890abcdef')
+    expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, async () => {throw new Error('must not publish')}, new AbortController().signal)).toBe(false)
+    expect(f.service.renew(f.caller, ready.reference)).toBe(false)
+  })
+  it('preserves valid media after ordinary caller cancellation', async () => {
+    const f = fixture()
+    await fs.writeFile(path.join(f.root, 'movie.mp4'), '0000ftyp1234567890abcdef')
+    const ready = await f.service.prepare(f.caller, {projectId: 'p', kind: 'media', relativePath: 'movie.mp4', nodeId: 'v'})
+    expect(ready.status).toBe('ready'); if (ready.status !== 'ready') return
+    const cancelled = new AbortController(); cancelled.abort()
+    const consume = async (body: Readable) => { for await (const _ of body) {} }
+    expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, consume, cancelled.signal)).toBe(false)
+    expect(f.service.renew(f.caller, ready.reference)).toBe(true)
+    expect(await f.service.download(ready.reference, f.caller.principal, 0, 4, consume, new AbortController().signal)).toBe(true)
+  })
+
 })
