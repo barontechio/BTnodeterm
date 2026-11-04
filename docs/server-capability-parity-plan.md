@@ -40,6 +40,15 @@ The separately reviewed remote agent context-link phase is not integrated: a pub
 revocation defect must be fixed and independently re-reviewed first. Owner history access remains
 a separate accepted permission path.
 
+The owner-reported group-title clipping is also corrected in the shared renderer. Reviewed
+commits `0154e751`, `363c1245` and `868beaab` are integrated as `a427f1b4`, `891f1113` and
+`c9c8a7b2`. A CSS text mirror replaces the fixed 180px input, using actual shaped text while
+limiting the capsule to the frame's width after zoom compensation. Narrow worktree controls
+retain a single scrollable row and keyboard access. Derived widths are not stored. Independent
+Chromium checks cover 504 layout cases, editing and external title updates, drag/color/actions,
+and a differential regression proving all four focused arrow keys leave canvas geometry unchanged.
+This is renderer verification on Linux, not a claim of a native device run or production deployment.
+
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
 | Worktrees and sessions | Confirmed clean removal, missing-checkout recovery, verified rebinding, coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
