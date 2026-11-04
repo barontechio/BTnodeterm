@@ -1,5 +1,44 @@
 # Server parity security review
 
+## Worktree C staging candidate (2026-11-04)
+
+This candidate composes reviewed manual shell recovery on base `6b2607a4`, without changing
+native authenticated SSH readiness, notifications, joined/offline administration isolation,
+relay transfer exclusion, license gates or development-preview restrictions. Source commits
+`de92a023`, `ec4378cd`, `b21c67c1`, `29567d21`, `741a1558` map respectively to `a1d26ce9`,
+`a12df86b`, `ca21d3bd`, `806c3d0a`, `0d4c0ba6`. Cherry-picks had no conflicts; the already
+integrated readonly tmux descriptor prerequisite was not duplicated.
+
+Explicit owner confirmation can resume a recovered plain Linux shell or verified single-pane local
+tmux shell. The real backend performs atomic new-only creation (no attach-on-exists), then proves
+actual process birth and, for tmux, server/session/pane and attached-client identity. The existing
+node coordinator, held workspace FIFO and immutable serialized-byte durability receipts bind the
+operation. Create/input admission belongs only to the exact captured live Session; neither a journal
+label, browser field nor copied permit grants execution. Journal v5 retains manual-start quarantine
+and observed history, including after owner departure or lost acknowledgement. Held commands, cold
+starts and uncertain effects are never replayed. Known live effects require fresh exact reconciliation.
+
+Original host global settings and actual project settings/local overlay/target/trust sources stay
+bound through preparation, physical dispatch and final admission after every await and the actual
+physical-current probe. Changed sources retain observed facts and refuse new admission; later
+settings changes do not revoke an already admitted Session. Public errors expose stable categories,
+not private process arguments, nonces, environment values or profile fingerprints. Agent/account
+recovery, remote and unsupported backends, coordinated removal and account/restart remain separate
+D/E work. This is not an OS-wide filesystem/process lock or production activation.
+
+Both independent real-owner profile reproductions are closed: 38 focused cases passed with ordinary
+default deadlines on production `29567d21`. The exact test-only `741a1558` follow-up passed all 12
+backend cases independently, preserving original assertions and committed limits (5-second tests,
+10-second hooks, with the existing two happy paths at 20 seconds). The author four-file parallel run
+still had 38 passes and eight timeouts; older tmux refusal/timeout causes remain unclassified.
+An observed fixture directory crossover is not proof of the historical refusal's cause. Extended
+60-second diagnostic runs are not acceptance evidence. New candidate composition checks and
+integrated CI are required; component review does not establish an aggregate release gate.
+
+Base `6b2607a4` Windows and CodeQL results were reported successful by the coordinator; Linux was
+pending at this handoff. The accepted `1603bb51` base's 25,030 passes and 82 skips below remain
+historical evidence. No fresh security scan or zero-alert claim is made for this C candidate.
+
 ## Native/notification candidate and dedicated base CI (2026-11-04)
 
 Dedicated base `1603bb51` passes Linux default tests (25,030 passed, 82 skipped), types, both
@@ -37,7 +76,7 @@ bypass is introduced. The merged product composition `196b6360` passes 208 focus
 types and sequential Desktop/Server builds. New merged quality/security CI is still required; base
 success is not inherited.
 
-No Worktree C code is included; its project/profile-binding P2 remains under correction/review.
+That native/notification-only snapshot did not include Worktree C; the newer C candidate is described above.
 D/E, external worker isolation, private mobile/backend behavior and production activation remain
 pending. No Service Worker/Web Push/closed-page notification claim. Legacy ungroup `17bf6ade` is
 code-accepted but not activated; canonical ungroup already uses shared geometry.

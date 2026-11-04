@@ -11523,14 +11523,21 @@ identity changes. Teardown uses the real worktree permit and independent recover
 old-cache recognition ends before the next queued writer and cannot survive the repair scope.
 Accepted visual edits and unrelated content survive the fresh conditional repair.
 
-Journal version 3 retains manual-start node quarantine after durable metadata repair and host
-restart, even when cwd is safe. Neither a client flag, renderer pause nor a recovered journal label
-is runtime authority. Held commands remain manual-only and no terminal is spawned or typed into by
-recovery. Explicit manual resume/verified rebinding adapters remain pending; the UI retains their
-notice. Keep v3-capable hosts while these records exist; older hosts reject v3 rather than ignoring
-manual restrictions. Downgrade requires offline operator reconciliation of the journal, including
-an empty v3 envelope. V1/v2 facts remain readable and are upgraded only by an acknowledged mutation.
-Agent recovery, verified rebinding/manual resume and confirmed deletion remain separate gates.
+Journal version 5 retains manual-start quarantine and manual-resume history after durable repair
+and host restart, even when cwd is safe. Strict legacy v1-v4 reads retain their provenance; mutation
+upgrades durably. Keep v5-capable hosts while these records exist, including an empty v5 envelope;
+downgrade requires offline operator reconciliation, never silent loss of manual restrictions.
+Verified rebinding releases only the retired path after actual durable-byte proof; it does not
+release manual-start quarantine. Explicit owner resume supports plain Linux and verified single-pane
+local tmux shells through the existing coordinator/held FIFO. Native new-only creation never attaches
+to an existing name. Actual process/pane/client acknowledgement and the exact captured Session bind
+create/input admission. No journal label, renderer pause or copied permit authorizes execution.
+Global and actual project/local/target/trust source captures are checked at physical dispatch and
+again after observed persistence and the final physical probe, immediately before admission. They
+must not merely rehash copied overrides. A mismatch retains observed facts and quarantine; later
+settings changes do not revoke established Sessions. Lost replies never replay held commands or
+cold starts. Public errors omit private nonces, arguments, env and profile hashes. Agent/account,
+remote/unsupported backend, confirmed removal and coordinated restart remain separate gates.
 
 Recovery's reserved FIFO write explicitly fsyncs the affected local content files, the private
 execution index and their parent directories. An ordinary atomic save is not that acknowledgement.

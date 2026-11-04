@@ -1,5 +1,44 @@
 # Server capability parity implementation plan
 
+## Worktree C staging candidate (2026-11-04)
+
+This candidate composes reviewed manual shell recovery on base `6b2607a4`, without changing
+native authenticated SSH readiness, notifications, joined/offline administration isolation,
+relay transfer exclusion, license gates or development-preview restrictions. Source commits
+`de92a023`, `ec4378cd`, `b21c67c1`, `29567d21`, `741a1558` map respectively to `a1d26ce9`,
+`a12df86b`, `ca21d3bd`, `806c3d0a`, `0d4c0ba6`. Cherry-picks had no conflicts; the already
+integrated readonly tmux descriptor prerequisite was not duplicated.
+
+Explicit owner confirmation can resume a recovered plain Linux shell or verified single-pane local
+tmux shell. The real backend performs atomic new-only creation (no attach-on-exists), then proves
+actual process birth and, for tmux, server/session/pane and attached-client identity. The existing
+node coordinator, held workspace FIFO and immutable serialized-byte durability receipts bind the
+operation. Create/input admission belongs only to the exact captured live Session; neither a journal
+label, browser field nor copied permit grants execution. Journal v5 retains manual-start quarantine
+and observed history, including after owner departure or lost acknowledgement. Held commands, cold
+starts and uncertain effects are never replayed. Known live effects require fresh exact reconciliation.
+
+Original host global settings and actual project settings/local overlay/target/trust sources stay
+bound through preparation, physical dispatch and final admission after every await and the actual
+physical-current probe. Changed sources retain observed facts and refuse new admission; later
+settings changes do not revoke an already admitted Session. Public errors expose stable categories,
+not private process arguments, nonces, environment values or profile fingerprints. Agent/account
+recovery, remote and unsupported backends, coordinated removal and account/restart remain separate
+D/E work. This is not an OS-wide filesystem/process lock or production activation.
+
+Both independent real-owner profile reproductions are closed: 38 focused cases passed with ordinary
+default deadlines on production `29567d21`. The exact test-only `741a1558` follow-up passed all 12
+backend cases independently, preserving original assertions and committed limits (5-second tests,
+10-second hooks, with the existing two happy paths at 20 seconds). The author four-file parallel run
+still had 38 passes and eight timeouts; older tmux refusal/timeout causes remain unclassified.
+An observed fixture directory crossover is not proof of the historical refusal's cause. Extended
+60-second diagnostic runs are not acceptance evidence. New candidate composition checks and
+integrated CI are required; component review does not establish an aggregate release gate.
+
+Base `6b2607a4` Windows and CodeQL results were reported successful by the coordinator; Linux was
+pending at this handoff. The accepted `1603bb51` base's 25,030 passes and 82 skips below remain
+historical evidence. No fresh security scan or zero-alert claim is made for this C candidate.
+
 Extend Server Edition with useful Desktop automation and browser equivalents while keeping one shared service implementation. Deliver the work as independently reviewable changes suitable for `eneskirca/nodeterm`; Desktop must benefit from each extraction and keep its existing behavior.
 
 This is an implementation proposal. Work proceeds by the acceptance gates below, rather than by enabling every currently stubbed API. Server automation must work without an open browser tab. Interactive actions may require an authenticated owner, and native features retain their platform-specific implementations.
@@ -43,8 +82,8 @@ merged CI gate and coordinator review remain required before release.
 No local full run is repeated under the loaded host, no timeout is increased, and no standalone
 legacy ungroup factory is imported into this shared-geometry implementation.
 
-Worktree C's project/profile-binding P2 is under correction/review and is not integrated here;
-D/E remain pending. Development-worker runtime isolation, private mobile/backend behavior and
+At the native/notification-only snapshot, Worktree C was not integrated. The newer C candidate is
+described above; D/E remain pending. Development-worker runtime isolation, private mobile/backend behavior and
 production activation remain external limits. Notifications do not provide Service Worker,
 Web Push or closed-page delivery. Standalone ungroup `17bf6ade` is code-accepted but not installed.
 
@@ -699,16 +738,16 @@ teardown/input, archive or canvas change. Old/non-owning hosts negotiate absence
 the owner plane. UI lifecycle tests cover explicit review, double-click exclusion, stale replies and
 lost-response non-replay; a real authenticated Server WebSocket fixture keeps a real dirty checkout.
 That first owner path is kept-checkout recovery only. The later missing-checkout slice below adds
-recorded plain-node repair; confirmed deletion and verified rebinding remain pending.
+recorded plain-node repair. Subsequent verified rebinding and C manual resume are described above;
+confirmed deletion remains a separate gate.
 
 Recorded missing-checkout recovery now has an owner-broker-confirmed path for plain local
 terminals, groups and inert editor/diff notices. It re-proves absence, persists a bounded old/new
 binding plan, awaits the acknowledged recycler, repairs in the same reserved workspace FIFO and
 retains host-private manual-start quarantine after metadata recovery and restart. No Git deletion
 is retried and no replacement starts or receives input. Agent account/runtime identities,
-verified rebinding/manual resume and new deletion remain
-pending; the recovery UI keeps the manual-start restriction visible. Journal v3 is required while
-these facts exist, with v1/v2 readable and no unsafe downgrade fallback.
+and new deletion remain separate gates. Later verified rebinding and C manual resume retain the
+manual-start restriction; the current journal is v5, with strict legacy reads and no unsafe downgrade fallback.
 
 Observed-missing recovery also handles a saved plain-local group whose checkout disappeared before
 any journal intent. Owner discovery is read-only; a single broker approval repeats saved-node,
