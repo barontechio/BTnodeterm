@@ -8,7 +8,9 @@ Each grant allocates a fresh random HTTPS hostname under an operator-provided pr
 Deployment needs wildcard DNS and TLS and a reverse proxy that preserves the exact Host header,
 routes only that preview suffix to this transport, and never serves application/auth/management
 routes there. The preview base must use a separate registrable domain from the application.
-The current constructor checks normalized HTTPS and parent/child hostname collisions; **it does
+The constructor rejects IP literals and non-DNS bases, reserves room for a grant label,
+checks the generated hostname and refuses live-grant key collisions. It also checks normalized
+HTTPS and parent/child hostname collisions; **it does
 not yet validate the public suffix boundary**, so deployment configuration is not ready to expose.
 Different grants never reuse an origin. Browser storage is isolated by hostname; upstream Cookie,
 Authorization, proxy, management/debug and Referer headers are never forwarded, and Set-Cookie is

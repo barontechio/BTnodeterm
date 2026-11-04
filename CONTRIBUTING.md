@@ -12,6 +12,8 @@ Development preview transport is not enabled yet. `core/development-previews.ts`
 host-only approved-record authority with fresh process/socket and execution-generation proof;
 `DevPortsReport` alone is not that proof. Keep static HTML previews script-disabled. See
 `docs/development-preview-gateway.md` for deployment, credential filtering and remaining gates.
+Grant origins require DNS bases (never IP literals); verify subdomain assignment and reject key
+collisions so no live connection can be orphaned by grant replacement.
 
 Thanks for looking. This file is the short door: enough to get running, plus the house rules that
 actually get a pull request sent back. The long version — every subsystem and the reasoning behind

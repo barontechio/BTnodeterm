@@ -78,6 +78,18 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     await closed
     expect((await f.request()).status).toBe(403)
   })
+  it('keeps earlier WebSockets tracked after another grant is issued', async () => {
+    const f = await fixture()
+    const client = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/hmr`, { headers: { host: f.host, origin: f.origin } })
+    cleanup.push(() => client.terminate())
+    await once(client, 'open')
+    const second = await f.previews.issue('owner', 'record')
+    expect(new URL(second).hostname).not.toBe(f.host)
+    f.previews.revoke('owner', second)
+    const echo = once(client, 'message'); client.send('first grant remains tracked')
+    expect((await echo)[0].toString()).toBe('first grant remains tracked')
+    const closed = once(client, 'close'); f.previews.stop(); await closed
+  })
   it('bounds grants and refuses stale acquisition after revocation during a proof', async () => {
     const target: DevelopmentTarget = { projectId: 'p', nodeId: 'n', generation: 'g', processIdentity: 'birth', hostIdentity: 'local', address: '127.0.0.1', port: 3000 }
     let resume: ((value: DevelopmentTarget) => void) | undefined

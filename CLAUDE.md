@@ -12,6 +12,8 @@ Development preview transport is not enabled yet. `core/development-previews.ts`
 host-only approved-record authority with fresh process/socket and execution-generation proof;
 `DevPortsReport` alone is not that proof. Keep static HTML previews script-disabled. See
 `docs/development-preview-gateway.md` for deployment, credential filtering and remaining gates.
+Grant origins require DNS bases (never IP literals); verify subdomain assignment and reject key
+collisions so no live connection can be orphaned by grant replacement.
 
 Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
 planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,

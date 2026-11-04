@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto'
+import { isIP } from 'node:net'
 
 /** Host-only proof, never accepted from a renderer. Identity includes listener birth/socket,
  * execution generation and (for SSH) the actual transport generation. */
@@ -33,12 +34,18 @@ export class DevelopmentPreviews {
   private pending = 0
   private issues = new Set<{ owner: string; cancelled: boolean }>()
   private timer: ReturnType<typeof setInterval>
-  readonly base: URL
+  private readonly base: URL
   constructor(baseOrigin: string, readonly appOrigin: string,
     private authority: DevelopmentPreviewAuthority, private now = Date.now) {
     this.base = new URL(baseOrigin)
     const app = new URL(appOrigin)
-    if (this.base.origin !== baseOrigin || app.origin !== appOrigin ||
+    const hostname = this.base.hostname
+    // URL.hostname silently ignores assignments such as '<token>.127.0.0.1'. Only
+    // DNS labels can carry a grant subdomain; reserve 49 bytes for its random label.
+    const dnsBase = !isIP(hostname.replace(/^\[|\]$/g, '')) && hostname.length <= 204 &&
+      hostname.split('.').length >= 2 && hostname.split('.').every(label =>
+        /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
+    if (!dnsBase || this.base.origin !== baseOrigin || app.origin !== appOrigin ||
       this.base.protocol !== 'https:' || app.protocol !== 'https:' ||
       this.base.hostname === app.hostname || this.base.hostname.endsWith(`.${app.hostname}`) ||
       app.hostname.endsWith(`.${this.base.hostname}`)) throw new Error('preview origins must be separate HTTPS hostnames')
@@ -64,7 +71,11 @@ export class DevelopmentPreviews {
         !['127.0.0.1', '::1'].includes(target.address) || !Number.isInteger(target.port) ||
         target.port < 1024 || target.port > 65535 || issue.cancelled || this.stopped || this.grants.size >= 32) throw new Error('preview target refused')
       const url = new URL(this.base)
-      url.hostname = `${randomBytes(24).toString('hex')}.${this.base.hostname}`
+      const hostname = `${randomBytes(24).toString('hex')}.${this.base.hostname}`
+      url.hostname = hostname
+      // Refuse even an astronomically unlikely collision: replacing a live entry
+      // would orphan its connections and make an old reference address a new grant.
+      if (url.hostname !== hostname || this.grants.has(url.host)) throw new Error('preview hostname unavailable')
       this.grants.set(url.host, { owner, recordId, target: Object.freeze({ ...target }), expires: this.now() + 300_000, connections: new Set() })
       return url.origin
     } finally { this.pending--; this.issues.delete(issue) }
