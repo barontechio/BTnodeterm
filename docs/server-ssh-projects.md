@@ -51,6 +51,10 @@ Validation uses temporary HOME, data directories, tmux namespace and a loopback 
 OpenSSH and the native transport exercise encrypted-key prompts, wrong-tab rejection, quoted file
 writes/reads, managed-account transcript isolation, guest refusal, disconnection and reconnect.
 Production hosts and real account credentials are outside these tests.
+The protocol fixture resolves the real SSH client through a test-only wrapper that requires an
+explicit temporary `-F` config, including native transport's `ssh -G` calls. It checks both known-host
+paths and pins the loopback server key. `HOME` alone does not redirect OpenSSH's passwd-derived
+configuration paths, and `SshConnection.extraArgs` is not forwarded by the ControlMaster builders.
 
 
 ## Owner Codex conversation pages
