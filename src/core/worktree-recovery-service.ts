@@ -566,7 +566,8 @@ export class WorktreeRecoveryService {
               expectedRecord = JSON.stringify(row)
             }
             await writer.repairExecution(hold, (fresh) => { permit.assertCurrent(); snapshot(fresh) }, async (_durable, assertDurable) => {
-              const assertCurrent = () => { permit.assertCurrent(); assertDurable() }
+              let assertProfileCurrent = () => {}
+              const assertCurrent = () => { permit.assertCurrent(); assertDurable(); assertProfileCurrent() }
               assertCurrent()
               if (!reconcile) {
                 row = await this.deps.journal.markManualDispatch(id, plan.nonce, assertCurrent)
@@ -591,6 +592,10 @@ export class WorktreeRecoveryService {
                   throw new Error(result.error)
                 }
                 dispatched = true
+                // This synchronous original-profile fence remains in the final dispatch grant,
+                // after journal awaits and backend identity probes. Established sessions keep
+                // their separate physical-only current() check; later settings do not revoke them.
+                assertProfileCurrent = result.assertProfileCurrent
                 row = await this.deps.journal.markManualObserved(id, plan.nonce, result.evidence)
                 expectedRecord = JSON.stringify(row)
                 assertCurrent()

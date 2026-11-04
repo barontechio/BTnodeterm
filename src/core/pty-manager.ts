@@ -1247,7 +1247,7 @@ export class PtyManager {
   /** Host-only acknowledged creation/reconciliation. No caller-provided input or held command. */
   async createManualShell(profile: ManualShellProfile, nonce: string, permit: NodeExecutionBatchPermit,
     registered: (target: object) => void): Promise<{
-      ok: true; target: object; evidence: ManualShellEvidence; current(): boolean
+      ok: true; target: object; evidence: ManualShellEvidence; current(): boolean; assertProfileCurrent(): void
     } | { ok: false; error: string; dispatched: boolean; evidence?: ManualShellEvidence; backendCreated?: ManualTmuxCreated }> {
     permit.assertCurrent()
     const options = structuredClone(profile.options); const key = options.persistKey!
@@ -1258,7 +1258,10 @@ export class PtyManager {
     try {
       const overrides = await this.projectSpawnOverrides(options, true)
       permit.assertCurrent()
-      if (this.manualShellFingerprint(options, overrides) !== profile.fingerprint) throw new Error('manual-shell-profile-changed')
+      const assertProfileCurrent = () => {
+        if (this.manualShellFingerprint(options, overrides) !== profile.fingerprint) throw new Error('manual-shell-profile-changed')
+      }
+      assertProfileCurrent()
       return await this.manualShellScope.run(scope, async () => {
         const previous = this.liveSessionForNode(key)?.[1]
         if (previous) {
@@ -1272,7 +1275,7 @@ export class PtyManager {
             throw new Error('manual-shell-existing-generation-unverifiable')
           registered(previous)
           this.nodeExecution.assertAllowed(key, { kind: 'register', target: previous, binding: manualCreateBinding(options) })
-          return { ok: true as const, target: previous, evidence: fact.evidence,
+          return { ok: true as const, target: previous, evidence: fact.evidence, assertProfileCurrent,
             current: () => this.manualShellCurrent(key, previous, fact.evidence) }
         }
         const result = await this.createHeadless(options)
@@ -1289,7 +1292,7 @@ export class PtyManager {
         // This records the exact target but does not admit input. The service must durably record
         // its observation and retain the original owner/metadata proof before admitting it.
         this.nodeExecution.assertAllowed(key, { kind: 'register', target: session, binding: manualCreateBinding(options) })
-        return { ok: true as const, target: session, evidence,
+        return { ok: true as const, target: session, evidence, assertProfileCurrent,
           current: () => this.manualShellCurrent(key, session, evidence) }
       })
     } catch (error) {

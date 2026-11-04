@@ -113,3 +113,31 @@ it('separates one actual restart create from input and registers only its captur
   alive = false
   expect(() => coordinator.assertAllowed('member', { kind: 'input', target })).toThrow('recovery-required')
 })
+
+it('independent: actual manual create refuses copied permits, backend-detached dispatch and expired continuations', async () => {
+  let now = 1
+  const coordinator = new NodeExecutionCoordinator(() => now)
+  const dispatch = new WorktreeRecoveryDispatch({ isNodePending: () => true })
+  coordinator.setDispatchAdmission((id, permit, operation) => dispatch.assertAllowed(id, permit, operation))
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  let late!: Promise<void>
+  await coordinator.runMany(['node'], 'restart', { current: () => true }, async permit => {
+    await dispatch.withManualCreate({ ...permit }, 'node', 'binding', () => {}, async () => {
+      expect(() => coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' })).toThrow('recovery-required')
+    })
+    await dispatch.withManualCreate(permit, 'node', 'binding', () => {}, async () => {
+      expect(() => coordinator.backend(() => coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' }))).toThrow('busy')
+      late = gate.then(() => coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' }))
+      coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' })
+      expect(() => coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' })).toThrow('already-dispatched')
+    })
+  })
+  release()
+  await expect(late).rejects.toThrow('expired')
+  await expect(coordinator.runMany(['node'], 'restart', { current: () => true, timeoutMs: 10 }, permit =>
+    dispatch.withManualCreate(permit, 'node', 'binding', () => {}, async () => {
+      now = 20
+      expect(() => coordinator.assertAllowed('node', { kind: 'spawn', binding: 'binding' })).toThrow('expired')
+    }))).rejects.toThrow('expired')
+})
