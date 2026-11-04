@@ -78,9 +78,10 @@ function codeOf(e: unknown): string {
  * platform — and branching would mean the behaviour under test on a developer's Mac was not the
  * behaviour shipped to a user on Windows.
  */
-export async function renameAtomic(tmp: string, target: string): Promise<void> {
+export async function renameAtomic(tmp: string, target: string, assertDispatch?: () => void): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
+      assertDispatch?.()
       await fs.rename(tmp, target)
       return
     } catch (e) {
@@ -373,7 +374,7 @@ export function tempNameFor(target: string, opts: TempNameOptions = {}): string 
 export async function writeFileAtomic(
   target: string,
   data: string,
-  opts: { mode?: number; flush?: boolean } = {}
+  opts: { mode?: number; flush?: boolean; assertDispatch?: () => void } = {}
 ): Promise<void> {
   const tmp = tempNameFor(target)
   try {
@@ -381,8 +382,10 @@ export async function writeFileAtomic(
     // so this never fires in normal operation — its job is to refuse a symlink an attacker
     // pre-planted at the (now guessable-in-principle) temp path, so a publish can never be
     // redirected to write through it. On the expected fresh path it is a plain exclusive create.
-    await fs.writeFile(tmp, data, { encoding: 'utf-8', flag: 'wx', ...opts })
-    await renameAtomic(tmp, target)
+    const { assertDispatch, ...fileOptions } = opts
+    assertDispatch?.()
+    await fs.writeFile(tmp, data, { encoding: 'utf-8', flag: 'wx', ...fileOptions })
+    await renameAtomic(tmp, target, assertDispatch)
   } catch (e) {
     await fs.rm(tmp, { force: true }).catch(() => {})
     throw e

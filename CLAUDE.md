@@ -11529,3 +11529,9 @@ The bounded recovery plan also hashes the exact split-store intermediate state (
 old private execution overlay). An index publication failure can leave that state on disk. Fresh
 owner consent may reconcile that specific state; arbitrary mixed account/session/command edits
 remain refused. The journal carries hashes, never held command text or credentials.
+
+Recovery planning uses a detached workspace snapshot: app-data/inline load results can share live
+cached nodes. Split-save data-file admission uses the planned private overlay inside the held FIFO,
+not the previous index overlay. Folder, app-data and cwd-less paths must all prove content/index
+publication and file/directory durability. Recovery dispatch guards also cover the atomic writer's
+temporary write and every rename attempt, including retries after transient sharing failures.

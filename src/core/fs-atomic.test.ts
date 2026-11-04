@@ -565,3 +565,18 @@ describe.skipIf(process.platform === 'win32')('durability acknowledgement of exi
     expect(await fs.readFile(file, 'utf8')).toBe('replacement')
   })
 })
+
+it('rechecks dispatch after a transient rename refusal before another publication attempt', async () => {
+  const target = join(dir, 'guarded.json'); await fs.writeFile(target, 'original')
+  let active = true
+  const rename = vi.spyOn(fs, 'rename').mockImplementation(async () => {
+    active = false
+    throw errWithCode('EPERM')
+  })
+  await expect(writeFileAtomic(target, 'replacement', { assertDispatch: () => {
+    if (!active) throw new Error('owner expired')
+  } })).rejects.toThrow('owner expired')
+  expect(rename).toHaveBeenCalledOnce()
+  expect(await fs.readFile(target, 'utf8')).toBe('original')
+  expect(await fs.readdir(dir)).toEqual(['guarded.json'])
+})

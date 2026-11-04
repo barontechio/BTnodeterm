@@ -29,7 +29,7 @@ function deferred() {
   let resolve!: () => void
   return { promise: new Promise<void>((done) => { resolve = done }), resolve: () => resolve() }
 }
-async function fixture(agent = false) {
+async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' = 'folder') {
   const repo = path.join(root, 'repo'); const checkout = path.join(root, 'checkout'); fs.mkdirSync(repo); fs.mkdirSync(checkout)
   const stat = fs.lstatSync(checkout, { bigint: true })
   const project: Project = { id: 'project', name: 'Project', color: '#fff', cwd: repo, viewport: { x: 0, y: 0, zoom: 1 }, nodes: [
@@ -38,6 +38,8 @@ async function fixture(agent = false) {
     node('editor', 'editor', { parentId: 'group', filePath: path.join(checkout, 'file') }),
     node('outside', 'terminal', { cwd: repo })
   ] }
+  if (storage === 'appdata') project.storeInAppData = true
+  if (storage === 'inline') delete project.cwd
   const store = new WorkspaceStore(); await store.save({ version: 2, activeProjectId: project.id, projects: [project] })
   const persisted = (await store.load({ sideline: false })).projects[0]
   const journal = new WorktreeRemovalJournal(path.join(root, 'data', 'worktree-removals.json'), { ownsFiles: () => true })
@@ -139,9 +141,10 @@ describe.skipIf(process.platform === 'win32')('recorded missing-checkout recover
     expect(f.git.worktreeList).not.toHaveBeenCalled()
   })
 
-  it.each(['file', 'directory'])('keeps recovery pending when the repaired %s cannot acknowledge durability', async (part) => {
-    const f = await fixture(); const open = fs.promises.open
-    const target = part === 'file' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(f.repo, '.nodeterm')
+  it.each((['folder', 'appdata', 'inline'] as const).flatMap((storage) => ['file', 'directory'].map((part) => ({ storage, part }))))('keeps $storage recovery pending when $part cannot acknowledge durability', async ({ storage, part }) => {
+    const f = await fixture(false, storage); const open = fs.promises.open
+    const file = storage === 'folder' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(root, 'data', 'inline-projects', 'project.json')
+    const target = part === 'file' ? file : path.dirname(file)
     const flushed = vi.fn(async () => { throw new Error('flush acknowledgement unavailable') })
     vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
       const handle = await open(...args)
@@ -198,4 +201,56 @@ describe.skipIf(process.platform === 'win32')('recorded missing-checkout recover
     expect(f.confirmations.request).toHaveBeenCalledTimes(2)
   })
 
+})
+
+it.each(['appdata', 'inline'] as const)('%s planning leaves the live cache intact and repairs content plus private index durably', async (storage) => {
+  const f = await fixture(false, storage)
+  const contentFile = path.join(root, 'data', 'inline-projects', 'project.json')
+  const originalContent = fs.readFileSync(contentFile, 'utf8')
+  const planRepair = f.journal.planRepair.bind(f.journal)
+  vi.spyOn(f.journal, 'planRepair').mockImplementation(async (...args) => {
+    expect(f.store.getNodeForHostAction('terminal')?.cwd).toBe(f.checkout)
+    expect(f.store.getNodeForHostAction('group')?.worktree).toBeDefined()
+    expect(fs.readFileSync(contentFile, 'utf8')).toBe(originalContent)
+    return planRepair(...args)
+  })
+  const open = fs.promises.open; const flushed: string[] = []
+  vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const h = await open(...args); const sync = h.sync.bind(h)
+    vi.spyOn(h, 'sync').mockImplementation(async () => { flushed.push(String(args[0])); await sync() })
+    return h
+  })
+  const result = await f.service.recover(f.row.id, f.owner)
+  expect(f.recycle).toHaveBeenCalledOnce()
+  expect(f.journal.list()[0].phase).toBe('recovered')
+  expect(fs.readFileSync(contentFile, 'utf8')).not.toBe(originalContent)
+  const reloaded = (await new WorkspaceStore().load({ sideline: false })).projects[0]
+  expect(reloaded.nodes.find((node) => node.id === 'terminal')).toMatchObject({ cwd: f.repo, pendingLaunch: { manualOnly: true } })
+  expect(reloaded.nodes.find((node) => node.id === 'group')?.worktree).toBeUndefined()
+  expect(reloaded.nodes.find((node) => node.id === 'editor')?.fileMissing).toBe(true)
+  expect(f.store.getNodeForHostAction('terminal')?.cwd).toBe(f.repo)
+  expect(result, JSON.stringify(result)).toMatchObject({ ok: true, outcome: 'recovered' })
+  expect(flushed).toContain(path.join(root, 'data', 'workspace.json'))
+  expect(flushed.some(file => file.includes('/inline-projects/') && file.endsWith('.json'))).toBe(true)
+  expect(flushed).toContain(path.join(root, 'data', 'inline-projects'))
+  const journal = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await journal.load()
+  expect(journal.isNodePending('terminal')).toBe(true)
+})
+
+
+it.each((['folder', 'appdata', 'inline'] as const).flatMap((storage) => ['content', 'index'].map((part) => ({ storage, part }))))('refuses $storage $part publication after owner departure during the temporary write', async ({ storage, part }) => {
+  const f = await fixture(false, storage)
+  const target = part === 'index' ? path.join(root, 'data', 'workspace.json') : storage === 'folder' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(root, 'data', 'inline-projects', 'project.json')
+  const before = fs.readFileSync(target, 'utf8'); const write = fs.promises.writeFile
+  let departed = false
+  vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof write>) => {
+    const result = await write(...args)
+    if (String(args[0]).startsWith(target + '.') && String(args[0]).endsWith('.tmp')) { departed = true; f.owners.forget(1) }
+    return result
+  })
+  expect(await f.service.recover(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(departed).toBe(true)
+  expect(fs.readFileSync(target, 'utf8')).toBe(before)
+  expect(f.journal.list()[0].phase).toBe('removed')
+  expect(f.journal.isNodePending('terminal')).toBe(true)
 })

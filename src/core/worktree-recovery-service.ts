@@ -206,7 +206,7 @@ export class WorktreeRecoveryService {
             row = await this.deps.journal.markRemoved(id); expectedRecord = JSON.stringify(row); changed = true
           }
           permit.assertCurrent()
-          const candidate = await domain.workspace.load({ sideline: false })
+          const candidate = structuredClone(await domain.workspace.load({ sideline: false }))
           const captured = this.repairSnapshot(candidate, row)
           const originalNodes = structuredClone(captured.nodes)
           const project = candidate.projects.find((entry) => entry.id === row.projectId)!

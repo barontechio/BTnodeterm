@@ -245,14 +245,14 @@ interface LoadedEntry {
   file?: ProjectFileV1
 }
 
-export async function writeAtomic(filePath: string, content: string): Promise<void> {
+export async function writeAtomic(filePath: string, content: string, assertDispatch?: () => void): Promise<void> {
   // Unique temp per write: writers that bypass each other's queue (a second app instance, the SSH
   // poll's index write) must never share a tmp file — interleaved writes into one shared tmp
   // published spliced JSON under the atomic rename. writeFileAtomic also removes its own temp on
   // failure (project.json temps live in the USER'S repo, where litter is visible) and retries the
   // rename over Windows sharing violations. The error still propagates; per-file callers swallow
   // it by design.
-  await writeFileAtomic(filePath, content)
+  await writeFileAtomic(filePath, content, { assertDispatch })
 }
 
 /** Host-local execution exclusion. No browser payload can supply or disable this policy. */
@@ -794,7 +794,7 @@ export class WorkspaceStore {
     try {
       this.lastIndexWrite = null
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(this.indexPath, JSON.stringify(this.index))
+      await writeAtomic(this.indexPath, JSON.stringify(this.index), () => this.executionAdmission?.assertDispatch?.())
     } catch { /* the next save writes it anyway */ }
   }
 
@@ -1139,7 +1139,7 @@ export class WorkspaceStore {
     this.applySettingsToIndex(index)
     this.lastIndexWrite = null
     this.executionAdmission?.assertDispatch?.()
-    await writeAtomic(this.indexPath, JSON.stringify(index))
+    await writeAtomic(this.indexPath, JSON.stringify(index), () => this.executionAdmission?.assertDispatch?.())
   }
 
   /**
@@ -1515,7 +1515,7 @@ export class WorkspaceStore {
     const out = serializeProjectFile({ ...candidate, rev })
     try {
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(file, out)
+      await writeAtomic(file, out, () => this.executionAdmission?.assertDispatch?.())
     } catch {
       return false
     }
@@ -1696,7 +1696,7 @@ export class WorkspaceStore {
         this.executionAdmission?.assertDispatch?.()
         await fs.mkdir(path.dirname(file), { recursive: true })
         this.executionAdmission?.assertDispatch?.()
-        await writeAtomic(file, content)
+        await writeAtomic(file, content, () => this.executionAdmission?.assertDispatch?.())
         this.lastWritten.set(file, content)
         this.revs.set(projectId, next.rev)
         folderFilesWritten.add(file)
@@ -1755,7 +1755,7 @@ export class WorkspaceStore {
       this.lastWrittenParsed.delete(file)
     }
     for (const [projectId, candidate] of dataFiles) {
-      const result = await this.writeDataFile(projectId, candidate)
+      const result = await this.writeDataFile(projectId, candidate, index.entries.find((entry) => entry.id === projectId))
       if (strictProjectWrites.has(projectId) && result !== 'written' && result !== 'unchanged') {
         throw new Error(`workspace-save-not-written: ${projectId}`)
       }
@@ -1816,7 +1816,7 @@ export class WorkspaceStore {
     if (migrating) {
       try {
         this.executionAdmission?.assertDispatch?.()
-        await writeAtomic(path.join(platform().userDataDir, 'workspace.v2.bak'), this.pendingV2Backup!)
+        await writeAtomic(path.join(platform().userDataDir, 'workspace.v2.bak'), this.pendingV2Backup!, () => this.executionAdmission?.assertDispatch?.())
       } catch { /* backup is best-effort */ }
       this.pendingV2Backup = null
     }
@@ -1839,7 +1839,7 @@ export class WorkspaceStore {
     if (!unchanged) {
       this.lastIndexWrite = null
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(this.indexPath, indexJson)
+      await writeAtomic(this.indexPath, indexJson, () => this.executionAdmission?.assertDispatch?.())
       const st = await fs.stat(this.indexPath).catch(() => null)
       this.lastIndexWrite = st
         ? { json: indexJson, size: st.size, mtimeMs: st.mtimeMs, ino: st.ino }
@@ -1876,8 +1876,10 @@ export class WorkspaceStore {
    * canvas in `project` (the dual-write), so the content is readable either way round — which is
    * also what makes a half-done migration consistent in both directions.
    */
-  private async writeDataFile(projectId: string, candidate: ProjectFileV1): Promise<DataFileWrite> {
-    const admittedEntry = this.index?.entries.find((entry) => entry.id === projectId)
+  private async writeDataFile(projectId: string, candidate: ProjectFileV1, plannedEntry?: IndexEntryV3): Promise<DataFileWrite> {
+    // A split save admits against its new private overlay, before publishing the index.
+    // Other content writers still use the current trusted overlay. Neither bypasses admission.
+    const admittedEntry = plannedEntry ?? this.index?.entries.find((entry) => entry.id === projectId)
     if (admittedEntry) this.admitProjectFile(admittedEntry, candidate)
     if (!isInlineProjectFileId(projectId)) return 'skipped'
     const file = inlineFilePath(projectId)
@@ -1906,7 +1908,7 @@ export class WorkspaceStore {
       this.executionAdmission?.assertDispatch?.()
       await fs.mkdir(path.dirname(file), { recursive: true })
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(file, content)
+      await writeAtomic(file, content, () => this.executionAdmission?.assertDispatch?.())
       this.lastWritten.set(file, content)
       this.revs.set(projectId, next.rev)
       return 'written'
@@ -2323,7 +2325,7 @@ export class WorkspaceStore {
     if (adopted || e.cache?.rev !== revBefore) {
       this.lastIndexWrite = null
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(this.indexPath, JSON.stringify(this.index))
+      await writeAtomic(this.indexPath, JSON.stringify(this.index), () => this.executionAdmission?.assertDispatch?.())
     }
     return adopted
   }
@@ -2965,7 +2967,7 @@ export class WorkspaceStore {
     this.admitProjectFile(e, updated)
     try {
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(file, updated)
+      await writeAtomic(file, updated, () => this.executionAdmission?.assertDispatch?.())
     } catch {
       return false
     }
@@ -3036,7 +3038,7 @@ export class WorkspaceStore {
       this.admitProjectFile(e, updated)
       try {
         this.executionAdmission?.assertDispatch?.()
-        await writeAtomic(file, updated)
+        await writeAtomic(file, updated, () => this.executionAdmission?.assertDispatch?.())
       } catch {
         return false
       }
@@ -3250,7 +3252,7 @@ export class WorkspaceStore {
     this.admitProjectFile(e, updated)
     try {
       this.executionAdmission?.assertDispatch?.()
-      await writeAtomic(file, updated)
+      await writeAtomic(file, updated, () => this.executionAdmission?.assertDispatch?.())
     } catch {
       return current()
     }
