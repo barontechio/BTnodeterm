@@ -28,6 +28,28 @@ aliases are rejected before application routing and do not become grant keys.
 Disabled mode starts no discovery or gateway. See `docs/development-preview-gateway.md` for the
 configuration, deployment acceptance and unsupported SSH/platform/storage cases.
 
+Owner clean worktree removal is additive through `worktree:removal:clean` and the owner recovery
+panel in Desktop and Server. It takes a saved app-created group id, waits for the real owner broker
+outside queues, and uses the existing worktree permit, backend-start barrier, canvas reservation
+and journal. A durable prepared intent precedes no-force Git; all ignored files are refused and the
+branch is retained. A refused/uncertain Git reply never closes terminals. Independently verified
+absence is recorded even after owner departure; subsequent effects still require live approval.
+Exact acknowledged recycling precedes conditional repair, and recovered publication stays inside
+the actual workspace FIFO with immutable serialization/file receipts. Held commands remain manual.
+
+The initial removal cohort is deliberately conservative: local Linux live plain PTYs or verified
+single-pane tmux, with bounded OS process birth/cwd/fd/descendant observations for all managed local
+sessions. Unpersisted, cold, released, remote, agent/account, ambiguous or unverifiable identities
+refuse before Git. The managed tmux socket inventory must match the captured sessions; a failed list
+is not absence. No external-process or filesystem lock is claimed. Configured archive hooks and
+any overlapping historical recovery row refuse before effects; history/manualStart is never erased
+to admit another cycle. Legacy Desktop force/archive behavior is unchanged. Relay, guests and agent
+RPCs cannot use this owner plane; the mobile companion has no removal UI in this change.
+
+Missing-file repair preserves editor/diff nodes and paths. Mounted text buffers are captured before
+Monaco disposal and remain read-only/copyable in the open node; they are not written to the missing
+path and do not survive closing/reloading. Recovery does not claim a durable unsaved-buffer backup.
+
 Thanks for looking. This file is the short door: enough to get running, plus the house rules that
 actually get a pull request sent back. The long version — every subsystem and the reasoning behind
 its invariants — lives in `CLAUDE.md` at the repo root, which is also loaded automatically if you

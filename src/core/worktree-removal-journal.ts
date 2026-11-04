@@ -271,14 +271,14 @@ export class WorktreeRemovalJournal {
       this.faulted = true; throw error
     }
   }
-  prepare(intent: WorktreeRemovalIntent): Promise<WorktreeRemovalRecord> {
+  prepare(intent: WorktreeRemovalIntent, assertCurrent?: () => void): Promise<WorktreeRemovalRecord> {
     const captured = structuredClone(intent)
     return this.serial(async () => {
-      this.ready()
+      this.ready(); assertCurrent?.()
       const next = record({ ...captured, id: randomUUID(), createdAt: Date.now(), phase: 'prepared', provenance: { kind: 'recorded-directory' } })
       if (this.rows.length >= MAX_RECORDS) throw new Error('worktree-journal-capacity')
       if (this.rows.some((row) => overlaps(row.worktreePath, next.worktreePath))) throw new Error('worktree-journal-path-reserved')
-      await this.commit([...this.rows, next])
+      await this.commit([...this.rows, next], assertCurrent)
       return structuredClone(next)
     })
   }
@@ -315,15 +315,15 @@ export class WorktreeRemovalJournal {
     })
   }
   markRemoved(id: string): Promise<WorktreeRemovalRecord> { return this.advance(id, 'prepared', 'removed') }
-  markRecovered(id: string): Promise<WorktreeRemovalRecord> { return this.advance(id, 'removed', 'recovered') }
-  private advance(id: string, from: Phase, to: Phase): Promise<WorktreeRemovalRecord> {
+  markRecovered(id: string, assertCurrent?: () => void): Promise<WorktreeRemovalRecord> { return this.advance(id, 'removed', 'recovered', assertCurrent) }
+  private advance(id: string, from: Phase, to: Phase, assertCurrent?: () => void): Promise<WorktreeRemovalRecord> {
     return this.serial(async () => {
-      this.ready()
+      this.ready(); assertCurrent?.()
       const index = this.rows.findIndex((row) => row.id === id)
       if (index < 0 || (this.rows[index].phase !== from && this.rows[index].phase !== to)) throw new Error('worktree-journal-invalid-transition')
       if (this.rows[index].phase === to) return structuredClone(this.rows[index])
       const next = structuredClone(this.rows); next[index].phase = to
-      await this.commit(next); return structuredClone(next[index])
+      await this.commit(next, assertCurrent); return structuredClone(next[index])
     })
   }
   prepareRebind(id: string, plan: WorktreeRebindPlan, assertCurrent: () => void): Promise<WorktreeRemovalRecord> {

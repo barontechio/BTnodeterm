@@ -151,4 +151,22 @@ describe('owner worktree recovery UI', () => {
     expect(button('Review shell start: terminal').disabled).toBe(true)
   })
 
+  it('reviews clean removal through the owner broker slot without automatic deletion or replay', async () => {
+    const api = fixture(); api.list = async () => ({ ok: true, records: [] })
+    api.discoverRemoval = vi.fn(async () => ({ ok: true as const, candidates: [{ groupId: 'group', projectId: 'p', branch: 'feature', path: '/checkout' }] }))
+    api.removeClean = vi.fn(async () => {
+      expect(hasOwnerConfirmation()).toBe(false)
+      throw new Error('lost reply')
+    })
+    await act(async () => root.render(<WorktreeRecoveryHost api={api} />))
+    expect(api.removeClean).not.toHaveBeenCalled()
+    await act(async () => button('Worktree recovery').click())
+    expect(document.body.textContent).toContain('without force')
+    await act(async () => button('Review removal: feature').click())
+    expect(api.removeClean).toHaveBeenCalledExactlyOnceWith('group')
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    expect(api.removeClean).toHaveBeenCalledOnce()
+    expect(document.body.textContent).toContain('do not retry deletion')
+  })
+
 })

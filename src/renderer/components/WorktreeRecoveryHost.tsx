@@ -16,6 +16,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
     ? candidate : undefined
   const [records, setRecords] = useState<WorktreeRecoveryItem[]>([])
   const [missing, setMissing] = useState<WorktreeMissingCandidate[]>([])
+  const [removable, setRemovable] = useState<WorktreeMissingCandidate[]>([])
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
   const [selected, setSelected] = useState('')
@@ -27,7 +28,7 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
   const reload = useRef<(() => Promise<void>) | null>(null)
   useEffect(() => {
     epoch.current++; let live = true; let reading = false; let unsupported = false
-    setOpen(false); setRecords([]); setMissing([]); setError(''); setMessage(''); setSelected('')
+    setOpen(false); setRecords([]); setMissing([]); setRemovable([]); setError(''); setMessage(''); setSelected('')
     const refresh = async () => {
       if (!api || !live || reading || unsupported) return
       reading = true
@@ -40,8 +41,13 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
         if (api.discoverMissing && api.recoverMissing) {
           try { const found = await api.discoverMissing(); if (found.ok) discovered = found.candidates } catch { /* Older hosts omit discovery. */ }
         }
+        let removalCandidates: WorktreeMissingCandidate[] = []
+        if (api.discoverRemoval && api.removeClean) {
+          try { const found = await api.discoverRemoval(); if (found.ok) removalCandidates = found.candidates } catch { /* Older hosts omit clean removal. */ }
+        }
         if (!live) return
         setMissing(discovered)
+        setRemovable(removalCandidates)
         const pending = result.records.filter((row) => row.phase !== 'recovered' || !!row.manualStartIds?.length || row.pathRestricted === true)
         setError(''); setRecords(pending)
         setSelected((id) => pending.some((row) => row.id === id) ? id : pending[0]?.id ?? '')
@@ -107,24 +113,25 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
-  const recoverMissing = async (candidate: WorktreeMissingCandidate) => {
-    if (!api?.recoverMissing || keeping.current) return
+  const recoverMissing = async (candidate: WorktreeMissingCandidate, remove = false) => {
+    const action = remove ? api?.removeClean : api?.recoverMissing
+    if (!action || keeping.current) return
     keeping.current = true; setBusy(true); const started = epoch.current
     flushSync(close)
     try {
-      const result = await api.recoverMissing(candidate.groupId)
+      const result = await action(candidate.groupId)
       if (started !== epoch.current) return
       setMessage(result.ok ? result.message : result.error); setInspection(null)
       if (claimOwnerConfirmation(TICKET)) setOpen(true)
       await reload.current?.()
     } catch {
       if (started === epoch.current) {
-        setMessage('Recovery may have partially completed. Refresh its status before another action.')
+        setMessage('The operation may have partially completed. Refresh recovery status; do not retry deletion.')
         if (claimOwnerConfirmation(TICKET)) setOpen(true)
       }
     } finally { keeping.current = false; if (started === epoch.current) setBusy(false) }
   }
-  if (!api || (!open && !records.length && !missing.length && !error)) return null
+  if (!api || (!open && !records.length && !missing.length && !removable.length && !error)) return null
   const status = row?.manualActiveIds?.length ? 'Verified shells are running. Other recovered terminals still require an explicit start; held commands stay manual.' : canRebind ? 'A checkout is present at the recorded path. Review its actual Git identity before rebinding. Terminals stay manually blocked and their cwd is preserved.' : inspection?.ok ? inspection.status === 'kept'
     ? 'The original checkout and branch are present. Keep them to release this pending recovery.'
     : inspection.status === 'missing' && row?.phase !== 'recovered' ? 'The checkout is missing. Recover the recorded plain terminals and file notices without retrying Git. Terminals remain blocked for explicit manual start or rebinding.'
@@ -169,6 +176,16 @@ export function WorktreeRecoveryHost({ api: provided }: { api?: WorktreeRecovery
             <p>{visible(candidate.path)}</p>
             <button className="confirm__btn" disabled={busy || !!message} onClick={() => { void recoverMissing(candidate) }}>
               Recover {visible(candidate.branch)}
+            </button>
+          </div>)}
+        </div>}
+        {!!removable.length && <div>
+          <p>Clean checkout removal</p>
+          <p>Review a saved checkout for removal without force. Dirty or ignored files and unsupported sessions prevent removal. The branch and saved nodes are kept.</p>
+          {removable.map((candidate) => <div key={`${candidate.projectId}:${candidate.groupId}`}>
+            <p>{visible(candidate.path)}</p>
+            <button className="confirm__btn" disabled={busy || !!message} onClick={() => { void recoverMissing(candidate, true) }}>
+              Review removal: {visible(candidate.branch)}
             </button>
           </div>)}
         </div>}

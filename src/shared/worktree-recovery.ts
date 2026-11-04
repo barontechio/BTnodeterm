@@ -30,6 +30,9 @@ export interface WorktreeRecoveryApi {
   discoverMissing?(): Promise<WorktreeMissingList>
   recoverMissing?(groupId: string): Promise<WorktreeRecoveryRepairReply>
   recover?(id: string): Promise<WorktreeRecoveryRepairReply>
+  /** Read-only saved candidates; eligibility is checked again by the owner-bound action. */
+  discoverRemoval?(): Promise<WorktreeMissingList>
+  removeClean?(groupId: string): Promise<WorktreeRecoveryRepairReply>
 }
 
 export type WorktreeRecoveryRepairReply = { ok: true; outcome: 'recovered'; message: string } |

@@ -572,6 +572,8 @@ export function buildRealApi(
       keep: (id) => client.request(IPC.worktreeRecoveryKeep, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryKeepReply>,
       recover: (id) => client.request(IPC.worktreeRecoveryRepair, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>,
       discoverMissing: () => client.request(IPC.worktreeRecoveryDiscover) as Promise<import('@shared/worktree-recovery').WorktreeMissingList>,
+      discoverRemoval: () => client.request(IPC.worktreeRemovalDiscover) as Promise<import('@shared/worktree-recovery').WorktreeMissingList>,
+      removeClean: (id) => client.request(IPC.worktreeRemovalClean, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>,
       recoverMissing: (id) => client.request(IPC.worktreeRecoveryMissing, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRepairReply>,
       rebind: (id) => client.request(IPC.worktreeRecoveryRebind, id) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryRebindReply>,
       resume: (id, nodeId) => client.request(IPC.worktreeRecoveryResume, id, nodeId) as Promise<import('@shared/worktree-recovery').WorktreeRecoveryResumeReply>

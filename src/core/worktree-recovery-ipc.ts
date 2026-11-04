@@ -7,7 +7,7 @@ import type { WorktreeRecoveryService } from './worktree-recovery-service'
 
 /** Recovery administration belongs to the physical core owner, never to an agent or relay tab.
  * A request carries only an immutable host record id, not paths, commands or approval flags. */
-export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () => (Pick<WorktreeRecoveryService, 'list' | 'inspect' | 'keep'> & Partial<Pick<WorktreeRecoveryService, 'recover' | 'recoverMissing' | 'discoverMissing' | 'rebind' | 'resume'>>) | null): Pick<OwnerLifetimes, 'forget' | 'dispose'> {
+export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () => (Pick<WorktreeRecoveryService, 'list' | 'inspect' | 'keep'> & Partial<Pick<WorktreeRecoveryService, 'recover' | 'recoverMissing' | 'discoverMissing' | 'rebind' | 'resume' | 'discoverRemoval' | 'removeClean'>>) | null): Pick<OwnerLifetimes, 'forget' | 'dispose'> {
   const owners = new OwnerLifetimes()
   const eligible = (sender: number) => platform.clientIds().includes(sender) && platform.isOwnerClient?.(sender) === true
   const owner = (sender: number) => owners.get(sender, () => eligible(sender))
@@ -63,6 +63,17 @@ export function registerWorktreeRecoveryIpc(platform: CorePlatform, service: () 
       return { ok: false, outcome: 'refused', error: 'worktree-recovery-invalid-reference' }
     try { return await service()?.resume?.(id, nodeId, owner(sender)) ?? { ok: false, outcome: 'refused', error: 'Verified shell start is unavailable.' } }
     catch { return { ok: false, outcome: 'uncertain', error: 'A shell may have started. Inspect its status before another action.' } }
+  })
+  platform.handleWithSender(IPC.worktreeRemovalDiscover, async (sender): Promise<WorktreeMissingList> => {
+    if (!eligible(sender)) return { ok: false, error: 'worktree-recovery-owner-required' }
+    try { return await service()?.discoverRemoval?.(owner(sender)) ?? { ok: false, error: 'worktree-removal-unavailable' } }
+    catch { return { ok: false, error: 'worktree-removal-discovery-unavailable' } }
+  })
+  platform.handleWithSender(IPC.worktreeRemovalClean, async (sender, id: unknown): Promise<WorktreeRecoveryRepairReply> => {
+    if (!eligible(sender)) return { ok: false, outcome: 'refused', error: 'worktree-recovery-owner-required' }
+    if (typeof id !== 'string' || !isSafeNodeId(id)) return { ok: false, outcome: 'refused', error: 'worktree-recovery-invalid-reference' }
+    try { return await service()?.removeClean?.(id, owner(sender)) ?? { ok: false, outcome: 'refused', error: 'worktree-removal-unavailable' } }
+    catch { return { ok: false, outcome: 'uncertain', error: 'Removal may have partially completed. Inspect recovery status; do not retry deletion.' } }
   })
   return owners
 }

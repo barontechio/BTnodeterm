@@ -22,6 +22,7 @@ import { hintLabel } from '@shared/platform-utils'
 import { chipFor, commandTooltip } from '../lib/keybindingOverrides'
 import { pdfBlobUrl } from '../lib/pdfBlob'
 import { MaximizeButton } from './MaximizeButton'
+import { RetainedFileText, useRetainedFileText } from './RetainedFileText'
 
 
 /**
@@ -59,6 +60,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // Set by a worktree removal sweep (`displacedByWorktree` / `resetDisplacedCwd` in Canvas.tsx):
   // this file no longer exists, and unlike a terminal's cwd there is nothing to re-point it at.
   const fileMissing = !!data.fileMissing
+  const retainedText = useRetainedFileText(fileMissing, modelRef)
   // This node's core api (a stable context read — the local session's api IS window.nodeTerminal).
   const { api } = useSession()
   // Backend pick (the `FsApi` shape is identical across both, so the rest of the component is
@@ -100,7 +102,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
 
   // A worktree removal can mark `fileMissing` on a node that is ALREADY mounted (open, live
   // Monaco instance). The main effect below only runs once on mount, so it can't react to that —
-  // free the editor/model here instead. The div swaps out of the JSX below too, but React does not
+  // retain its text above, then free the editor/model here. The div swaps out of the JSX below too, but React does not
   // dispose Monaco's own resources just because its container left the tree.
   useEffect(() => {
     if (!fileMissing) return
@@ -330,6 +332,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <span className="editor-node__loading">
               This file’s worktree was removed — it no longer exists.
             </span>
+            <RetainedFileText text={retainedText} />
           </div>
         ) : isImage ? (
           <div className="editor-node__image nodrag nowheel">

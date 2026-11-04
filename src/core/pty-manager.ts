@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { stableStringify } from '../shared/canvas-mutations'
 import { createManualTmux, manualCreateBinding, manualFileStamp, manualProcessBirth, manualTmuxMatches, manualTmuxStillCurrent, type ManualShellProfile, type ManualShellEvidence, type ManualTmuxCreated } from './worktree-manual-shell'
 import { sameLocalTmuxExecution, type LocalTmuxExecution } from './local-tmux-execution'
+import { captureManagedReferences, type WorktreeRemovalPhysical, type WorktreeRemovalTarget } from './worktree-removal-physical'
 import type { ChatPromptBlocked, ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from '../shared/text-delivery'
 import { claudeScreenBlocksInput, readClaudeComposer, readClaudeScreen } from '../shared/agents/claude-screen'
 import os from 'os'
@@ -1208,6 +1209,89 @@ export class PtyManager {
 
   /** Opaque host identity, never sent over IPC. A replacement painter is a different target. */
   nodeExecutionIdentity(nodeId: string): object | undefined { return this.liveSessionForNode(nodeId)?.[1] }
+
+  private readonly removalTargets = new WeakSet<WorktreeRemovalTarget>()
+
+  /** Read-only physical proof for clean removal. Captures once; later checks never adopt a
+   * replacement. All local managed references must be inspectable, including nonmembers. */
+  async prepareWorktreeRemoval(memberIds: readonly string[], checkout: string): Promise<WorktreeRemovalPhysical> {
+    if (process.platform !== 'linux') throw new Error('worktree-removal-runtime-unsupported')
+    const sessions = [...this.sessions.entries()]
+    if (sessions.length > 128 || this.released.size || this.zellijKeys.size)
+      throw new Error('worktree-removal-detached-runtime-unverifiable')
+    const members = new Set(memberIds)
+    const targets = new Map<string, WorktreeRemovalTarget>()
+    const roots: Array<{ pid: number; member: boolean }> = []
+    const registryCurrent = () => {
+      if (this.sessions.size !== sessions.length || this.released.size || this.zellijKeys.size ||
+        sessions.some(([id, session]) => this.sessions.get(id) !== session)) throw new Error('worktree-removal-runtime-changed')
+    }
+    for (const [, session] of sessions) {
+      const nodeId = session.persistKey ?? session.nodeId ?? session.indexKey
+      if (!nodeId || targets.has(nodeId) || session.sshRemote || session.sessionHost || session.zellij || session.watcherClient ||
+        this.agentByKey.has(nodeId) || this.paneRemoteRef(nodeId, session).kind !== 'local')
+        throw new Error('worktree-removal-runtime-unsupported')
+      const pid = session.proc.pid; const birth = manualProcessBirth(pid)
+      const tmux = session.tmuxBacked ? await this.localTmuxExecution(nodeId) : undefined
+      if (session.tmuxBacked && !tmux) throw new Error('worktree-removal-tmux-unverifiable')
+      if (sessionHostSupported() && await sessionHostHasSession(sessionName(nodeId)))
+        throw new Error('worktree-removal-runtime-unsupported')
+      if (!tmux && await this.confirmedTmuxSessionExists(nodeId)) throw new Error('worktree-removal-runtime-ambiguous')
+      const assertCurrent = () => {
+        if (this.liveSessionForNode(nodeId)?.[1] !== session || session.proc.pid !== pid || manualProcessBirth(pid) !== birth ||
+          (tmux && (!this.tmuxPath || !tmux.current() || !manualTmuxStillCurrent(this.tmuxPath, TMUX_SOCKET, { backend: 'tmux', ...tmux }))))
+          throw new Error('worktree-removal-runtime-changed')
+      }
+      const target = Object.freeze({ nodeId, identity: session, ...(tmux ? { tmux } : {}), assertCurrent })
+      targets.set(nodeId, target); this.removalTargets.add(target)
+      roots.push({ pid, member: members.has(nodeId) })
+      if (tmux) roots.push({ pid: tmux.panePid, member: members.has(nodeId) })
+    }
+    if (memberIds.some((id) => !targets.has(id))) throw new Error('worktree-removal-cold-runtime-unverifiable')
+    registryCurrent()
+    // Inspect the actual managed tmux socket, including sessions without a live painter.
+    // A failed list is never absence. Only a missing socket below a searchable canonical
+    // ancestor may represent the plain-only case.
+    const socketPath = path.join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid!()}`, TMUX_SOCKET)
+    const inventory = () => {
+      try {
+        const stat = fs.lstatSync(socketPath, { bigint: true })
+        if (!stat.isSocket() || fs.realpathSync.native(socketPath) !== socketPath || !this.tmuxPath)
+          throw new Error('worktree-removal-tmux-unverifiable')
+        const rows = execFileSync(this.tmuxPath, ['-L', TMUX_SOCKET, 'list-sessions', '-F', '#{session_id}|#{session_name}'],
+          { encoding: 'utf8', timeout: 2000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n').sort()
+        const expected = [...targets.values()].filter((target) => target.tmux).map((target) => `${target.tmux!.sessionId}|${target.tmux!.session}`).sort()
+        if (JSON.stringify(rows) !== JSON.stringify(expected)) throw new Error('worktree-removal-unmanaged-tmux-reference')
+        return JSON.stringify([`${stat.dev}:${stat.ino}`, rows])
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        // A subprocess ENOENT is not a socket absence proof.
+        try { fs.lstatSync(socketPath); throw new Error('worktree-removal-tmux-unverifiable') }
+        catch (missing) { if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing }
+        let parent = path.dirname(socketPath)
+        while (true) {
+          try {
+            const stat = fs.lstatSync(parent, { bigint: true })
+            if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync.native(parent) !== parent)
+              throw new Error('worktree-removal-tmux-unverifiable')
+            fs.accessSync(parent, fs.constants.R_OK | fs.constants.X_OK)
+            if ([...targets.values()].some((target) => target.tmux)) throw new Error('worktree-removal-tmux-unverifiable')
+            return `absent:${parent}:${stat.dev}:${stat.ino}`
+          } catch (missing) { if ((missing as NodeJS.ErrnoException).code !== 'ENOENT') throw missing }
+          const next = path.dirname(parent); if (next === parent) throw new Error('worktree-removal-tmux-unverifiable'); parent = next
+        }
+      }
+    }
+    const originalInventory = inventory()
+    const referencesCurrent = captureManagedReferences(roots, checkout)
+    const assertCurrent = () => {
+      registryCurrent(); for (const target of targets.values()) target.assertCurrent(); referencesCurrent()
+      if (inventory() !== originalInventory) throw new Error('worktree-removal-runtime-changed')
+    }
+    assertCurrent()
+    return Object.freeze({ nodeIds: Object.freeze([...targets.keys()]), targets: new Map(targets),
+      assertCurrent, revalidate: async () => { assertCurrent() } })
+  }
 
   private readonly manualShellScope = new AsyncLocalStorage<{
     live: boolean; profile: ManualShellProfile; nonce: string; permit: NodeExecutionBatchPermit;
@@ -7812,17 +7896,19 @@ export class PtyManager {
   /** Host recovery only: the actual batch claim and backend-start barrier must both be held.
    * Recovery quarantine remains an independent dispatch policy; a worktree label is no waiver.
    * Uses the same acknowledged teardown as owner profile recycling, with no IPC/automatic spawn. */
-  async recycleWorktreeMember(persistKey: string, permit: NodeExecutionBatchPermit): Promise<void> {
+  async recycleWorktreeMember(persistKey: string, permit: NodeExecutionBatchPermit, target?: WorktreeRemovalTarget): Promise<void> {
     const current = () => {
       if (this.worktreePermit !== permit || permit.kind !== 'worktree' || !permit.nodeIds.includes(persistKey))
         throw new NodeExecutionError('invalid')
       permit.assertCurrent(); this.nodeExecution.assertAllowed(persistKey)
     }
     current()
+    if (target && (!this.removalTargets.has(target) || target.nodeId !== persistKey ||
+      this.nodeExecutionIdentity(persistKey) !== target.identity)) throw new NodeExecutionError('invalid')
     if (this.confirmedRecycles.has(persistKey)) throw new NodeExecutionError('busy')
     // The Core's existing headless transport view owns the replacement slot. This is backend
     // routing, never an actor/approval identity; viewers wait for its verified replacement.
-    const operation = this.confirmAndRecycleSession(HEADLESS_CLIENT, persistKey, undefined, current)
+    const operation = this.confirmAndRecycleSession(HEADLESS_CLIENT, persistKey, undefined, current, target)
     this.confirmedRecycles.set(persistKey, operation)
     try { await operation }
     finally { if (this.confirmedRecycles.get(persistKey) === operation) this.confirmedRecycles.delete(persistKey) }
@@ -7865,7 +7951,8 @@ export class PtyManager {
     clientId: ClientId | null,
     persistKey: string,
     target?: PtyRecycleTarget,
-    assertWorktreeCurrent?: () => void
+    assertWorktreeCurrent?: () => void,
+    removalTarget?: WorktreeRemovalTarget
   ): Promise<void> {
     this.nodeExecution.assertAllowed(persistKey); assertWorktreeCurrent?.()
     let trustedTarget: PtyRecycleTarget | undefined
@@ -7955,6 +8042,8 @@ export class PtyManager {
     // discovered hidden host/tmux generation must not make an indexed direct PTY stop being plain:
     // dropping that local mapping without taskkill/onExit proof leaks the silent process.
     const sourcePlain = !!live && !live.sessionHost && !live.tmuxBacked && !live.sshRemote
+    if (removalTarget && (sourceSessionHost || sourceZellij || sourceTmux !== !!removalTarget.tmux ||
+      !live || live !== removalTarget.identity)) abandonConfirmedRecycle(new Error('worktree-removal-runtime-changed'))
     // This is a TARGET lease, not an old-backend property. Acquire it before touching tmux/plain
     // so another app cannot create the name in the gap, and take it exactly when the REPLACEMENT
     // generation will be host-backed — the same predicate spawnSession's backend selection uses:
@@ -7980,6 +8069,7 @@ export class PtyManager {
     // generation semantics, even when the selected replacement is deliberately direct and needs
     // no lease. Generic delete remains the separate, legacy-compatible path in endSession().
     if (reserveHostReplacement || sourceSessionHost) {
+      if (removalTarget) abandonConfirmedRecycle(new Error('worktree-removal-runtime-unsupported'))
       assertCurrent()
       try {
         await this.nodeExecution.backend(() => sessionHostKillSession(hostName, confirmedHostKillOptions))
@@ -8046,11 +8136,13 @@ export class PtyManager {
     if (sourceTmux && this.tmuxPath) {
       assertCurrent()
       try {
+        removalTarget?.assertCurrent()
         await this.nodeExecution.backend(() => this.confirmedProcessRun(
           this.tmuxPath!,
-          localTmuxKillArgs(TMUX_SOCKET, hostName)
+          removalTarget?.tmux ? ['-L', TMUX_SOCKET, 'kill-session', '-t', removalTarget.tmux.sessionId] : localTmuxKillArgs(TMUX_SOCKET, hostName)
         ))
       } catch (error) {
+        if (removalTarget) abandonConfirmedRecycle(error)
         let tmuxStillExists = true
         assertCurrent()
         try {
@@ -8085,6 +8177,7 @@ export class PtyManager {
     if (sourcePlain && live && deferred?.exitCode === undefined) {
       assertCurrent()
       try {
+        removalTarget?.assertCurrent()
         this.nodeExecution.backend(() => releasePty(live.proc as ReleasablePty))
         const pid = (live.proc as pty.IPty & { pid?: number }).pid
         if (this.runtimePlatform === 'win32' && Number.isSafeInteger(pid) && (pid as number) > 0) {

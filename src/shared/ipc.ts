@@ -366,6 +366,8 @@ export const IPC = {
   worktreeRecoveryMissing: 'worktree:recovery:recover-missing',
   worktreeRecoveryResume: 'worktree:recovery:resume',
   worktreeRecoveryRebind: 'worktree:recovery:rebind',
+  worktreeRemovalDiscover: 'worktree:removal:discover',
+  worktreeRemovalClean: 'worktree:removal:clean',
   appUpdatePolicy: 'app:update-policy',
   // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
   appUpdatePrepInspect: 'app:update-prep-inspect',

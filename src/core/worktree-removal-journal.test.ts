@@ -227,3 +227,17 @@ it('retains v5 manual attempts and observations across reload, rejects downgrade
   fs.writeFileSync(f.file, bytes); await restored.load()
   expect(restored.list()[0].manualResume).toMatchObject([{ state: 'observed', evidence: { pid: 123 } }])
 })
+
+
+it('checks prepared intent and recovered receipt guards inside the journal publication path', async () => {
+  const f = fixture(); await f.journal.load()
+  await expect(f.journal.prepare(f.intent, () => { throw new Error('owner departed') })).rejects.toThrow('owner departed')
+  expect(fs.existsSync(f.file)).toBe(false)
+  const row = await f.journal.prepare(f.intent); await f.journal.markRemoved(row.id)
+  let calls = 0
+  await expect(f.journal.markRecovered(row.id, () => { if (++calls > 1) throw new Error('receipt replaced') })).rejects.toThrow('receipt replaced')
+  expect(calls).toBeGreaterThan(1)
+  const disk = new WorktreeRemovalJournal(f.file, f.config)
+  expect(await disk.load()).toMatchObject([{ phase: 'removed' }])
+  expect(f.journal.isNodePending('group')).toBe(true)
+})

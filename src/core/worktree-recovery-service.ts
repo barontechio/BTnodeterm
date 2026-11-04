@@ -1,4 +1,10 @@
 import fs from 'node:fs'
+import os from 'node:os'
+import { platform } from './platform'
+import { appDataProjectRoot } from './workspace-store'
+import { projectSettingsPath } from './project-settings-files'
+import { parseProjectSettingsFile } from '../shared/project-settings'
+import { manualFileStamp } from './worktree-manual-shell'
 import { manualCreateBinding, manualProcessBirth } from './worktree-manual-shell'
 import { localNodePtyOptions, HEADLESS_COLS, HEADLESS_ROWS } from '../shared/node-pty-options'
 import type { WorktreeRecoveryResumeReply } from '../shared/worktree-recovery'
@@ -28,8 +34,8 @@ import type { WorktreeRemovalJournal, WorktreeRemovalRecord, WorktreeRebindPlan 
 interface Dependencies {
   journal: WorktreeRemovalJournal
   pty: Pick<PtyManager, 'runWorktreeAction'> & Partial<Pick<PtyManager, 'recycleWorktreeMember' | 'nodeExecutionIdentity' |
-    'runNodeActions' | 'prepareManualShell' | 'createManualShell' | 'publishManualShellReady'>>
-  git: Pick<GitService, 'worktreeList'> & Partial<Pick<GitService, 'worktreeRecoveryDirectories'>>
+    'runNodeActions' | 'prepareManualShell' | 'createManualShell' | 'publishManualShellReady' | 'prepareWorktreeRemoval'>>
+  git: Pick<GitService, 'worktreeList'> & Partial<Pick<GitService, 'worktreeRecoveryDirectories' | 'worktreeRemoveClean'>>
   repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
 const item = (row: WorktreeRemovalRecord): WorktreeRecoveryItem => ({ id: row.id, createdAt: row.createdAt,
@@ -247,6 +253,173 @@ export class WorktreeRecoveryService {
    * Git mutation, creates a terminal or submits held input. Unsupported agent identities refuse. */
   recover(id: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> { return this.recoverTarget(id, owner, false) }
   recoverMissing(groupId: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> { return this.recoverTarget(groupId, owner, true) }
+
+  async discoverRemoval(owner: AccountOwner): Promise<WorktreeMissingList> {
+    if (!owner.active() || !this.deps.repair || !this.deps.pty.prepareWorktreeRemoval || !this.deps.git.worktreeRemoveClean)
+      return { ok: false, error: 'worktree-removal-unavailable' }
+    try {
+      const workspace = await this.deps.repair.workspace.load({ sideline: false })
+      const records = this.deps.journal.list()
+      const candidates = workspace.projects.filter((p) => !p.remote && !p.ssh && !p.handedOffTo && !p.unavailable)
+        .flatMap((p) => p.nodes.filter((n) => n.kind === 'group' && n.worktree?.createdByApp &&
+          !records.some((r) => isAncestorPath(r.worktreePath, n.worktree!.path) || isAncestorPath(n.worktree!.path, r.worktreePath)))
+          .map((n) => ({ groupId: n.id, projectId: p.id, branch: n.worktree!.branch, path: n.worktree!.path }))).slice(0, 128)
+      if (!owner.active()) return { ok: false, error: 'worktree-recovery-owner-required' }
+      return { ok: true, candidates }
+    } catch { return { ok: false, error: 'worktree-removal-discovery-unavailable' } }
+  }
+
+  /** Additive owner-only clean removal. The legacy Desktop dirty/force workflow is separate. */
+  async removeClean(groupId: string, owner: AccountOwner): Promise<WorktreeRecoveryRepairReply> {
+    const domain = this.deps.repair
+    if (!owner.active() || !domain || !this.deps.pty.prepareWorktreeRemoval || !this.deps.pty.recycleWorktreeMember ||
+      !this.deps.git.worktreeRemoveClean) return { ok: false, outcome: 'refused', error: 'worktree-removal-unavailable' }
+    if (!isSafeNodeId(groupId) || this.pending.has(groupId) || this.pending.size >= 32)
+      return { ok: false, outcome: 'refused', error: 'worktree-removal-busy-or-invalid' }
+    this.pending.add(groupId)
+    let changed = false; let consumed = false; let approval: Extract<OwnerPermit, { ok: true }> | undefined
+    try {
+      const workspace = structuredClone(await domain.workspace.load({ sideline: false }))
+      const hits = workspace.projects.flatMap((project) => project.nodes.filter((node) => node.id === groupId).map((node) => ({ project, node })))
+      if (hits.length !== 1 || hits[0].node.kind !== 'group' || !hits[0].node.worktree?.createdByApp)
+        throw new Error('worktree-removal-app-created-group-required')
+      const { project, node: group } = hits[0]; const binding = group.worktree!
+      if (this.deps.journal.list().some((row) => isAncestorPath(row.worktreePath, binding.path) || isAncestorPath(binding.path, row.worktreePath)))
+        throw new Error('worktree-removal-history-overlap')
+      const protect = () => {
+        const roots = [binding.repoPath, os.homedir(), platform().userDataDir, process.cwd(), process.execPath,
+          path.join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.() ?? 'unknown'}`),
+          ...['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'TMUX_TMPDIR']
+            .map((key) => process.env[key]).filter((value): value is string => !!value)]
+        if (path.parse(binding.path).root === binding.path) throw new Error('worktree-removal-protected-root')
+        const admit = worktreeRecoveryAdmission({ reservedPaths: () => [binding.path] })
+        for (const root of roots) {
+          try { admit(root) } catch { throw new Error('worktree-removal-protected-root') }
+        }
+      }
+      protect()
+      const stat = fs.lstatSync(binding.path, { bigint: true })
+      const ids = new Set([groupId, ...descendantIds(project.nodes, groupId)])
+      if (ids.size > 32) throw new Error('worktree-removal-member-capacity')
+      let row: WorktreeRemovalRecord = { id: randomUUID(), createdAt: Date.now(), phase: 'prepared', provenance: { kind: 'recorded-directory' },
+        projectId: project.id, groupId, repoPath: binding.repoPath, worktreePath: binding.path, branch: binding.branch,
+        fallbackCwd: binding.repoPath, directoryStamp: `${stat.dev}:${stat.ino}`,
+        members: project.nodes.filter((node) => ids.has(node.id)).map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })) }
+      const captured = this.repairSnapshot(workspace, row)
+      const terminals = captured.nodes.filter((node) => node.kind === 'terminal').map((node) => node.id)
+      await this.verifyKept(row)
+      const repoEvidence = captureWorktreeGitEvidence(row.repoPath)
+      const checkoutEvidence = captureWorktreeGitEvidence(row.worktreePath)
+      const settingsCurrent = domain.workspace.captureProjectSpawnSettings(project.id)
+      // Pre-validate without the settings reader's corrupt-file sidelining behavior.
+      const settingsRoot = project.storeInAppData ? appDataProjectRoot(project.id) : project.cwd
+      if (settingsRoot) {
+        const file = projectSettingsPath(settingsRoot)
+        try {
+          manualFileStamp(file)
+          if (parseProjectSettingsFile(fs.readFileSync(file, 'utf8')).status !== 'ok') throw new Error('worktree-removal-settings-unverifiable')
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error }
+      }
+      const settings = await domain.workspace.readProjectSettings(project.id); settingsCurrent()
+      if (!settings || settings.conflict) throw new Error('worktree-removal-settings-unverifiable')
+      if (settings.shared?.setup?.archiveScript || settings.local?.setup?.archiveScript)
+        throw new Error('worktree-removal-archive-hook-unsupported')
+      const physical = await this.deps.pty.prepareWorktreeRemoval(terminals, row.worktreePath)
+      // Saved cold identities and live unpersisted identities cannot be inferred from a cwd hint.
+      const saved = workspace.projects.flatMap((p) => p.nodes.filter((n) => n.kind === 'terminal').map((node) => ({ project: p, node })))
+      if (saved.some(({ project: p, node }) => p.remote || p.ssh || p.handedOffTo || isRemoteSessionNode(node) || node.agentId || node.accountId || node.agentSessionId || !physical.nodeIds.includes(node.id)) ||
+        physical.nodeIds.some((id) => saved.filter(({ node }) => node.id === id).length !== 1))
+        throw new Error('worktree-removal-saved-runtime-unverifiable')
+      const canvasSignature = () => JSON.stringify(domain.workspace.linkProjectEntries()?.map((entry) => {
+        const location = domain.workspace.projectExecutionLocation(entry.id)
+        const nodes = domain.workspace.getProjectNodesForHostAction(entry.id)
+        if (!location || !nodes) throw new Error('worktree-removal-canvas-unavailable')
+        return [location, nodes.map((node) => [node.id, canvasExecutionBinding(location, node)])]
+      }))
+      const originalCanvas = canvasSignature()
+      let expectedJournal = JSON.stringify(this.deps.journal.list())
+      const current = () => {
+        try { settingsCurrent(); return owner.active() && (!consumed || approval?.current() === true) && JSON.stringify(this.deps.journal.list()) === expectedJournal }
+        catch { return false }
+      }
+      const beforeGit = () => {
+        if (!current() || canvasSignature() !== originalCanvas) throw new Error('worktree-removal-approval-changed')
+        protect(); this.directoryIntact(row); physical.assertCurrent()
+        assertWorktreeGitEvidence(row.repoPath, repoEvidence); assertWorktreeGitEvidence(row.worktreePath, checkoutEvidence)
+      }
+      beforeGit()
+      const answer = await domain.confirmations.request({ action: 'remove-worktree',
+        requester: { nodeId: groupId, projectId: project.id, title: binding.branch }, binding: { row, canvas: originalCanvas },
+        message: `Remove the clean checkout ${binding.path}?`,
+        details: 'Git runs without force and refuses ignored files. The branch is kept. After verified absence, supported terminals are closed and their saved nodes are repaired. Held commands and file contents are preserved; terminals require explicit manual start. This does not lock external processes or files.',
+        confirmLabel: 'Remove clean checkout', danger: true,
+        checkCurrent: async () => { try { beforeGit(); await this.verifyKept(row); await physical.revalidate(); beforeGit(); return true } catch { return false } }
+      })
+      if (!answer.ok) return { ok: false, outcome: 'refused', error: `Owner confirmation ${answer.reason}.` }
+      approval = answer
+      if (!(await answer.consume())) throw new Error('worktree-removal-approval-changed')
+      consumed = true
+      const writer = new CanvasContentWriter({ workspaceStore: domain.workspace })
+      await this.deps.pty.runWorktreeAction(row.members.map((m) => m.nodeId), { owner, current, timeoutMs: 120_000 }, async (permit) => {
+        const { value: hold } = await writer.edit((fresh) => {
+          permit.assertCurrent(); beforeGit(); this.repairSnapshot(fresh, row)
+          return domain.admission.reservations.hold(fresh, row.members.map((m) => m.nodeId), permit)
+        })
+        try {
+          const assertPrepared = () => { permit.assertCurrent(); beforeGit() }
+          assertPrepared()
+          const { id: _id, createdAt: _created, phase: _phase, provenance: _origin, ...intent } = row
+          changed = true // A lost first journal acknowledgement must retain possible effects.
+          row = await this.deps.journal.prepare({ ...intent, directoryStamp: row.directoryStamp! }, assertPrepared)
+          expectedJournal = JSON.stringify(this.deps.journal.list())
+          assertPrepared()
+          const result = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeRemoveClean!(row.repoPath, row.worktreePath, row.branch, false,
+            { directoryStamp: row.directoryStamp!, assertCurrent: assertPrepared }))
+          // Actual absence is factual evidence even when approval expired during Git. Never
+          // interpret an inaccessible path, an unsuccessful list or an expired owner as absence.
+          if (!this.directoryMissing(row)) throw new Error('worktree-removal-recovery-required')
+          row = await this.deps.journal.markRemoved(row.id)
+          expectedJournal = JSON.stringify(this.deps.journal.list())
+          // A refused or uncertain Git reply never grants terminal teardown, even if an
+          // independent observation can already durably record the missing path.
+          if (!result.ok) throw new Error('worktree-removal-recovery-required')
+          permit.assertCurrent()
+          const candidate = structuredClone(await domain.workspace.load({ sideline: false }))
+          const snapshot = this.repairSnapshot(candidate, row); const originals = structuredClone(snapshot.nodes)
+          const freshProject = candidate.projects.find((p) => p.id === row.projectId)!
+          this.repairNodes(snapshot.nodes, row, freshProject.cwd)
+          const plan = { members: snapshot.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(freshProject, node) })),
+            staged: snapshot.nodes.map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(freshProject,
+              carryLocalNodeExec(originals.find((old) => old.id === node.id), node, false)) })), manualStart: terminals }
+          row = await this.deps.journal.planRepair(row.id, plan, permit.assertCurrent)
+          expectedJournal = JSON.stringify(this.deps.journal.list())
+          await domain.dispatch.withRecovery(permit, async () => {
+            for (const id of terminals) {
+              permit.assertCurrent()
+              await this.deps.pty.recycleWorktreeMember!(id, permit, physical.targets.get(id)!)
+            }
+          })
+          permit.assertCurrent()
+          await writer.repairExecution(hold, (fresh) => {
+            permit.assertCurrent()
+            const repaired = this.repairSnapshot(fresh, row); const p = fresh.projects.find((p) => p.id === row.projectId)!
+            this.repairNodes(repaired.nodes, row, p.cwd)
+            if (repaired.nodes.some((node) => canvasExecutionBinding(p, node) !== plan.members.find((m) => m.nodeId === node.id)?.binding))
+              throw new Error('worktree-removal-repair-changed')
+          }, async (_fresh, assertDurable) => {
+            const publish = () => { permit.assertCurrent(); assertDurable(); if (!this.directoryMissing(row)) throw new Error('worktree-removal-path-replaced') }
+            publish(); row = await this.deps.journal.markRecovered(row.id, publish)
+            expectedJournal = JSON.stringify(this.deps.journal.list())
+          })
+        } finally { hold.release() }
+      })
+      return { ok: true, outcome: 'recovered', message: 'Clean checkout removed; branch and saved nodes kept. Terminals require explicit manual start. No command was replayed.' }
+    } catch (error) {
+      const named = error instanceof Error && /^worktree-removal-[a-z-]+$/.test(error.message) ? error.message : 'worktree-removal-proof-unavailable'
+      return { ok: false, outcome: changed ? 'uncertain' : 'refused', error: changed
+        ? `${named}. Inspect recovery status; deletion is never retried automatically.` : named }
+    } finally { approval?.cancel(); this.pending.delete(groupId) }
+  }
 
   private async recoverTarget(id: string, owner: AccountOwner, unrecorded: boolean): Promise<WorktreeRecoveryRepairReply> {
     const refusedRepair = (error: string): WorktreeRecoveryRepairReply => ({ ok: false, outcome: 'refused', error })

@@ -170,6 +170,8 @@ export const HOST_ONLY_CHANNELS: ReadonlySet<string> = new Set([
   IPC.worktreeRecoveryMissing,
   IPC.worktreeRecoveryRebind,
   IPC.worktreeRecoveryResume,
+  IPC.worktreeRemovalDiscover,
+  IPC.worktreeRemovalClean,
   IPC.devPortsForward,
   IPC.devPortsUnforward
 ])
