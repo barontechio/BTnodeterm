@@ -2,11 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import WebSocket from 'ws'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { startServer } from './index'
 import { Auth } from './auth'
 import { initPlatform, resetPlatformForTests } from '../core/platform'
 import { fakePlatform } from '../core/platform-fake'
+import { makeTmuxTmpdir, SANDBOX_ENV } from '../core/tmux-test-socket'
+import { TMUX_SOCKET } from '../core/tmux-naming'
 import { testTmpDir } from '../core/test-tmp'
 import { IPC } from '../shared/ipc'
 import { WorkspaceStore } from '../core/workspace-store'
@@ -15,8 +17,21 @@ import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import type { RpcRequest } from '../shared/rpc'
 vi.mock('../core/session-host-backend', async () => (await import('../core/__fixtures__/no-session-host')).noSessionHost())
 
+let ownedTmuxRoot: string | undefined
+afterEach(() => {
+  if (ownedTmuxRoot) {
+    if (fs.existsSync('/usr/bin/tmux')) {
+      try { execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'kill-server'], { env: { ...process.env, TMUX_TMPDIR: ownedTmuxRoot }, stdio: 'ignore' }) } catch { /* no fixture server */ }
+    }
+    fs.rmSync(ownedTmuxRoot, { recursive: true, force: true }); ownedTmuxRoot = undefined
+  }
+  resetPlatformForTests(); vi.unstubAllEnvs()
+})
+
 describe.skipIf(process.platform !== 'linux')('owner clean removal through actual Server WebSocket', () => {
   it('waits for owner approval and durably repairs saved nodes after real Git removal', async () => {
+    const tmuxRoot = makeTmuxTmpdir('d-ws-', TMUX_SOCKET); ownedTmuxRoot = tmuxRoot
+    vi.stubEnv('TMUX_TMPDIR', tmuxRoot); vi.stubEnv(SANDBOX_ENV, tmuxRoot)
     const root = fs.realpathSync(testTmpDir('worktree-clean-ws-')); const dataDir = path.join(root, 'data'); const repo = path.join(root, 'repo'); const checkout = path.join(root, 'checkout')
     fs.mkdirSync(dataDir); fs.mkdirSync(repo); vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
@@ -52,8 +67,11 @@ describe.skipIf(process.platform !== 'linux')('owner clean removal through actua
       await request(IPC.ownerConfirmationConnect)
       expect(await request(IPC.worktreeRemovalDiscover)).toMatchObject({ ok: true, candidates: [{ groupId: 'group' }] })
       expect(await request(IPC.worktreeRemovalClean, '../checkout')).toMatchObject({ ok: false, outcome: 'refused' })
-      const removing = request(IPC.worktreeRemovalClean, 'group')
-      await vi.waitFor(() => expect(prompts).toHaveLength(1))
+      let settled: unknown
+      const removing = request(IPC.worktreeRemovalClean, 'group').then(result => { settled = result; return result })
+      await vi.waitFor(() => expect(prompts.length === 1 || settled !== undefined).toBe(true))
+      expect(settled, JSON.stringify(settled)).toBeUndefined()
+      expect(prompts).toHaveLength(1)
       expect(prompts[0].action).toBe('remove-worktree'); expect(fs.existsSync(checkout)).toBe(true)
       expect(fs.existsSync(path.join(dataDir, 'worktree-removals.json'))).toBe(false)
       const prompt = prompts[0]
@@ -66,6 +84,9 @@ describe.skipIf(process.platform !== 'linux')('owner clean removal through actua
       expect(saved.projects[0].nodes.find(n => n.id === 'group')?.worktree).toBeUndefined()
       expect(saved.projects[0].nodes.find(n => n.id === 'editor')).toMatchObject({ fileMissing: true, filePath: path.join(checkout, 'file') })
       expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'worktree-removals.json'), 'utf8')).records[0].phase).toBe('recovered')
-    } finally { socket?.terminate(); await server.close(); resetPlatformForTests(); vi.unstubAllEnvs() }
+    } finally {
+      socket?.terminate(); await server.close()
+
+    }
   })
 })

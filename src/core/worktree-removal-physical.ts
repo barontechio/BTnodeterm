@@ -2,6 +2,49 @@ import fs from 'node:fs'
 import { isAncestorPath } from '../shared/worktree'
 import { manualProcessBirth } from './worktree-manual-shell'
 import type { LocalTmuxExecution } from './local-tmux-execution'
+import { worktreeRecoveryAdmission } from './worktree-recovery-admission'
+import { accountConfigDir, normalizeLinkedConfigDir } from './claude-accounts-core'
+import { codexHomeForAccount } from './codex-accounts-core'
+import { claudeSystemConfigDir } from './agents/hooks/claude'
+import type { Settings } from '../shared/types'
+
+/** The actual settings getter is authoritative. Read helpers that swallow a failed account
+ * lookup into an empty list are suitable for display, never for destructive path protection. */
+export function captureRemovalAccountPaths(getSettings: () => Settings, userDataDir: string): { paths: readonly string[]; assertCurrent(): void } {
+  const inspect = () => {
+    const settings = getSettings()
+    if (!Array.isArray(settings.claudeAccounts) || !Array.isArray(settings.codexAccounts) ||
+      settings.claudeAccounts.length + settings.codexAccounts.length > 256) throw new Error('worktree-removal-account-roots-unavailable')
+    const paths = [claudeSystemConfigDir(), codexHomeForAccount(userDataDir)]
+    for (const account of settings.claudeAccounts) {
+      if (!account || typeof account.id !== 'string') throw new Error('worktree-removal-account-roots-unavailable')
+      if (account.host) continue
+      const managed = accountConfigDir(userDataDir, account.id)
+      const linked = normalizeLinkedConfigDir(account.configDir)
+      if (account.configDir !== undefined && !linked) throw new Error('worktree-removal-account-roots-unavailable')
+      // Pending/linked accounts still own their configured files, even before first launch.
+      paths.push(managed, ...(linked ? [linked] : []))
+    }
+    for (const account of settings.codexAccounts) {
+      if (!account || typeof account.id !== 'string') throw new Error('worktree-removal-account-roots-unavailable')
+      if (!account.host) paths.push(codexHomeForAccount(userDataDir, account.id))
+    }
+    return { paths, signature: JSON.stringify([settings.claudeAccounts, settings.codexAccounts, paths]) }
+  }
+  const original = inspect()
+  return Object.freeze({ paths: Object.freeze(original.paths), assertCurrent: () => {
+    if (inspect().signature !== original.signature) throw new Error('worktree-removal-account-roots-changed')
+  } })
+}
+
+/** Resolve aliases with the same physical path policy used for backend starts. */
+export function assertRemovalProtectedPaths(checkout: string, paths: readonly string[]): void {
+  const admit = worktreeRecoveryAdmission({ reservedPaths: () => [checkout] })
+  for (const name of paths) {
+    if (!name) continue
+    try { admit(name) } catch { throw new Error('worktree-removal-protected-root') }
+  }
+}
 
 /** Private capabilities minted by PtyManager, never accepted from IPC. */
 export interface WorktreeRemovalTarget {

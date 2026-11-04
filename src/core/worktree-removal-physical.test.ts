@@ -4,7 +4,9 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { once } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { testTmpDir } from './test-tmp'
-import { captureManagedReferences } from './worktree-removal-physical'
+import { DEFAULT_SETTINGS } from '../shared/types'
+import { codexHomeForAccount } from './codex-accounts-core'
+import { assertRemovalProtectedPaths, captureRemovalAccountPaths, captureManagedReferences } from './worktree-removal-physical'
 
 const children: ChildProcessWithoutNullStreams[] = []
 afterEach(async () => {
@@ -35,4 +37,17 @@ describe.skipIf(process.platform !== 'linux')('actual managed process references
     })
     expect(current).toThrow('denied')
   })
+})
+
+
+it('protects actual Codex short homes and refuses failed account-source reads rather than accepting an empty inventory', () => {
+  const root = testTmpDir('removal-accounts-'); const settings = structuredClone(DEFAULT_SETTINGS)
+  settings.codexAccounts = [{ id: 'managed', label: 'Managed' }]
+  let unavailable = false
+  const proof = captureRemovalAccountPaths(() => { if (unavailable) throw new Error('settings unavailable'); return settings }, root)
+  const home = codexHomeForAccount(root, 'managed')
+  expect(proof.paths).toContain(home)
+  expect(() => assertRemovalProtectedPaths(path.dirname(home), proof.paths)).toThrow('protected-root')
+  unavailable = true
+  expect(proof.assertCurrent).toThrow('settings unavailable')
 })

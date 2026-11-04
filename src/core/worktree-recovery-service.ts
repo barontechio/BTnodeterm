@@ -288,6 +288,7 @@ export class WorktreeRecoveryService {
         throw new Error('worktree-removal-history-overlap')
       const protect = () => {
         const roots = [binding.repoPath, os.homedir(), platform().userDataDir, process.cwd(), process.execPath,
+          ...(platform().resourcesPath ? [platform().resourcesPath!] : []),
           path.join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid?.() ?? 'unknown'}`),
           ...['XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_STATE_HOME', 'XDG_RUNTIME_DIR', 'CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'TMUX_TMPDIR']
             .map((key) => process.env[key]).filter((value): value is string => !!value)]

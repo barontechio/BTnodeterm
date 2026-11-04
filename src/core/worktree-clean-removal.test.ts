@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { testTmpDir } from './test-tmp'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform } from './platform-fake'
@@ -22,16 +22,26 @@ import { DEFAULT_SETTINGS, type CanvasNodeState, type Project } from '../shared/
 import type { WorktreeRemovalTarget } from './worktree-removal-physical'
 
 import { PtyManager } from './pty-manager'
+import { makeTmuxTmpdir, SANDBOX_ENV } from './tmux-test-socket'
 import { TMUX_SOCKET, sessionName } from './tmux-naming'
 vi.mock('./session-host-backend', async () => (await import('./__fixtures__/no-session-host')).noSessionHost())
 const managers: PtyManager[] = []
 const keys: string[] = []
 const brokers: OwnerConfirmationBroker[] = []
+let tmuxRoot = ''
+beforeEach(() => {
+  tmuxRoot = makeTmuxTmpdir('d-rm-', TMUX_SOCKET)
+  vi.stubEnv('TMUX_TMPDIR', tmuxRoot); vi.stubEnv(SANDBOX_ENV, tmuxRoot)
+})
 afterEach(() => {
   for (const manager of managers.splice(0)) { manager.setNodeExecutionAdmission(null); manager.killAll() }
   for (const key of keys.splice(0)) {
     try { execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'kill-session', '-t', `=${sessionName(key)}`], { stdio: 'ignore' }) } catch { /* already gone */ }
   }
+  if (fs.existsSync('/usr/bin/tmux')) {
+    try { execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'kill-server'], { stdio: 'ignore' }) } catch { /* no remaining fixture server */ }
+  }
+  if (tmuxRoot) fs.rmSync(tmuxRoot, { recursive: true, force: true })
   for (const broker of brokers.splice(0)) broker.dispose(); resetPlatformForTests(); vi.restoreAllMocks(); vi.unstubAllEnvs() })
 async function fixture(realBackend?: 'plain' | 'tmux') {
   const terminalId = realBackend ? `remove-${process.pid}-${Date.now()}` : 'terminal'
@@ -66,9 +76,10 @@ async function fixture(realBackend?: 'plain' | 'tmux') {
     runWorktreeAction: <T>(ids: readonly string[], options: NodeExecutionOptions, work: (permit: NodeExecutionBatchPermit) => Promise<T> | T) => coordinator.runMany(ids, 'worktree', options, work),
     recycleWorktreeMember: recycle }
   let manager: PtyManager | undefined
+  const settings = structuredClone(DEFAULT_SETTINGS)
   if (realBackend) {
     manager = new PtyManager(); managers.push(manager); keys.push(terminalId)
-    const settings = structuredClone(DEFAULT_SETTINGS); settings.tmuxEnabled = realBackend === 'tmux'
+    settings.tmuxEnabled = realBackend === 'tmux'
     manager.init(() => settings)
     manager.setNodeExecutionAdmission((id, permit, operation) => dispatch.assertAllowed(id, permit, operation))
     await manager.createHeadless({ persistKey: terminalId, ownerProjectId: project.id, cwd: checkout, shell: '/bin/bash', shellArgs: ['--noprofile', '--norc'], cols: 80, rows: 24, newOnly: true })
@@ -85,7 +96,7 @@ async function fixture(realBackend?: 'plain' | 'tmux') {
     expect(broker.decide(1, { id: request.id, token: request.token, proof: request.proof, answer: 'approve' })).toBe(true)
     return operation
   }
-  return { terminalId, manager, root, repo, checkout, store, journal, admission, dispatch, coordinator, owners, owner, broker, host, pty, recycle, git, remove, service, approve, gitRun,
+  return { settings, terminalId, manager, root, repo, checkout, store, journal, admission, dispatch, coordinator, owners, owner, broker, host, pty, recycle, git, remove, service, approve, gitRun,
     invalidate: () => { valid = false } }
 }
 
@@ -185,14 +196,47 @@ describe.skipIf(process.platform !== 'linux')('clean removal with real managed P
   }, 20000)
   it.skipIf(!fs.existsSync('/usr/bin/tmux'))('does not kill a same-name tmux replacement after Git removed the checkout', async () => {
     const f = await fixture('tmux'); const actual = f.manager!.recycleWorktreeMember.bind(f.manager)
+    let replacementCreated = false
     vi.spyOn(f.manager!, 'recycleWorktreeMember').mockImplementationOnce(async (...args) => {
+      // Keep this server alive: killing its last session and immediately starting another
+      // races tmux shutdown, which would test failed fixture creation instead of replacement.
+      const anchor = `${f.terminalId}-anchor`; keys.push(anchor)
+      execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'new-session', '-d', '-s', sessionName(anchor), '-c', f.repo, '/bin/bash'])
       execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'kill-session', '-t', `=${sessionName(f.terminalId)}`])
-      execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'new-session', '-d', '-s', sessionName(f.terminalId), '-c', f.repo])
+      execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'new-session', '-d', '-s', sessionName(f.terminalId), '-c', f.repo, '/bin/bash'])
+      const replacement = execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'display-message', '-p', '-t', `=${sessionName(f.terminalId)}`, '#{session_id}'], { encoding: 'utf8' }).trim()
+      expect(replacement).not.toBe(args[2]!.tmux!.sessionId)
+      replacementCreated = true
       return actual(...args)
     })
     expect(await f.approve()).toMatchObject({ ok: false, outcome: 'uncertain' })
-    expect(f.journal.list()[0].phase).toBe('removed')
+    expect(f.journal.list()[0].phase).toBe('removed'); expect(replacementCreated).toBe(true)
     expect(() => execFileSync('/usr/bin/tmux', ['-L', TMUX_SOCKET, 'has-session', '-t', `=${sessionName(f.terminalId)}`])).not.toThrow()
   }, 20000)
+
+  it.skipIf(!fs.existsSync('/usr/bin/tmux'))('protects the actual backend config and observed socket ancestors', async () => {
+    const f = await fixture('tmux')
+    const target = await f.manager!.localTmuxExecution(f.terminalId)
+    expect(target).toBeDefined()
+    await expect(f.manager!.prepareWorktreeRemoval([f.terminalId], path.join(f.root, 'data'))).rejects.toThrow('protected-root')
+    await expect(f.manager!.prepareWorktreeRemoval([f.terminalId], path.dirname(target!.socketPath))).rejects.toThrow('protected-root')
+    await expect(f.manager!.prepareWorktreeRemoval([f.terminalId], f.checkout)).resolves.toMatchObject({ nodeIds: [f.terminalId] })
+    expect(fs.existsSync(f.checkout)).toBe(true); expect(f.remove).not.toHaveBeenCalled()
+  }, 20000)
+
+  it('refuses the configured linked Claude root from actual host settings before owner prompt or Git', async () => {
+    const f = await fixture('plain')
+    f.settings.claudeAccounts = [{ id: 'linked-review', label: 'Linked account', configDir: f.checkout, createdAt: Date.now() }]
+    expect(await f.service.removeClean('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused', error: 'worktree-removal-protected-root' })
+    expect(f.remove).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([]); expect(fs.existsSync(f.checkout)).toBe(true)
+    expect(f.host.sent.some(m => m.channel === IPC.ownerConfirmationRequest)).toBe(false)
+  })
+  it('invalidates consent when the actual configured account roots change during owner review', async () => {
+    const f = await fixture('plain')
+    expect(await f.approve(() => {
+      f.settings.claudeAccounts = [{ id: 'linked-later', label: 'Linked during approval', configDir: f.checkout, createdAt: Date.now() }]
+    })).toMatchObject({ ok: false, outcome: 'refused' })
+    expect(f.remove).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([]); expect(fs.existsSync(f.checkout)).toBe(true)
+  })
 
 })

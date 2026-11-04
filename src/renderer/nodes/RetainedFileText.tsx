@@ -14,10 +14,11 @@ export function useRetainedFileText(missing: boolean, first: RefObject<TextModel
   return text
 }
 
-export function RetainedFileText({ text }: { text: string[] }) {
+export function RetainedFileText({ text, source }: { text: string[]; source?: string }) {
   if (!text.length) return null
   return <div className="nodrag nowheel nokey" style={{ width: '100%', overflow: 'auto' }}>
     <p>Text retained in this open node. Copy it before closing or reloading.</p>
+    {source && <p>Original file: {source}</p>}
     {text.map((value, index) => <textarea key={index} readOnly value={value}
       aria-label={text.length > 1 ? (index === 0 ? 'Retained original text' : 'Retained modified text') : 'Retained editor text'}
       style={{ width: '100%', minHeight: 160, resize: 'vertical' }} />)}

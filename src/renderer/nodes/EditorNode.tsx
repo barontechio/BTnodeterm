@@ -57,6 +57,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [pdfError, setPdfError] = useState('')
   const [loadError, setLoadError] = useState('')
   const filePath = (data.filePath as string) ?? ''
+  const loadedPath = useRef(filePath)
   // Set by a worktree removal sweep (`displacedByWorktree` / `resetDisplacedCwd` in Canvas.tsx):
   // this file no longer exists, and unlike a terminal's cwd there is nothing to re-point it at.
   const fileMissing = !!data.fileMissing
@@ -332,7 +333,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <span className="editor-node__loading">
               This file’s worktree was removed — it no longer exists.
             </span>
-            <RetainedFileText text={retainedText} />
+            <RetainedFileText text={retainedText} source={loadedPath.current} />
           </div>
         ) : isImage ? (
           <div className="editor-node__image nodrag nowheel">

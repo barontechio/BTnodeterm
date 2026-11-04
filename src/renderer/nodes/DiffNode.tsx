@@ -43,6 +43,7 @@ export function DiffNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [loadError, setLoadError] = useState('')
   const cwd = (data.cwd as string) ?? ''
   const rel = (data.filePath as string) ?? ''
+  const loadedPath = useRef(`${cwd}/${rel}`)
   const staged = !!data.diffStaged
   const commitOid = (data.commitOid as string | undefined) || ''
   // Set by a worktree removal sweep (`displacedByWorktree` / `resetDisplacedCwd` in Canvas.tsx):
@@ -164,7 +165,7 @@ export function DiffNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <span className="editor-node__loading">
               This file’s worktree was removed — it no longer exists.
             </span>
-            <RetainedFileText text={retainedText} />
+            <RetainedFileText text={retainedText} source={loadedPath.current} />
           </div>
         </div>
       ) : loadError ? (

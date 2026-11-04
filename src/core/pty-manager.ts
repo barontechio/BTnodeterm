@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { stableStringify } from '../shared/canvas-mutations'
 import { createManualTmux, manualCreateBinding, manualFileStamp, manualProcessBirth, manualTmuxMatches, manualTmuxStillCurrent, type ManualShellProfile, type ManualShellEvidence, type ManualTmuxCreated } from './worktree-manual-shell'
 import { sameLocalTmuxExecution, type LocalTmuxExecution } from './local-tmux-execution'
-import { captureManagedReferences, type WorktreeRemovalPhysical, type WorktreeRemovalTarget } from './worktree-removal-physical'
+import { assertRemovalProtectedPaths, captureManagedReferences, captureRemovalAccountPaths, type WorktreeRemovalPhysical, type WorktreeRemovalTarget } from './worktree-removal-physical'
 import type { ChatPromptBlocked, ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from '../shared/text-delivery'
 import { claudeScreenBlocksInput, readClaudeComposer, readClaudeScreen } from '../shared/agents/claude-screen'
 import os from 'os'
@@ -1216,6 +1216,9 @@ export class PtyManager {
    * replacement. All local managed references must be inspectable, including nonmembers. */
   async prepareWorktreeRemoval(memberIds: readonly string[], checkout: string): Promise<WorktreeRemovalPhysical> {
     if (process.platform !== 'linux') throw new Error('worktree-removal-runtime-unsupported')
+    const accounts = captureRemovalAccountPaths(() => this.getSettings(), platform().userDataDir)
+    const backendPaths = Object.freeze([this.confPath, this.tmuxPath ?? '', ...accounts.paths])
+    assertRemovalProtectedPaths(checkout, backendPaths)
     const sessions = [...this.sessions.entries()]
     if (sessions.length > 128 || this.released.size || this.zellijKeys.size)
       throw new Error('worktree-removal-detached-runtime-unverifiable')
@@ -1252,7 +1255,11 @@ export class PtyManager {
     // Inspect the actual managed tmux socket, including sessions without a live painter.
     // A failed list is never absence. Only a missing socket below a searchable canonical
     // ancestor may represent the plain-only case.
-    const socketPath = path.join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid!()}`, TMUX_SOCKET)
+    const observedSockets = [...new Set([...targets.values()].flatMap((target) => target.tmux ? [target.tmux.socketPath] : []))]
+    if (observedSockets.length > 1) throw new Error('worktree-removal-runtime-ambiguous')
+    const socketPath = observedSockets[0] ?? path.join(process.env.TMUX_TMPDIR ?? '/tmp', `tmux-${process.getuid!()}`, TMUX_SOCKET)
+    const protectedPaths = Object.freeze([...backendPaths, socketPath])
+    assertRemovalProtectedPaths(checkout, protectedPaths)
     const inventory = () => {
       try {
         const stat = fs.lstatSync(socketPath, { bigint: true })
@@ -1285,6 +1292,9 @@ export class PtyManager {
     const originalInventory = inventory()
     const referencesCurrent = captureManagedReferences(roots, checkout)
     const assertCurrent = () => {
+      accounts.assertCurrent()
+      if (this.confPath !== backendPaths[0] || (this.tmuxPath ?? '') !== backendPaths[1]) throw new Error('worktree-removal-runtime-changed')
+      assertRemovalProtectedPaths(checkout, protectedPaths)
       registryCurrent(); for (const target of targets.values()) target.assertCurrent(); referencesCurrent()
       if (inventory() !== originalInventory) throw new Error('worktree-removal-runtime-changed')
     }

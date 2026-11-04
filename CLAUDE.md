@@ -42,7 +42,9 @@ single-pane tmux, with bounded OS process birth/cwd/fd/descendant observations f
 sessions. Unpersisted, cold, released, remote, agent/account, ambiguous or unverifiable identities
 refuse before Git. The managed tmux socket inventory must match the captured sessions; a failed list
 is not absence. No external-process or filesystem lock is claimed. Configured archive hooks and
-any overlapping historical recovery row refuse before effects; history/manualStart is never erased
+any overlapping historical recovery row refuse before effects. Protected paths include the actual
+backend config/socket and configured linked Claude and short-home Codex roots, pinned from the
+owning settings getter; failed reads or account-root changes refuse. History/manualStart is never erased
 to admit another cycle. Legacy Desktop force/archive behavior is unchanged. Relay, guests and agent
 RPCs cannot use this owner plane; the mobile companion has no removal UI in this change.
 
