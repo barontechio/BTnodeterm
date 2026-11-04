@@ -16,9 +16,27 @@ the older local scope branch alone does not contain it. Both upstream proposals 
 The acknowledged member-recycle foundation is complete at `42d39167`, integrated as `a4b3e556`.
 Its frozen Linux snapshot passes 24,648 tests (109 skipped), typecheck and Desktop/Server builds.
 Independent review found no demonstrable defects after 250 existing tests, seven additional
-behavioral cases and typecheck. The integration's `src` tree matches that reviewed snapshot.
+behavioral cases and typecheck. Integration `a4b3e556` has the same `src` tree as that snapshot;
+subsequent accepted changes are recorded below.
 Backend-specific independent cases use mocks; physical macOS/Windows behavior is not newly claimed.
 This foundation adds no deletion command or automatic launch/input.
+
+Additional accepted deliveries are integrated independently:
+
+| Delivery | Reviewed source | Integration | Verified boundary |
+| --- | --- | --- | --- |
+| Owner Codex history over SSH | `4b0a2790`, `3c3b85c3` | `dcb58484`, `635b3754` | Bounded remote-only rollout discovery; original saved/effective session, account and connection lifetime checks; 90 existing and two independent protocol cases |
+| Shared project-scope safety | `b7c7bf5a` | `bb90eade` | Creator and unique placement checks, whole-close validation and current agent run capability; explicit owner plain-terminal run remains supported; 179 independently checked cases |
+| Conservative clean Git removal | `3cb69c9d`, `60093574` | `f6f053d2`, `2c7d4210` | Refuses every ignored entry, rechecks Git/checkout identity at dispatch and preserves possible-effect recovery facts; 59 existing and 24 independent real-Git/fault cases; no deletion RPC |
+| Disabled preview transport foundation | `be773620`, `de74f022` | `f9e19119`, `53638b0d` | Bounded HTTP/WS grants, revocation and cleanup; invalid DNS bases and grant collisions refused; 22 existing and 17 independent protocol scenarios; no live routing or advertised capability |
+
+The frozen integration at `bb90eade` passes 24,667 tests (109 skipped), typecheck and both
+production builds. One preceding full run timed out waiting for an SSH passphrase prompt;
+three isolated runs and the complete unchanged-snapshot rerun passed. The cause is not established.
+The later Git and disabled-gateway integration requires a new aggregate validation before push.
+The separately reviewed remote agent context-link phase is not integrated: a publication-boundary
+revocation defect must be fixed and independently re-reviewed first. Owner history access remains
+a separate accepted permission path.
 
 | Track | Remaining functional deliveries | Acceptance boundary |
 | --- | --- | --- |
