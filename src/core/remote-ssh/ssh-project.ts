@@ -691,19 +691,26 @@ export class SshProjectManager {
     const inFlight = this.inFlight.get(projectId)
     if (inFlight) {
       if (sameEndpoint(inFlight.conn, conn)) {
+        const joinerCurrent = () => {
+          try { return !opts?.current || opts.current() } catch { return false }
+        }
         // Adopt the joiner's remoteCwd once the shared attempt lands, mirroring the `existing`
         // reuse branch in connectOnce: dropping it left refForRemoteCwd unable to route remote
         // git ops for the joiner's folder until the next reconnect.
         if (remoteCwd) {
           void inFlight.attempt.then(
             () => {
+              if (!joinerCurrent()) return
               const e = this.conns.get(projectId)
-              if (e) e.remoteCwd = remoteCwd
+              if (e && sameEndpoint(e.conn, conn)) e.remoteCwd = remoteCwd
             },
             () => {}
           )
         }
-        return inFlight.attempt
+        return opts?.current ? inFlight.attempt.then((result) => {
+          if (!joinerCurrent()) throw new Error('SSH connect cancelled')
+          return result
+        }) : inFlight.attempt
       }
       // The endpoint was EDITED while an attempt to the old one is still in flight (connect
       // dialog racing the watchdog). Sharing would hand this caller a connection to the WRONG

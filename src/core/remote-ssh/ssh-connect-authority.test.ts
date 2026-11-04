@@ -110,6 +110,26 @@ describe('connect authority through setup and publication', () => {
      expect(f.manager.refForProject('p')).toEqual(original)
    } finally { gate.release(); f.manager.disconnectAll() }
  })
+ it('rejects an expired joiner without applying its cwd or closing the shared attempt', async () => {
+   const gate = deferred()
+   let entered = false
+   let active = true
+   const f = make({run: async (args) => {
+     if (!entered && args.includes('-O') && args.includes('check')) { entered = true; await gate.promise }
+     return {code: 0, stdout: ''}
+   }})
+   try {
+     const first = f.manager.connect('p', endpoint, '/original')
+     await vi.waitFor(() => expect(entered).toBe(true))
+     const joined = f.manager.connect('p', endpoint, '/expired', {current: () => active})
+     const rejected = expect(joined).rejects.toThrow('cancelled')
+     active = false
+     gate.release()
+     await first
+     await rejected
+     expect(f.manager.refForProject('p')?.remoteCwd).toBe('/original')
+   } finally { gate.release(); f.manager.disconnectAll() }
+ })
  it('does not publish connected from a cancelled attempt while its exit is held', async () => {
    const checkGate=deferred(), exitGate=deferred(); let checking=false, exiting=false
    const f=make({run:async(args:string[])=>{
