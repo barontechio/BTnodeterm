@@ -7858,6 +7858,7 @@ body,
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+  row-gap: 4px;
   /* The transformed border box must stay inside the frame, including its left inset.
      Reserve the right-hand Ungroup control as well; percentages alone ignore the boost. */
   box-sizing: border-box;
@@ -7941,9 +7942,23 @@ body,
   align-items: center;
   gap: 6px;
   flex: 0 1 auto;
-  flex-wrap: wrap;
   min-width: 0;
   max-width: 100%;
+  /* Keep a bounded second row on narrow frames, rather than stacking every action.
+     Native scrolling and focus scrolling keep all actions reachable without growing
+     the frame; nowheel keeps these gestures out of the canvas zoom/pan handler. */
+  overflow-x: auto;
+  scrollbar-width: thin;
+  white-space: nowrap;
+}
+
+.group-node__wt > * {
+  flex-shrink: 0;
+}
+
+.group-node__wt:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
 }
 
 .group-node__branch {
@@ -8022,9 +8037,9 @@ button.group-node__setup:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  min-width: 22px;
   height: 22px;
-  padding: 0;
+  padding: 0 4px;
 }
 
 .group-node__wt-btn:hover {

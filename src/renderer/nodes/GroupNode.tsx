@@ -208,7 +208,16 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
           />
         </span>
         {wt && (
-          <div className="group-node__wt nodrag">
+          <div
+            className="group-node__wt nodrag nowheel"
+            role="group"
+            aria-label="Worktree details and actions"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              // Let the browser scroll this row instead of moving the selected frame.
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') e.stopPropagation()
+            }}
+          >
             {stale ? (
               // The directory is gone from disk (deleted outside the app). Merge and Remove would
               // act on a path that no longer exists, so only Unbind is offered.
