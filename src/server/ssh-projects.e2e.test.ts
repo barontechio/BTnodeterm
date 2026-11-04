@@ -15,6 +15,7 @@ import { IPC } from '../shared/ipc'
 import { registerServerSshProjects } from './ssh-projects'
 import { makeSshSetupRunner } from '../core/remote-ssh/ssh-setup-runner'
 import { createServerRemoteTranscripts } from './remote-transcripts'
+import { remoteCodexHome } from '../core/codex-accounts-core'
 import { registerTranscriptIpc } from '../core/transcript-ipc'
 
 /** Real SSH authentication and exec channels; all commands run under a temporary remote HOME. */
@@ -98,6 +99,7 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
         } })
       registerTranscriptIpc({ rpcScope: transcripts.rpcScope, isRemoteNode: transcripts.isRemoteNode,
         remoteAgentSupported: transcripts.supported, readRemote: (q) => transcripts!.reader.read(q),
+        readRemoteCodexPage: (q, page) => transcripts!.codexReader.readPage(q, page),
         readRemotePage: (q, page) => transcripts!.reader.readPage(q, page), remoteExists: (q) => transcripts!.reader.exists(q) })
       const chat = await call(IPC.chatReadTranscript, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }) as ChatTranscriptResult
       expect(chat.found).toBe(true); expect(JSON.stringify(chat.messages)).toContain('remote conversation')
@@ -105,6 +107,22 @@ describe.skipIf(process.platform === 'win32')('Server SSH transport composition'
       expect(await platform.handlers[IPC.chatReadTranscript](3, sid, remote, 'managed', 'remote-node', 'claude', { maxBytes: 65536 }))
         .toMatchObject({ found: false, unreadable: true, unreadableReason: 'remote-reader-permission-required' })
       expect(await transcripts.rpcScope(1, () => transcripts!.reader.exists({ sessionId: sid, nodeId: 'remote-node', accountId: 'managed', cwd: remote }))).toBe('present')
+      const codexDir = path.join(remoteCodexHome(remote, 'managed'), 'sessions', '2026', '11', '04')
+      fs.mkdirSync(codexDir, { recursive: true })
+      fs.writeFileSync(path.join(codexDir, `rollout-fixture-${sid}.jsonl`), [
+        { type: 'session_meta', payload: { id: sid } },
+        { type: 'event_msg', payload: { type: 'user_message', message: 'remote Codex question' } },
+        { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'remote Codex answer' }] } }
+      ].map((entry) => JSON.stringify(entry)).join('\n') + '\n')
+      settings.codexAccounts = [{ id: 'managed', label: 'Codex', host: sshHostKey(connection) }]
+      node.agentId = 'codex'
+      const codexChat = await call(IPC.chatReadTranscript, sid, remote, 'managed', 'remote-node', 'codex', { maxBytes: 65536 }) as ChatTranscriptResult
+      expect(codexChat.found).toBe(true)
+      expect(JSON.stringify(codexChat.messages)).toContain('remote Codex question')
+      expect(JSON.stringify(codexChat.messages)).toContain('remote Codex answer')
+      expect(await platform.handlers[IPC.chatReadTranscript](3, sid, remote, 'managed', 'remote-node', 'codex', { maxBytes: 65536 }))
+        .toMatchObject({ found: false, unreadable: true })
+      node.agentId = 'claude'
       savedTarget = undefined
       expect(service.refForProject('fixture')).toBeUndefined()
       expect(service.spawnRefFor('fixture')).toBeUndefined()

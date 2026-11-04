@@ -48,12 +48,13 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     const node = deps.workspace.getNodeForHostAction(nodeId)
     const ids = deps.workspace.projectIdsForNode(nodeId)
     if (ids.length !== 1 || !deps.workspace.projectTargetInfo(ids[0])?.ssh) return false
-    return !!node?.agentId && capabilityAgentId(node.agentId) === 'claude' &&
-      (agentId === undefined || capabilityAgentId(agentId) === 'claude')
+    const harness = node?.agentId ? capabilityAgentId(node.agentId) : undefined
+    return (harness === 'claude' || harness === 'codex') &&
+      (agentId === undefined || capabilityAgentId(agentId) === harness)
   }
-  const targetFor = (nodeId: string): RemoteClaudeTranscriptTarget | null | undefined => {
+  const targetFor = (nodeId: string, expected?: 'claude' | 'codex'): RemoteClaudeTranscriptTarget | null | undefined => {
     if (!isRemoteNode(nodeId)) return undefined
-    if (!supported(undefined, nodeId)) return null
+    if (!supported(expected, nodeId)) return null
     const ids = deps.workspace.projectIdsForNode(nodeId)
     const node = deps.workspace.getNodeForHostAction(nodeId)
     const project = ids.length === 1 ? deps.workspace.projectTargetInfo(ids[0]) : null
@@ -64,14 +65,15 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
     if (!ref || !connectionKey || !home) return null
     const live = deps.pty.sshRemoteForNode(nodeId)
     if (live && (live.controlPath !== ref.controlPath || sshEndpointKey(live.conn) !== sshEndpointKey(ref.conn))) return null
+    const agentId = capabilityAgentId(node.agentId!) as 'claude' | 'codex'
     if (node.accountId) {
-      const account = deps.settings().claudeAccounts.find((candidate) => candidate.id === node.accountId)
-      if (!account || account.pending || account.configDir || account.host !== sshHostKey(ref.conn)) return null
+      const account = (agentId === 'codex' ? deps.settings().codexAccounts : deps.settings().claudeAccounts).find((candidate) => candidate.id === node.accountId)
+      if (!account || account.pending || ('configDir' in account && account.configDir) || account.host !== sshHostKey(ref.conn)) return null
     }
-    return { nodeId, projectId: ids[0], accountId: node.accountId, sessionId: deps.sessionOf(nodeId) || node.agentSessionId,
+    return { nodeId, agentId, projectId: ids[0], accountId: node.accountId, sessionId: deps.sessionOf(nodeId) || node.agentSessionId,
       cwd: node.cwd ?? project.ssh.remoteCwd, home, conn: ref.conn, controlPath: ref.controlPath, connectionKey }
   }
-  const reader = new RemoteClaudeTranscripts({ targetFor, allowed: () => {
+  const makeReader = (expected: 'claude' | 'codex') => new RemoteClaudeTranscripts({ targetFor: (id) => targetFor(id, expected), allowed: () => {
     const request = requests.getStore()
     return request?.owner.active() === true && !request.signal.aborted
   },
@@ -82,6 +84,7 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
         ? AbortSignal.any([options.signal, request.signal]) : options.signal })
     }
   })
-  return { reader, isRemoteNode, supported, rpcScope, forgetClient: (id: number) => owners.forget(id),
-    dispose: () => { reader.dispose(); owners.dispose() } }
+  const reader = makeReader('claude'); const codexReader = makeReader('codex')
+  return { reader, codexReader, isRemoteNode, supported, rpcScope, forgetClient: (id: number) => owners.forget(id),
+    dispose: () => { reader.dispose(); codexReader.dispose(); owners.dispose() } }
 }

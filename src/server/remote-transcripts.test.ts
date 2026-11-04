@@ -15,11 +15,11 @@ function fixture() {
     cwd: '/repo', group: null, title: 'Node', color: '#000', position: { x: 0, y: 0 }, size: { width: 640, height: 440 } }
   const settings = structuredClone(DEFAULT_SETTINGS)
   settings.claudeAccounts = [{ id: 'managed', label: 'Account', host: sshHostKey(conn), createdAt: Date.now() }]
-  let ids = ['p']; let remote = true; let connected = true; let generation = 'g1'
+  let ids = ['p']; let remote = true; let connected = true; let generation = 'g1'; let session = sid
   const signals: AbortSignal[] = []
   const run = vi.fn(async () => result)
   const api = createServerRemoteTranscripts({ platform, enabled: true, settings: () => settings,
-    sessionOf: () => sid, pty: { sshRemoteForNode: () => undefined }, workspace: {
+    sessionOf: () => session, pty: { sshRemoteForNode: () => undefined }, workspace: {
       projectIdsForNode: () => ids, getNodeForHostAction: () => node,
       relayNodePlacements: () => ids.map((projectId) => ({ projectId, node })),
       sshProjectIdForNode: () => remote ? 'p' : undefined,
@@ -32,7 +32,7 @@ function fixture() {
         return work()
       }
     } })
-  return { api, platform, node, settings, run, signals, setIds: (value: string[]) => { ids = value },
+  return { api, platform, node, settings, run, signals, changeSession: () => { session = 'replacement' }, setIds: (value: string[]) => { ids = value },
     local: () => { remote = false }, disconnect: () => { connected = false }, reconnect: () => { connected = true; generation = 'g2' } }
 }
 
@@ -84,6 +84,31 @@ describe('Server SSH transcript routing and caller lifetime', () => {
     expect(f.api.supported('codex', 'node')).toBe(false)
     f.node.agentId = 'gemini'; expect(f.api.supported('gemini', 'node')).toBe(false)
     f.api.dispose()
+  })
+
+  it('uses the Codex reader only for the saved Codex harness and account', async () => {
+    const f = fixture(); f.node.agentId = 'codex'
+    f.settings.codexAccounts = [{ id: 'managed', label: 'Codex', host: f.settings.claudeAccounts[0].host }]
+    expect(f.api.supported('codex', 'node')).toBe(true)
+    expect(await f.api.rpcScope(1, () => f.api.reader.readPage(q, page))).toEqual({ ok: false })
+    expect(f.run).not.toHaveBeenCalled()
+    expect(await f.api.rpcScope(1, () => f.api.codexReader.readPage(q, page))).toMatchObject({ ok: true })
+    f.run.mockClear(); f.settings.codexAccounts[0].pending = true
+    expect(await f.api.rpcScope(1, () => f.api.codexReader.readPage(q, page))).toEqual({ ok: false })
+    expect(f.run).not.toHaveBeenCalled(); f.api.dispose()
+  })
+
+  it.each(['reconnect', 'session', 'account', 'harness', 'departure'] as const)('discards a Codex read after %s during IO', async (change) => {
+    const f = fixture(); f.node.agentId = 'codex'; delete f.node.accountId
+    let finish!: (value: typeof result) => void
+    f.run.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
+    const read = f.api.rpcScope(1, () => f.api.codexReader.readPage({ ...q, accountId: undefined }, page))
+    if (change === 'reconnect') f.reconnect()
+    if (change === 'session') f.changeSession()
+    if (change === 'account') f.node.accountId = 'other'
+    if (change === 'harness') f.node.agentId = 'claude'
+    if (change === 'departure') f.api.forgetClient(1)
+    finish(result); expect(await read).toEqual({ ok: false }); f.api.dispose()
   })
 
   it('refuses a detached continuation after its owner RPC has completed', async () => {

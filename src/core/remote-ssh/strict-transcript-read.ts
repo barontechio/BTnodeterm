@@ -2,6 +2,9 @@ import { posixQuote } from '../../shared/ssh'
 import { CHAT_PAGE_MAX_BYTES } from '../../shared/chat-page'
 import { SESSION_ID_RE } from '../transcript-reader'
 import { isSafeAccountId } from '../claude-accounts-core'
+import { isSafeAccountId as isSafeCodexAccountId } from '../../shared/codex-account'
+import { remoteCodexHome } from '../codex-accounts-core'
+import { remoteCodexHomeExpression, remoteCodexLoginCommand } from './codex-home'
 
 const ACCOUNT_ID_MAX = 128
 const DIRECTORY_LIMIT = 4096
@@ -12,7 +15,9 @@ const DIRECTORY_LIMIT = 4096
 export const STRICT_TRANSCRIPT_PYTHON = String.raw`import os, sys, stat, json, base64, errno, contextlib, re
 class Unsafe(Exception): pass
 def main():
-    home, account, session, limit, before = sys.argv[1:]
+    home, account, session, limit, before = sys.argv[1:6]
+    agent = sys.argv[6] if len(sys.argv) > 6 else "claude"
+    if agent not in ("claude", "codex"): return 65
     limit = int(limit); before = int(before)
     if not all(hasattr(os, flag) for flag in ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK')) or os.open not in os.supports_dir_fd or os.scandir not in os.supports_fd:
         return 69
@@ -29,9 +34,18 @@ def main():
     canonical = os.path.realpath(home)
     chain = []
     with contextlib.ExitStack() as stack:
-        homefd = stack.enter_context(opened(canonical, directory))
+        if agent == 'codex':
+            if not os.path.isabs(home) or '..' in home.split('/'): raise Unsafe()
+            parent = stack.enter_context(opened('/', directory))
+            for part in home.split('/'):
+                if not part or part == '.': continue
+                child = stack.enter_context(opened(part, directory, parent))
+                chain.append((parent, part, child)); parent = child
+            homefd = parent
+        else:
+            homefd = stack.enter_context(opened(canonical, directory))
         root = homefd
-        parts = ['.nodeterm', 'claude-accounts', account, 'projects'] if account else ['.claude', 'projects']
+        parts = (['.nodeterm', 'claude-accounts', account, 'projects'] if account else ['.claude', 'projects']) if agent == 'claude' else ['sessions']
         for part in parts:
             child = stack.enter_context(opened(part, directory, root))
             chain.append((root, part, child)); root = child
@@ -51,27 +65,55 @@ def main():
             for entry in entries:
                 if len(names) >= ${DIRECTORY_LIMIT}: raise OSError()
                 names.append(entry.name)
-        for name in sorted(names):
-            entry = os.stat(name, dir_fd=root, follow_symlinks=False)
+        visited = [len(names)]
+        def inspect(parent, name, depth, prefix):
+            entry = os.stat(name, dir_fd=parent, follow_symlinks=False)
             if stat.S_ISLNK(entry.st_mode): raise Unsafe()
-            if not stat.S_ISDIR(entry.st_mode): continue
-            with opened(name, directory, root) as project:
-                discovered.append((name, version(os.fstat(project))))
-                try: item = os.stat(leaf, dir_fd=project, follow_symlinks=False)
-                except FileNotFoundError: continue
-                if not stat.S_ISREG(item.st_mode): raise Unsafe()
-                matches.append(name)
+            relative = prefix + [name]
+            if not stat.S_ISDIR(entry.st_mode): return
+            with opened(name, directory, parent) as project:
+                discovered.append((relative, version(os.fstat(project))))
+                if depth:
+                    with os.scandir(project) as entries:
+                        for child in entries:
+                            visited[0] += 1
+                            if visited[0] > ${DIRECTORY_LIMIT}: raise OSError()
+                            inspect(project, child.name, depth - 1, relative)
+                else:
+                    leaves = [leaf]
+                    if agent == 'codex':
+                        leaves = []
+                        with os.scandir(project) as entries:
+                            for child in entries:
+                                visited[0] += 1
+                                if visited[0] > ${DIRECTORY_LIMIT}: raise OSError()
+                                if child.name.startswith('rollout-') and child.name.endswith('-' + session + '.jsonl'):
+                                    leaves.append(child.name)
+                    for candidate in leaves:
+                        try: item = os.stat(candidate, dir_fd=project, follow_symlinks=False)
+                        except FileNotFoundError: continue
+                        if not stat.S_ISREG(item.st_mode): raise Unsafe()
+                        matches.append((relative, candidate))
+        for name in sorted(names):
+            inspect(root, name, 2 if agent == 'codex' else 0, [])
         def discovery_current():
             if version(os.fstat(root)) != root_version: raise Unsafe()
-            for name, expected in discovered:
-                if version(os.stat(name, dir_fd=root, follow_symlinks=False)) != expected: raise Unsafe()
+            for names, expected in discovered:
+                with contextlib.ExitStack() as check:
+                    parent = root
+                    for name in names:
+                        parent = check.enter_context(opened(name, directory, parent))
+                    if version(os.fstat(parent)) != expected: raise Unsafe()
         discovery_current()
         if not matches:
             directories_current()
             return 66
         if len(matches) != 1: raise Unsafe()
-        project = stack.enter_context(opened(matches[0], directory, root))
-        chain.append((root, matches[0], project))
+        parent = root
+        for name in matches[0][0]:
+            project = stack.enter_context(opened(name, directory, parent))
+            chain.append((parent, name, project)); parent = project
+        leaf = matches[0][1]
         file = stack.enter_context(opened(leaf, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, project))
         initial = os.fstat(file)
         if not stat.S_ISREG(initial.st_mode): raise Unsafe()
@@ -81,6 +123,11 @@ def main():
             named = os.stat(leaf, dir_fd=project, follow_symlinks=False)
             if not stat.S_ISREG(named.st_mode) or not same(named, initial): raise Unsafe()
         current()
+        if agent == 'codex':
+            header = os.read(file, 65536).split(b'\n', 1)
+            if len(header) != 2: raise Unsafe()
+            meta = json.loads(header[0])
+            if meta.get('type') != 'session_meta' or meta.get('payload', {}).get('id') != session: raise Unsafe()
         size = initial.st_size
         end = size if before < 0 else min(size, before)
         start = max(0, end - limit)
@@ -137,4 +184,16 @@ export function parseStrictTranscriptPage(stdout: string, query: Pick<StrictTran
   if (start !== expectedStart || decoded.length !== end - expectedStart || decoded.toString('base64') !== data)
     throw new Error('ssh-transcript-malformed-range')
   return { data: decoded, start: start as number, size: size as number }
+}
+
+/** Codex uses the remote login environment for its system home and the canonical private
+ * account root for managed accounts. Neither a browser path nor a local config can select it. */
+export function strictCodexTranscriptReadCommand(query: StrictTranscriptRead): string {
+  if (query.accountId !== undefined && (!isSafeCodexAccountId(query.accountId) || query.accountId.length > ACCOUNT_ID_MAX))
+    throw new Error('ssh-transcript-invalid-query')
+  // Validate shared bounds independently of the different Codex account alphabet.
+  strictTranscriptReadCommand({ ...query, accountId: undefined })
+  const home = query.accountId ? posixQuote(remoteCodexHome(query.home, query.accountId)) : remoteCodexHomeExpression(query.home)
+  const args = ['', query.sessionId, String(query.maxBytes), String(query.before ?? -1), 'codex'].map(posixQuote).join(' ')
+  return remoteCodexLoginCommand(`python3 -c ${posixQuote(STRICT_TRANSCRIPT_PYTHON)} ${home} ${args}`)
 }

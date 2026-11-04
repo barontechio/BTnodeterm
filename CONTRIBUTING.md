@@ -1,5 +1,13 @@
 # Contributing to nodeterm
 
+Server SSH owner chat now supports paginated Codex rollouts as well as Claude transcripts.
+Keep the harness-specific adapters separate: a Claude reader must never answer a Codex request.
+Codex discovery uses its remote login CODEX_HOME or canonical managed home, descriptor-relative
+no-follow traversal, a bounded date-tree scan and a matching session_meta header. The shared
+Codex parser handles the returned window. Revalidate saved harness/account/session, connection
+generation and requester lifetime after IO; remote failure never authorizes local history reads.
+This does not grant agent context-link permission or start continuous meters.
+
 Thanks for looking. This file is the short door: enough to get running, plus the house rules that
 actually get a pull request sent back. The long version — every subsystem and the reasoning behind
 its invariants — lives in `CLAUDE.md` at the repo root, which is also loaded automatically if you

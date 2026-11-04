@@ -51,3 +51,27 @@ Validation uses temporary HOME, data directories, tmux namespace and a loopback 
 OpenSSH and the native transport exercise encrypted-key prompts, wrong-tab rejection, quoted file
 writes/reads, managed-account transcript isolation, guest refusal, disconnection and reconnect.
 Production hosts and real account credentials are outside these tests.
+
+
+## Owner Codex conversation pages
+
+With SSH explicitly enabled, connected saved Codex nodes expose paginated conversations through
+`chatReadTranscript` and the existing browser bridge. The Server uses the same Codex window parser
+as Desktop. Claude-shaped history/search and existence calls do not read Codex data.
+
+The host selects the remote system account's login `CODEX_HOME` or the canonical hashed private
+home of the saved, non-pending managed account on that endpoint. No browser-supplied file path or
+account hint can redirect discovery. An optional remote Python 3/POSIX helper opens directories
+without following symlinks, scans at most 4,096 entries under `sessions/YYYY/MM/DD`, refuses duplicate
+matches and verifies the first `session_meta.payload.id`. Missing roots and failed transport are
+unreadable; only a completed empty scan is absence. A page transfers at most 5 MiB plus lookbehind,
+with the existing 30-second, 32-per-reader and two-per-node request bounds. Codex and Claude readers
+have separate pools. Unavailable Python, unusual/symlinked trees or larger catalogs degrade to an
+unreadable page. Archived rollouts are not searched. Existing hosts without this adapter remain
+explicitly unsupported. No new RPC, capability grant, implicit connection or remote installation
+is introduced.
+
+Owner disconnection, RPC completion, account or harness changes and connection replacement revoke
+the read. This owner-only API does not authorize agent context links, quota access or background
+meters; those require separate adapters. Real encrypted-key loopback tests exercise the OpenSSH
+and native transports with managed-account Codex pages and wrong-owner refusal.

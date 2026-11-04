@@ -4,9 +4,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { testTmpDir } from '../test-tmp'
+import { remoteCodexHome } from '../codex-accounts-core'
 import { remoteAccountConfigDirAbs } from '../claude-accounts-core'
 import { posixQuote } from '../../shared/ssh'
-import { parseStrictTranscriptPage, STRICT_TRANSCRIPT_PYTHON, strictTranscriptReadCommand, type StrictTranscriptRead } from './strict-transcript-read'
+import { parseStrictTranscriptPage, strictCodexTranscriptReadCommand, STRICT_TRANSCRIPT_PYTHON, strictTranscriptReadCommand, type StrictTranscriptRead } from './strict-transcript-read'
 
 const run = promisify(execFile)
 const sessionId = '7e2f39a0-0be6-4f64-8657-6905c1508571'
@@ -150,5 +151,61 @@ def changed(name, **kw):
         raise
 os.stat = changed`
     expect(await execute(instrument(f.q, before))).toEqual({ code: 67, stdout: '' })
+  })
+})
+
+
+describe.skipIf(process.platform === 'win32')('strict Codex rollout discovery', () => {
+  function codexFixture() {
+    const home = path.join(testTmpDir('strict-codex-'), "owner's home")
+    const q = query(home, 'managed.account')
+    const root = remoteCodexHome(home, q.accountId)
+    const directory = path.join(root, 'sessions', '2026', '11', '04')
+    fs.mkdirSync(directory, { recursive: true })
+    const file = path.join(directory, `rollout-2026-11-04T00-00-00-${sessionId}.jsonl`)
+    const data = JSON.stringify({ type: 'session_meta', payload: { id: sessionId } }) + '\n' + '0123456789'.repeat(20)
+    fs.writeFileSync(file, data)
+    return { home, q, root, directory, file, data }
+  }
+
+  it('reads the managed hashed home and bounded windows, never the Claude namesake', async () => {
+    const f = codexFixture()
+    for (const before of [null, 40, 0]) {
+      const q = { ...f.q, before }
+      const reply = await execute(strictCodexTranscriptReadCommand(q))
+      expect(reply.code).toBe(0)
+      const parsed = parseStrictTranscriptPage(reply.stdout, q)
+      const end = before ?? f.data.length; const start = Math.max(0, end - q.maxBytes - (end > q.maxBytes ? 1 : 0))
+      expect(parsed.data.toString()).toBe(f.data.slice(start, end))
+    }
+  })
+
+  it('uses the remote system CODEX_HOME without borrowing the default or a managed account', async () => {
+    const f = codexFixture(); const q = { ...f.q, accountId: undefined }
+    const reply = await execute(`CODEX_HOME=${posixQuote(f.root)} ${strictCodexTranscriptReadCommand(q)}`)
+    expect(reply.code).toBe(0)
+    expect(parseStrictTranscriptPage(reply.stdout, q).data.toString()).toBe(f.data.slice(-65))
+  })
+
+  it('checks session_meta and rejects ambiguity, symlinked roots and unavailable trees', async () => {
+    const f = codexFixture()
+    fs.writeFileSync(f.file, JSON.stringify({ type: 'session_meta', payload: { id: 'other' } }) + '\n')
+    expect((await execute(strictCodexTranscriptReadCommand(f.q))).code).toBe(67)
+    fs.writeFileSync(f.file, f.data)
+    const duplicate = path.join(f.directory, `rollout-other-${sessionId}.jsonl`)
+    fs.writeFileSync(duplicate, f.data)
+    expect((await execute(strictCodexTranscriptReadCommand(f.q))).code).toBe(67)
+    fs.unlinkSync(duplicate); fs.unlinkSync(f.file)
+    expect((await execute(strictCodexTranscriptReadCommand(f.q))).code).toBe(66)
+    fs.renameSync(f.root, f.root + '-moved'); fs.symlinkSync(f.root + '-moved', f.root)
+    expect((await execute(strictCodexTranscriptReadCommand(f.q))).code).toBe(67)
+    expect((await execute(strictCodexTranscriptReadCommand({ ...f.q, accountId: 'missing' }))).code).toBe(68)
+  })
+
+  it('rejects a linked date directory and traversal in account ids', async () => {
+    const f = codexFixture()
+    fs.renameSync(f.directory, f.directory + '-moved'); fs.symlinkSync(f.directory + '-moved', f.directory)
+    expect((await execute(strictCodexTranscriptReadCommand(f.q))).code).toBe(67)
+    expect(() => strictCodexTranscriptReadCommand({ ...f.q, accountId: '../elsewhere' })).toThrow('invalid-query')
   })
 })

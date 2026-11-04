@@ -711,6 +711,7 @@ export async function startServer(
     remoteAgentSupported: remoteTranscripts.supported,
     readRemote: (q) => remoteTranscripts.reader.read(q),
     readRemotePage: (q, page) => remoteTranscripts.reader.readPage(q, page),
+    readRemoteCodexPage: (q, page) => remoteTranscripts.codexReader.readPage(q, page),
     remoteExists: (q) => remoteTranscripts.reader.exists(q),
     pathFor: (sessionId) => contextTail.pathFor(sessionId),
     // Codex's ⌘M reader takes ITS tail's hook path (claude's `pathFor` must never answer a codex id).

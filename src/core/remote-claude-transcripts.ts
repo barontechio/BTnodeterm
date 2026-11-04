@@ -4,10 +4,11 @@ import type { SshConnection } from '../shared/ssh'
 import type { TranscriptPresence } from '../shared/types'
 import type { RemoteTranscriptPage, TranscriptQuery } from './transcript-ipc'
 import { SESSION_ID_RE } from './transcript-reader'
-import { parseStrictTranscriptPage, strictTranscriptReadCommand, type StrictTranscriptPage } from './remote-ssh/strict-transcript-read'
+import { parseStrictTranscriptPage, strictTranscriptReadCommand, strictCodexTranscriptReadCommand, type StrictTranscriptPage } from './remote-ssh/strict-transcript-read'
 
 export interface RemoteClaudeTranscriptTarget {
   nodeId: string
+  agentId?: 'claude' | 'codex'
   projectId: string
   sessionId?: string
   accountId?: string
@@ -58,7 +59,7 @@ export class RemoteClaudeTranscripts {
       return await this.deps.withQueuedExecutionCheck(current, async () => {
         const query = { home: captured.home, accountId: captured.accountId, sessionId: q.sessionId!,
           before: page.before, maxBytes: page.maxBytes }
-        const result = await this.deps.run(captured, strictTranscriptReadCommand(query))
+        const result = await this.deps.run(captured, (captured.agentId === 'codex' ? strictCodexTranscriptReadCommand : strictTranscriptReadCommand)(query))
         if (!current()) return 'unreadable'
         if (result.code === 66) return 'absent'
         if (result.code === 67) return 'unsafe'

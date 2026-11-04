@@ -1,5 +1,13 @@
 # CLAUDE.md
 
+Server SSH owner chat now supports paginated Codex rollouts as well as Claude transcripts.
+Keep the harness-specific adapters separate: a Claude reader must never answer a Codex request.
+Codex discovery uses its remote login CODEX_HOME or canonical managed home, descriptor-relative
+no-follow traversal, a bounded date-tree scan and a matching session_meta header. The shared
+Codex parser handles the returned window. Revalidate saved harness/account/session, connection
+generation and requester lifetime after IO; remote failure never authorizes local history reads.
+This does not grant agent context-link permission or start continuous meters.
+
 Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
 planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,
 ordering, card membership and audit diffs also live in shared modules. Renderer compatibility
