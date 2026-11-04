@@ -366,8 +366,8 @@ export class WorktreeRecoveryService {
       const directoryStamp = row.rebind?.directoryStamp ?? `${stat.dev}:${stat.ino}`
       const repository = fs.lstatSync(row.repoPath, { bigint: true })
       const repoStamp = row.rebind?.repoStamp ?? `${repository.dev}:${repository.ino}`
-      const gitEvidence = row.rebind?.git ?? captureWorktreeGitEvidence(row.repoPath)
-      const targetGit = row.rebind?.targetGit ?? captureWorktreeGitEvidence(row.worktreePath)
+      const gitEvidence = row.rebind?.git ?? captureWorktreeGitEvidence(row.repoPath, true)
+      const targetGit = row.rebind?.targetGit ?? captureWorktreeGitEvidence(row.worktreePath, true)
       let expectedRecord = JSON.stringify(row)
       const assertTarget = () => {
         const current = fs.lstatSync(row.worktreePath, { bigint: true })
@@ -376,8 +376,8 @@ export class WorktreeRecoveryService {
           fs.realpathSync.native(row.repoPath) !== row.repoPath || `${current.dev}:${current.ino}` !== directoryStamp)
           throw new Error('The approved new checkout identity changed.')
         fs.accessSync(row.worktreePath, fs.constants.R_OK | fs.constants.X_OK)
-        assertWorktreeGitEvidence(row.repoPath, gitEvidence)
-        assertWorktreeGitEvidence(row.worktreePath, targetGit)
+        assertWorktreeGitEvidence(row.repoPath, gitEvidence, true)
+        assertWorktreeGitEvidence(row.worktreePath, targetGit, true)
       }
       assertTarget()
       const directories = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeRecoveryDirectories!(row.repoPath, assertTarget))

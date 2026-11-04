@@ -413,7 +413,7 @@ export async function writeFileDurableAtomic(target: string, data: string, opts:
 /** Acknowledge bytes already published by an ordinary atomic writer. Recovery calls this under
  * its existing store FIFO before recording completion. No rewrite, symlink following or retry;
  * failed/unsupported flushes remain uncertain. It is not a lock against external writers. */
-export async function syncFileDurable(target: string): Promise<() => void> {
+export async function syncFileDurable(target: string, expectedContent?: string): Promise<() => void> {
   const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
   const parent = path.dirname(target)
   const directory = await fs.open(parent, flags)
@@ -430,7 +430,17 @@ export async function syncFileDurable(target: string): Promise<() => void> {
         namedParent.dev !== parentStat.dev || namedParent.ino !== parentStat.ino)
         throw new Error('durable-sync-file-changed')
     }
-    await current(); await file.sync(); await directory.sync(); await current()
+    await current()
+    if (expectedContent !== undefined) {
+      const expected = Buffer.from(expectedContent, 'utf8')
+      if (original.size !== BigInt(expected.length)) throw new Error('durable-sync-content-changed')
+      const actual = Buffer.alloc(expected.length + 1)
+      const read = await file.read(actual, 0, actual.length, 0)
+      if (read.bytesRead !== expected.length || !actual.subarray(0, read.bytesRead).equals(expected))
+        throw new Error('durable-sync-content-changed')
+      await current()
+    }
+    await file.sync(); await directory.sync(); await current()
     // A later authority publication must still refer to the exact acknowledged files. This
     // receipt does not authorize writes; its caller retains the original host permit and FIFO.
     return () => {

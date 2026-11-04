@@ -10,7 +10,7 @@ const fail = () => new Error('The approved Git repository or linked metadata cha
  * It is not an OS filesystem lock. Supported Git markers/common-dir metadata must be canonical,
  * regular and stable throughout this read; redirects, oversized inventories and special files refuse.
  */
-export function captureWorktreeGitEvidence(repo: string): WorktreeGitEvidence {
+export function captureWorktreeGitEvidence(repo: string, includePrimaryHead = false): WorktreeGitEvidence {
   const facts: unknown[] = []; let bytes = 0
   const directory = (name: string) => {
     const stat = fs.lstatSync(name, { bigint: true })
@@ -53,6 +53,9 @@ export function captureWorktreeGitEvidence(repo: string): WorktreeGitEvidence {
   directory(commonDirectory)
   file(path.join(commonDirectory, 'config'))
   file(path.join(gitDirectory, 'HEAD'))
+  // A saved repository may itself be a linked checkout. The adopted merge target comes
+  // from the primary checkout, whose HEAD must remain part of the original approval.
+  if (includePrimaryHead && commonDirectory !== gitDirectory) file(path.join(commonDirectory, 'HEAD'))
   const inventory = path.join(commonDirectory, 'worktrees')
   let names: string[] = []
   try { directory(inventory); names = fs.readdirSync(inventory).sort() }
@@ -69,8 +72,8 @@ export function captureWorktreeGitEvidence(repo: string): WorktreeGitEvidence {
   }
   return { gitDirectory, commonDirectory, fingerprint: createHash('sha256').update(JSON.stringify(facts)).digest('hex') }
 }
-export function assertWorktreeGitEvidence(repo: string, expected: WorktreeGitEvidence): void {
-  const actual = captureWorktreeGitEvidence(repo)
+export function assertWorktreeGitEvidence(repo: string, expected: WorktreeGitEvidence, includePrimaryHead = false): void {
+  const actual = captureWorktreeGitEvidence(repo, includePrimaryHead)
   if (actual.gitDirectory !== expected.gitDirectory || actual.commonDirectory !== expected.commonDirectory ||
     actual.fingerprint !== expected.fingerprint) throw fail()
 }

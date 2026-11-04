@@ -630,3 +630,94 @@ it.each(['version', 'envelope', 'target', 'members', 'created', 'phase'] as cons
   expect(f.journal.isNodePending('terminal')).toBe(true)
   expect(fs.readFileSync(f.journal.file, 'utf8')).toBe(bytes)
 })
+
+// Independent review regressions: bind durable bytes and the actual primary Git HEAD.
+it.each(['folder', 'appdata', 'inline'] as const)('rejects changed %s serialized group before durability descriptor capture', async storage => {
+  const f = await rebindFixture(storage)
+  const content = storage === 'folder' ? path.join(f.repo, '.nodeterm', 'project.json') : path.join(root, 'data', 'inline-projects', 'project.json')
+  const open = fs.promises.open.bind(fs.promises)
+  let injected = false
+  vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    if (String(args[0]) === content && !injected) {
+      injected = true
+      const data = JSON.parse(fs.readFileSync(content, 'utf8'))
+      const group = data.nodes.find((n: { id: string }) => n.id === 'group')
+      expect(group.worktree?.path).toBe(f.checkout)
+      delete group.worktree
+      group.cwd = f.repo
+      fs.writeFileSync(content, JSON.stringify(data))
+    }
+    return open(...args)
+  })
+  const result = await f.service.rebind(f.row.id, f.owner)
+  expect(injected).toBe(true)
+  const persisted = (await new WorkspaceStore().load({ sideline: false })).projects[0].nodes.find(n => n.id === 'group')
+  expect(persisted?.worktree).toBeUndefined()
+  expect(result, 'must not release a path against metadata that was not durably bound').toMatchObject({ ok: false })
+  expect(f.journal.blocks(f.checkout)).toBe(true)
+})
+
+it('pins the actual primary merge branch when the recorded repoPath is itself a linked checkout', async () => {
+  const f = await missingFixture()
+  const linkedRepo = path.join(root, 'linked-repo')
+  execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'linked-base', linkedRepo], { stdio: 'pipe' })
+  await f.writer.edit(fresh => { fresh.projects[0].nodes.find(n => n.id === 'group')!.worktree!.repoPath = linkedRepo })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true })
+  const row = f.journal.list()[0]
+  expect(row.repoPath).toBe(linkedRepo)
+  execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'feature', f.checkout], { stdio: 'pipe' })
+  f.confirmations.request.mockImplementationOnce(async () => {
+    execFileSync('git', ['-C', f.repo, 'switch', '-c', 'new-main'], { stdio: 'pipe' })
+    return { ok: true, consume: async () => true, current: () => f.owner.active(), cancel() {} }
+  })
+  const result = await f.service.rebind(row.id, f.owner)
+  const actualMain = execFileSync('git', ['-C', f.repo, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
+  expect(actualMain).toBe('new-main')
+  expect(result, 'must refuse the branch change after displaying/approving the old baseRef').toMatchObject({ ok: false })
+  expect(f.store.getNodeForHostAction('group')?.worktree).toBeUndefined()
+})
+
+it('control: the primary repo case detects the same main branch change during consent', async () => {
+  const f = await rebindFixture()
+  f.confirmations.request.mockImplementationOnce(async () => {
+    execFileSync('git', ['-C', f.repo, 'switch', '-c', 'new-main'], { stdio: 'pipe' })
+    return { ok: true, consume: async () => true, current: () => f.owner.active(), cancel() {} }
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false })
+  expect(f.journal.blocks(f.checkout)).toBe(true)
+  expect(f.store.getNodeForHostAction('group')?.worktree).toBeUndefined()
+})
+
+it.each(['folder', 'appdata', 'inline'] as const)('refuses changed %s private execution projection before durability capture', async (storage) => {
+  const f = await rebindFixture(storage); const open = fs.promises.open; let injected = false
+  const index = path.join(root, 'data', 'workspace.json')
+  vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    if (args[0] === index && !injected) {
+      injected = true
+      const bytes = JSON.parse(fs.readFileSync(index, 'utf8'))
+      bytes.entries[0].localExec = {}
+      fs.writeFileSync(index, JSON.stringify(bytes))
+    }
+    return open(...args)
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain', error: expect.stringContaining('durable-sync-content-changed') })
+  expect(injected).toBe(true); expect(f.journal.blocks(f.checkout)).toBe(true)
+  expect(f.journal.list()[0].rebind?.state).toBe('prepared'); expect(f.journal.isNodePending('terminal')).toBe(true)
+})
+
+it.each([false, true])('supports linked repo rebinding while pinning the primary HEAD through final publication (changed=%s)', async (change) => {
+  const f = await missingFixture(); const linked = path.join(root, 'linked-repository')
+  execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'linked-base', linked], { stdio: 'pipe' })
+  await f.writer.edit((fresh) => { fresh.projects[0].nodes.find((n) => n.id === 'group')!.worktree!.repoPath = linked })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true })
+  execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'feature', f.checkout], { stdio: 'pipe' })
+  const mark = f.journal.markRebound.bind(f.journal)
+  if (change) vi.spyOn(f.journal, 'markRebound').mockImplementation(async (...args) => {
+    execFileSync('git', ['-C', f.repo, 'switch', '-c', 'different-primary'], { stdio: 'pipe' })
+    return mark(...args)
+  })
+  expect(await f.service.rebind(f.journal.list()[0].id, f.owner)).toMatchObject({ ok: !change })
+  if (!change) expect(f.store.getNodeForHostAction('group')?.worktree?.baseRef).toBe('main')
+  const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
+  expect(reload.blocks(f.checkout)).toBe(change); expect(reload.isNodePending('terminal')).toBe(true)
+})

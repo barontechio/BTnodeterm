@@ -1311,7 +1311,15 @@ export class WorkspaceStore {
         }
       }
       const receipts: Array<() => void> = []
-      for (const file of files) { this.executionAdmission?.assertCurrent(); receipts.push(await syncFileDurable(file)) }
+      // Pin the serialized projection we intended to save, not whichever bytes an external
+      // writer placed at the path before the durability descriptor was opened.
+      const intended = new Map([...files].map((file) => [file,
+        file === this.indexPath ? JSON.stringify(this.index) : this.lastWritten.get(file)]))
+      for (const file of files) {
+        const content = intended.get(file)
+        if (content === undefined) throw new Error('workspace-repair-serialized-content-unavailable')
+        this.executionAdmission?.assertCurrent(); receipts.push(await syncFileDurable(file, content))
+      }
       this.executionAdmission?.assertCurrent()
       const assertDurable = () => { this.executionAdmission?.assertCurrent(); for (const current of receipts) current() }
       assertDurable()
