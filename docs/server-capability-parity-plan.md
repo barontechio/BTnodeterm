@@ -66,9 +66,12 @@ Host load reached 151 on 32 CPUs; this observation does not explain the original
 No complete aggregate result or causal reader fix is claimed. No repeat full under that load is
 part of this milestone; dedicated CI can supply the next full gate after candidate approval.
 
-Remaining work includes C-phase worktree composition, the standalone ungroup candidate (not yet
-accepted because of a root-project duplicate-ID policy gap), notifications and native pre-auth
-readiness. External worker deployment, mobile behavior and production activation remain unverified.
+The standalone Server v1 ungroup correction `17bf6ade` is accepted in code after 158 focused and
+nine independent checks, typecheck and the Server build. Its duplicate-ID policy gap is fixed;
+installation/activation remains pending. It is a separate minimal legacy upstream backport: this
+canonical branch already implements ungroup through shared geometry and does not import it.
+C-phase worktree composition and notifications remain in progress; native pre-auth readiness is
+pending. External worker deployment, mobile behavior and production activation remain unverified.
 
 The owner has authorized completing the unfinished useful parity work. The current delivery is
 split into isolated worktree/session, SSH, and web/collaboration tracks. Shared contracts and

@@ -37,9 +37,11 @@ CI and coordinator review remain necessary for the merged candidate; production 
 
 The last remote `4c3c9c67` quality/security runs pass with one medium gateway authentication-flow
 warning. The six moderate minimatch packaging-chain audit entries below remain debt. No new scan,
-zero-alert conclusion or remediation of native pre-auth readiness is claimed here. Worktree C,
-standalone ungroup's root-project duplicate-ID policy gap, notifications and external worker/mobile
-verification remain distinct pending work.
+zero-alert conclusion or remediation of native pre-auth readiness is claimed here. The separate legacy Server v1 ungroup correction `17bf6ade` is now accepted in code after 158
+focused and nine independent checks, typecheck and the Server build; its original report and four
+predecessor failures remain evidence. The duplicate-ID gap is fixed, but installation/activation
+is pending. It is not imported here: canonical ungroup already uses shared geometry. Worktree C
+and notifications remain in progress; external worker/mobile verification remains pending.
 
 ## Confirmed follow-up result and gateway redirect guard
 
