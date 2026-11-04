@@ -11472,3 +11472,11 @@ scope, creator proof requires a unique current placement in the recorded project
 close target before any kill and require a currently control-capable source for agent `run` before
 claiming or delivering a launch. Authenticated owner Run now retains its separate unique local
 target and exact-command checks; a plain terminal remains eligible for that explicit owner action.
+
+Clean host worktree removal requires the approved directory stamp and a host dispatch-freshness
+callback. The local Git runner invokes that callback immediately before each subprocess; removal
+also rechecks the canonical inode after asynchronous probes. This is not a filesystem lock against
+external writers. Git's no-force removal deletes ignored files: the conservative host path refuses
+all ignored entries, including directories, without a disposable-filename allowlist. The legacy
+Desktop explicit dirty/force flow is unchanged. These guards supply no owner consent, protected-root
+policy, durable intent or canvas/session recovery; the domain adapter must still provide them.

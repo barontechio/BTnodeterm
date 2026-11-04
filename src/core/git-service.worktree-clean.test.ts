@@ -10,13 +10,19 @@ describe('clean host worktree removal against real Git', () => {
   let repo: string; let checkout: string; let root: string
   const service = new GitService()
   const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
-  const remove = (branch = 'feature') => service.worktreeRemoveClean(repo, checkout, branch, true)
+  const proof = (directory = checkout) => {
+    const stat = fs.lstatSync(directory, { bigint: true })
+    return { directoryStamp: `${stat.dev}:${stat.ino}`, assertCurrent() {} }
+  }
+  let approved: ReturnType<typeof proof>
+  const remove = (branch = 'feature') => service.worktreeRemoveClean(repo, checkout, branch, true, approved)
   beforeEach(() => {
     root = fs.realpathSync(testTmpDir('worktree-clean-')); repo = path.join(root, 'repo'); checkout = path.join(root, 'checkout')
     fs.mkdirSync(repo)
     git('init', '-b', 'main'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid')
     fs.writeFileSync(path.join(repo, 'tracked'), 'base'); git('add', 'tracked'); git('commit', '-m', 'base')
     git('worktree', 'add', '-b', 'feature', checkout)
+    approved = proof()
   })
   afterEach(() => setGitRemoteResolver(null))
 
@@ -36,7 +42,7 @@ describe('clean host worktree removal against real Git', () => {
     expect(await remove()).toMatchObject({ ok: false })
     git('worktree', 'unlock', checkout)
     expect(await remove('another-branch')).toMatchObject({ ok: false })
-    expect(await service.worktreeRemoveClean(checkout, repo, 'main', true)).toMatchObject({ ok: false })
+    expect(await service.worktreeRemoveClean(checkout, repo, 'main', true, proof(repo))).toMatchObject({ ok: false })
     expect(fs.readFileSync(path.join(repo, 'tracked'), 'utf8')).toBe('base')
     expect(fs.readFileSync(path.join(checkout, 'tracked'), 'utf8')).toBe('base')
   })
@@ -69,6 +75,50 @@ describe('clean host worktree removal against real Git', () => {
     }
     expect(git('worktree', 'list', '--porcelain')).toContain(checkout)
     expect(git('branch', '--list', 'feature')).toContain('feature')
+  })
+
+  it('shows that raw no-force Git discards ignored data, while the guarded path preserves all ignored entries', async () => {
+    fs.writeFileSync(path.join(repo, '.git', 'info', 'exclude'), '.env\ncache/\n')
+    fs.writeFileSync(path.join(checkout, '.env'), 'private settings')
+    fs.mkdirSync(path.join(checkout, 'cache'))
+    fs.writeFileSync(path.join(checkout, 'cache', 'data'), 'valuable data')
+    expect(await remove()).toMatchObject({ ok: false, message: expect.stringContaining('Ignored files') })
+    expect(fs.readFileSync(path.join(checkout, '.env'), 'utf8')).toBe('private settings')
+    expect(fs.readFileSync(path.join(checkout, 'cache', 'data'), 'utf8')).toBe('valuable data')
+    git('worktree', 'remove', '--', checkout)
+    expect(fs.existsSync(checkout)).toBe(false)
+  })
+
+  it('refuses a replacement inode rather than approving the directory found at invocation time', async () => {
+    fs.renameSync(checkout, path.join(root, 'original'))
+    fs.mkdirSync(checkout)
+    fs.writeFileSync(path.join(checkout, 'keep'), 'replacement')
+    expect(await remove()).toMatchObject({ ok: false })
+    expect(fs.readFileSync(path.join(checkout, 'keep'), 'utf8')).toBe('replacement')
+    expect(git('branch', '--list', 'feature')).toContain('feature')
+  })
+
+  it('checks owner dispatch freshness after asynchronous Git inspection and before deletion', async () => {
+    let checks = 0
+    approved.assertCurrent = () => { if (++checks >= 4) throw new Error('owner expired') }
+    expect(await remove()).toMatchObject({ ok: false })
+    expect(checks).toBeGreaterThanOrEqual(4)
+    expect(fs.readFileSync(path.join(checkout, 'tracked'), 'utf8')).toBe('base')
+    expect(git('branch', '--list', 'feature')).toContain('feature')
+  })
+
+  it('rechecks the approved inode at the final dispatch after the ignored-file probe', async () => {
+    let checks = 0
+    approved.assertCurrent = () => {
+      if (++checks !== 4) return
+      fs.renameSync(checkout, path.join(root, 'original'))
+      fs.mkdirSync(checkout)
+      fs.writeFileSync(path.join(checkout, 'keep'), 'replacement')
+    }
+    expect(await remove()).toMatchObject({ ok: false })
+    expect(checks).toBe(4)
+    expect(fs.readFileSync(path.join(checkout, 'keep'), 'utf8')).toBe('replacement')
+    expect(fs.readFileSync(path.join(root, 'original', 'tracked'), 'utf8')).toBe('base')
   })
 
   it('refuses a remotely routed repository before local filesystem checks', async () => {

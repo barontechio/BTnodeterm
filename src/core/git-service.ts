@@ -101,16 +101,18 @@ interface Exec {
   err: string
 }
 
-async function git(cwd: string, args: string[]): Promise<Exec> {
+async function git(cwd: string, args: string[], beforeLocalDispatch?: () => void): Promise<Exec> {
   // SSH projects route every pure-git op over the project's ControlMaster. runRemoteGit returns
   // the same { ok, out, err } shape, so the rest of GitService is transport-agnostic. Local path
   // (and gh ops) are untouched when no remote owns this cwd.
   const ref = resolveGitRemote(cwd)
   if (ref) {
+    if (beforeLocalDispatch) return { ok: false, out: '', err: 'Guarded local Git cannot route remotely.' }
     const r = await runRemoteGit(ref, cwd, args, 20 * 1024 * 1024)
     return { ok: r.ok, out: r.out, err: r.err }
   }
   try {
+    beforeLocalDispatch?.()
     const { stdout } = await run('git', args, { cwd, env: GIT_ENV, maxBuffer: 20 * 1024 * 1024 })
     return { ok: true, out: stdout.replace(/\n$/, ''), err: '' }
   } catch (e) {
@@ -367,22 +369,36 @@ export class GitService {
 
   /** Host domain entry, intentionally absent from generic Git IPC. No dirty-removal escape. */
   async worktreeRemoveClean(repoPath: string, wtPath: string, expectedBranch: string,
-    deleteBranch: boolean): Promise<worktreeOps.WorktreeOpResult> {
+    deleteBranch: boolean, proof: { directoryStamp: string; assertCurrent(): void }): Promise<worktreeOps.WorktreeOpResult> {
     if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return REMOTE_WORKTREE_REFUSAL()
     try {
-      const root = await fs.promises.realpath(wtPath)
-      const stat = await fs.promises.lstat(wtPath)
-      // Do not let a renamed/replaced symlink turn a saved binding into another directory.
-      if (!stat.isDirectory() || stat.isSymbolicLink() || path.resolve(wtPath) !== root)
-        return { ok: false, message: 'The worktree path is redirected or is not a local directory.' }
+      // Capture the host approval before any asynchronous probe. Never adopt a replacement inode.
+      const approvedStamp = proof.directoryStamp
+      const assertCurrent = proof.assertCurrent
+      const checkDirectory = () => {
+        const stat = fs.lstatSync(wtPath, { bigint: true })
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0n ||
+          `${stat.dev}:${stat.ino}` !== approvedStamp || fs.realpathSync.native(wtPath) !== path.resolve(wtPath))
+          throw new Error('The approved worktree directory changed before removal.')
+      }
+      assertCurrent(); checkDirectory()
       const checkedGit: worktreeOps.GitExecutor = async (directory, args) => {
-        if (args[0] === 'worktree' && args[1] === 'remove') {
-          const fresh = await fs.promises.lstat(wtPath)
-          if (!fresh.isDirectory() || fresh.dev !== stat.dev || fresh.ino !== stat.ino || await fs.promises.realpath(wtPath) !== root)
-            return { ok: false, out: '', err: 'The worktree directory changed before removal.' }
+        const removing = args[0] === 'worktree' && args[1] === 'remove'
+        if (removing) {
+          // Git's no-force check does NOT preserve ignored files. Refuse every ignored entry,
+          // including directories; no filename allowlist can establish that their contents are disposable.
+          const ignored = await git(wtPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], () => {
+            assertCurrent(); checkDirectory()
+          })
+          if (!ignored.ok || ignored.out.length) return { ok: false, out: '',
+            err: 'Ignored files may be removed by Git. Move them outside the checkout before clean removal.' }
         }
         if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return { ok: false, out: '', err: REMOTE_WORKTREE_REFUSAL().message }
-        return git(directory, args)
+        return git(directory, args, () => {
+          // Runs synchronously immediately before execFile, after every asynchronous probe.
+          assertCurrent()
+          if (removing) checkDirectory()
+        })
       }
       return await worktreeOps.worktreeRemoveClean(checkedGit, repoPath, wtPath, os.homedir(), expectedBranch, deleteBranch,
         async (directory) => {
