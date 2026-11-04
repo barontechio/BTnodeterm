@@ -1,3 +1,4 @@
+import { registerDevelopmentPreviewService } from './development-preview-service'
 import { subagentReplay } from '../core/subagent-replay'
 import fs from 'fs'
 import { readAgentSessionName } from '../core/agent-session-name'
@@ -432,6 +433,10 @@ export async function startServer(
   const webPreviews = config.previewOrigin && config.publicOrigin ?
     new WebPreviews(config.previewOrigin, config.publicOrigin, workspaceStore, platform.userDataDir) : undefined
   registerWebPreviewIpc(platform, webPreviews)
+  const developmentPreviews = registerDevelopmentPreviewService({
+    platform, workspace: workspaceStore, pty: ptyManager, config: config.developmentPreviews,
+    appOrigin: config.publicOrigin, managementPorts: () => [config.port, hookServer.getPort()]
+  })
   const { gitService } = registerCoreHandlers(platform, {
     getSettings: () => settingsStore.get(),
     gitRequestScope: gitRouting.run,
@@ -1155,6 +1160,7 @@ export async function startServer(
     remoteTranscripts.forgetClient(uiId)
     mediaReferences.forgetClient(uiId)
     webPreviews?.forgetClient(uiId)
+    developmentPreviews.forgetClient(uiId)
     ptyManager.dropClient(uiId)
     github.service.dropClient(uiId)
   }
@@ -1382,6 +1388,7 @@ export async function startServer(
         worktreeRecoveryOwners.dispose()
         codexAccounts.dispose()
         webPreviews?.dispose()
+        developmentPreviews.stop()
         // Kill any in-flight setup/archive run: it is a detached process group, so nothing else in
         // this teardown reaches it. Same call, same reason, in the serving branch's close() below.
         projectSetupService.disposeAll()
@@ -1431,13 +1438,15 @@ export async function startServer(
       publicOrigin: config.publicOrigin,
       downloadTickets,
       mediaReferences,
-      webPreviews
+      webPreviews,
+      developmentPreviews: developmentPreviews.transport
     })
   )
   // A closed browser tab is the NORMAL way to leave the Server Edition and sends no `pty:kill`,
   // so the WS close hook is what unsubscribes that client from the sessions it was watching.
   const wsServer = attachWsServer(server, {
     previewOrigin: config.previewOrigin,
+    developmentPreviews: developmentPreviews.transport,
     platform,
     auth,
     onClientGone: dropUiClient,
@@ -1467,6 +1476,7 @@ export async function startServer(
       worktreeRecoveryOwners.dispose()
       codexAccounts.dispose()
       webPreviews?.dispose()
+      developmentPreviews.stop()
       // Kill any in-flight setup/archive run first: it is a detached process group (setsid), so
       // neither the WS teardown nor ptyManager.killAll() below would ever reach it.
       projectSetupService.disposeAll()

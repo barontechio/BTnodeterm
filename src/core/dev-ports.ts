@@ -304,16 +304,19 @@ function namesAgree(toolName: string, psName: string | undefined): boolean {
 }
 
 /** `node id → ports`, from the three facts. Pure. */
+/** Host-private association evidence; never added to DevPortsReport or the public scan RPC. */
+export interface DevPortOwner { nodeId: string; panePid: number; pid: number; port: number; address: string }
 export function assembleDevPorts(
   panes: readonly PaneRef[],
   procs: readonly ProcRow[],
-  listeners: readonly Listener[]
+  listeners: readonly Listener[],
+  observe?: (owner: DevPortOwner) => void
 ): Record<string, DevPort[]> {
   const { kids } = indexProcesses(procs.map((p) => ({ pid: p.pid, ppid: p.ppid, rssKb: 0 })))
   const commandOf = new Map(procs.map((p) => [p.pid, p.command]))
   // pid → owning node. Every pane of a session counts (a session can carry a lead pane), and a
   // `seen` set guards the walk against a cyclic ppid chain captured mid-recycle.
-  const owner = new Map<number, string>()
+  const owner = new Map<number, { nodeId: string; panePid: number }>()
   for (const pane of panes) {
     if (!pane.session.startsWith('nt-')) continue
     const nodeId = pane.session.slice('nt-'.length)
@@ -322,7 +325,7 @@ export function assembleDevPorts(
     while (stack.length > 0) {
       const pid = stack.pop() as number
       if (owner.has(pid)) continue
-      owner.set(pid, nodeId)
+      owner.set(pid, { nodeId, panePid: pane.panePid })
       for (const k of kids.get(pid) ?? []) stack.push(k)
     }
   }
@@ -331,7 +334,8 @@ export function assembleDevPorts(
     const holder = l.owners.find((o) => owner.has(o.pid) && namesAgree(o.command, commandOf.get(o.pid)))
     if (holder === undefined) continue
     const pid = holder.pid
-    const nodeId = owner.get(pid) as string
+    const { nodeId, panePid } = owner.get(pid)!
+    observe?.({ nodeId, panePid, pid, port: l.port, address: l.address })
     let ports = byNode.get(nodeId)
     if (!ports) byNode.set(nodeId, (ports = new Map()))
     const existing = ports.get(l.port)
@@ -360,7 +364,7 @@ const fail = (reason: DevPortsReport['reason']): DevPortsReport => ({ ok: false,
  *  - no tmux socket answered (see `parseFencedPanes` — "no server running" IS an answer);
  *  - a listener tool that failed (`ss` non-zero; `lsof` non-zero WITH output).
  */
-export function parseDevPortsProbe(stdout: string, sockets: readonly string[] = DEV_PORT_SOCKETS): DevPortsReport {
+export function parseDevPortsProbe(stdout: string, sockets: readonly string[] = DEV_PORT_SOCKETS, observe?: (owner: DevPortOwner) => void): DevPortsReport {
   const lines = stdout.split('\n').map((l) => l.replace(/\r$/, ''))
   const iPanes = lines.indexOf(PANES)
   const iProcs = lines.indexOf(PROCS)
@@ -405,7 +409,7 @@ export function parseDevPortsProbe(stdout: string, sockets: readonly string[] = 
   }
 
   // Both sockets print into one section; first pane of a (session, pid) is enough.
-  return { ok: true, nodes: assembleDevPorts(panes, procs, listeners) }
+  return { ok: true, nodes: assembleDevPorts(panes, procs, listeners, observe) }
 }
 
 /**
@@ -568,6 +572,8 @@ export async function collectWin32DevPorts(
 export interface LocalDevPortsOptions {
   /** The app's tmux (`PtyManager.getTmuxBin()`); null = no tmux, so there is no pane tree at all. */
   tmuxBin: () => string | null
+  /** Optional host-private evidence observer for the local POSIX probe. */
+  observe?: (owner: DevPortOwner) => void
   exec?: (command: string) => Promise<string>
   platformName?: NodeJS.Platform
   /**
@@ -608,7 +614,7 @@ export async function collectLocalDevPorts(opts: LocalDevPortsOptions): Promise<
       return stdout
     })
   try {
-    return parseDevPortsProbe(await exec(devPortsProbeCommand({ tmuxBin })))
+    return parseDevPortsProbe(await exec(devPortsProbeCommand({ tmuxBin })), DEV_PORT_SOCKETS, opts.observe)
   } catch {
     return fail('unreachable')
   }

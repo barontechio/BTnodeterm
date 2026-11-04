@@ -1,3 +1,5 @@
+import { parseApprovedDevelopmentServices } from '../core/development-preview-authority'
+import type { DevelopmentPreviewConfig } from './development-preview-service'
 import os from 'os'
 import { parseControlScope, type ControlScope } from './control-scope'
 import path from 'path'
@@ -91,6 +93,7 @@ export type ServerConfig = {
   publicOrigin?: string
   /** Optional isolated HTTPS hostname for self-contained HTML previews. */
   previewOrigin?: string
+  developmentPreviews?: DevelopmentPreviewConfig
   /**
    * TEST ONLY: an in-process relay transport for each hosted-team listener, in place of the real
    * WebSocket to the relay. Passed straight to `createHostedService`'s `transport`.
@@ -299,8 +302,17 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
 
   const publicOriginRaw = pick('public-origin', 'NODETERM_PUBLIC_ORIGIN', '')
   const publicOrigin = publicOriginRaw !== '' ? parsePublicOrigin(publicOriginRaw) : undefined
+  const devPreviewOrigin = pick('development-preview-origin', 'NODETERM_DEV_PREVIEW_ORIGIN', '')
+  const devPreviewTargets = pick('development-preview-targets', 'NODETERM_DEV_PREVIEW_TARGETS', '')
+  if (!!devPreviewOrigin !== !!devPreviewTargets || (devPreviewOrigin && !publicOrigin)) throw new Error('Development previews require public origin, isolated origin and explicit approved targets')
+  const developmentPreviews = devPreviewOrigin ? { origin: parsePublicOrigin(devPreviewOrigin, 'NODETERM_DEV_PREVIEW_ORIGIN'), approved: parseApprovedDevelopmentServices(devPreviewTargets) } : undefined
   const previewRaw = pick('preview-origin', 'NODETERM_PREVIEW_ORIGIN', '')
   const previewOrigin = previewRaw ? parsePublicOrigin(previewRaw, 'NODETERM_PREVIEW_ORIGIN') : undefined
+  if (developmentPreviews && previewOrigin) {
+    const base = new URL(developmentPreviews.origin).hostname
+    const snapshot = new URL(previewOrigin).hostname
+    if (snapshot === base || snapshot.endsWith(`.${base}`)) throw new Error('Static previews cannot use the reserved development preview hostname suffix')
+  }
   if (previewOrigin && (!publicOrigin || new URL(previewOrigin).hostname === new URL(publicOrigin).hostname)) {
     throw new Error('NODETERM_PREVIEW_ORIGIN requires NODETERM_PUBLIC_ORIGIN and a distinct hostname; changing only the port does not isolate cookies.')
   }
@@ -316,6 +328,7 @@ export function resolveConfig(env: NodeJS.ProcessEnv, argv: string[]): ServerCon
     ...(trustProxyRefused !== undefined ? { trustProxyRefused } : {}),
     ...(publicOrigin !== undefined ? { publicOrigin } : {}),
     ...(previewOrigin !== undefined ? { previewOrigin } : {}),
+    ...(developmentPreviews ? { developmentPreviews } : {}),
     headless,
     canvasControl,
     sshProjects,

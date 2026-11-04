@@ -4629,6 +4629,7 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  developmentPreviews?: import('./development-preview').DevelopmentPreviewApi
   devPorts: import('./dev-ports').DevPortsApi
   /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
   recentConversations: import('./recent-conversations').RecentConversationsApi

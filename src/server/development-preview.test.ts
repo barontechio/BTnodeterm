@@ -17,17 +17,23 @@ async function fixture() {
   const seen: http.IncomingHttpHeaders[] = []
   const upstream = http.createServer((req, res) => {
     seen.push(req.headers)
+    if (req.url === '/stream') {
+      res.write('first'); const timer = setTimeout(() => res.end('late'), 50)
+      res.once('close', () => clearTimeout(timer)); return
+    }
     if (req.url === '/redirect') res.setHeader('Location', '/next')
     if (req.url === '/escape') res.setHeader('Location', 'http://127.0.0.1:1/admin')
-    res.setHeader('Set-Cookie', 'secret=bad; Domain=preview.example')
+    res.setHeader('Set-Cookie', 'secret=bad; Domain=preview.example.net')
     res.writeHead(req.url === '/redirect' || req.url === '/escape' ? 302 : 200)
     res.end('development app')
   })
   const wss = new WebSocketServer({ server: upstream })
   wss.on('connection', (ws, req) => { seen.push(req.headers); ws.on('message', data => ws.send(data)) })
   const port = await listen(upstream)
+  let connected = true
+  let current = true
   let target: DevelopmentTarget | null = { projectId: 'project', nodeId: 'node', generation: 'g1', processIdentity: 'pid:birth:socket', hostIdentity: 'local', address: '127.0.0.1', port }
-  const previews = new DevelopmentPreviews('https://preview.example', 'https://app.example', { resolve: async (owner, record) => owner === 'owner' && record === 'record' ? target : null })
+  const previews = new DevelopmentPreviews('https://preview.example.net', 'https://app.example.com', { current: () => current, connected: async () => connected, resolve: async (owner, record) => owner === 'owner' && record === 'record' ? target : null })
   const transport = new DevelopmentPreviewTransport(previews)
   const gateway = http.createServer((req, res) => { void transport.handle(req, res) })
   gateway.on('upgrade', (req, socket, head) => { void transport.upgrade(req, socket, head) })
@@ -40,12 +46,12 @@ async function fixture() {
       let body = ''; res.on('data', c => { body += c }); res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers, body }))
     }).on('error', reject)
   })
-  return { seen, previews, origin, host, gatewayPort, request, replace: () => { target = { ...target!, processIdentity: 'replacement' } } }
+  return { seen, previews, origin, host, gatewayPort, request, denyCurrent: () => { current = false }, denyConnection: () => { connected = false }, replace: () => { target = { ...target!, processIdentity: 'replacement' } } }
 }
 describe('development preview transport with real HTTP/WS listeners', () => {
   it('serves only approved records, strips credentials and isolates service storage', async () => {
     const f = await fixture()
-    const response = await f.request('/', { cookie: 'nodeterm=secret', authorization: 'Bearer secret', 'x-debug-token': 'secret', 'x-forwarded-host': 'app.example' })
+    const response = await f.request('/', { cookie: 'nodeterm=secret', authorization: 'Bearer secret', 'x-debug-token': 'secret', 'x-forwarded-host': 'app.example.com' })
     expect(response.status).toBe(200)
     expect(response.body).toBe('development app')
     expect(response.headers['set-cookie']).toBeUndefined()
@@ -54,8 +60,13 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     expect(f.seen[0].host).not.toBe(f.host)
     expect(await f.previews.issue('owner', 'record')).not.toBe(f.origin)
     await expect(f.previews.issue('peer', 'record')).rejects.toThrow()
-    expect((await f.request('/', { host: 'app.example' })).status).toBe(403)
+    expect((await f.request('/', { host: 'app.example.com' })).status).toBe(403)
     expect((await f.request('/', { origin: 'https://evil.example' })).status).toBe(400)
+  })
+  it('sends no HTTP request bytes when the accepted socket identity is refused', async () => {
+    const f = await fixture(); f.denyConnection()
+    expect((await f.request()).status).toBe(403)
+    expect(f.seen).toHaveLength(0)
   })
   it('rewrites same-target redirects and refuses other targets and changed processes', async () => {
     const f = await fixture()
@@ -78,6 +89,24 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     await closed
     expect((await f.request()).status).toBe(403)
   })
+  it('does not deliver later HTTP response chunks after authorization changes', async () => {
+    const f = await fixture()
+    const body = await new Promise<string>((resolve, reject) => {
+      http.get({ host: '127.0.0.1', port: f.gatewayPort, path: '/stream', headers: { host: f.host } }, response => {
+        let text = ''
+        response.on('data', chunk => { text += chunk; f.denyCurrent() })
+        response.on('error', () => {})
+        response.on('close', () => resolve(text))
+      }).on('error', reject)
+    })
+    expect(body).toBe('first')
+  })
+  it('rechecks synchronous authorization before forwarding a WebSocket message', async () => {
+    const f = await fixture()
+    const client = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/hmr`, { headers: { host: f.host, origin: 'null' } })
+    cleanup.push(() => client.terminate()); await once(client, 'open')
+    const closed = once(client, 'close'); f.denyCurrent(); client.send('must not forward'); await closed
+  })
   it('keeps earlier WebSockets tracked after another grant is issued', async () => {
     const f = await fixture()
     const client = new WebSocket(`ws://127.0.0.1:${f.gatewayPort}/hmr`, { headers: { host: f.host, origin: f.origin } })
@@ -94,7 +123,7 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     const target: DevelopmentTarget = { projectId: 'p', nodeId: 'n', generation: 'g', processIdentity: 'birth', hostIdentity: 'local', address: '127.0.0.1', port: 3000 }
     let resume: ((value: DevelopmentTarget) => void) | undefined
     let delay = false
-    const previews = new DevelopmentPreviews('https://preview.example', 'https://app.example', {
+    const previews = new DevelopmentPreviews('https://preview.example.net', 'https://app.example.com', {
       resolve: async () => delay ? new Promise(resolve => { resume = resolve }) : target
     })
     cleanup.push(() => previews.stop())
@@ -106,8 +135,8 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     previews.revoke('owner', origins[0]); resume!(target)
     expect(await pending).toBeNull()
     expect(previews.ownsHost(new URL(origins[0]).host)).toBe(true)
-    expect(previews.ownsHost('preview.example.attacker.example')).toBe(false)
-    expect(previews.ownsHost('evil@x.preview.example')).toBe(false)
+    expect(previews.ownsHost('preview.example.net.attacker.example')).toBe(false)
+    expect(previews.ownsHost('evil@x.preview.example.net')).toBe(false)
   })
   it('rejects WebSocket requests from a foreign origin before contacting upstream', async () => {
     const f = await fixture()
@@ -120,7 +149,7 @@ describe('development preview transport with real HTTP/WS listeners', () => {
     let release!: (target: DevelopmentTarget) => void
     let now = 0
     const target: DevelopmentTarget = { projectId: 'p', nodeId: 'n', generation: 'g', processIdentity: 'birth', hostIdentity: 'local', address: '127.0.0.1', port: 3000 }
-    const previews = new DevelopmentPreviews('https://preview.example', 'https://app.example', { resolve: () => new Promise(resolve => { release = resolve }) }, () => now)
+    const previews = new DevelopmentPreviews('https://preview.example.net', 'https://app.example.com', { resolve: () => new Promise(resolve => { release = resolve }) }, () => now)
     cleanup.push(() => previews.stop())
     const pending = previews.issue('owner', 'record')
     previews.forgetOwner('owner'); release(target)

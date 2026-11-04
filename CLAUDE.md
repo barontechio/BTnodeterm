@@ -16,12 +16,13 @@ Codex parser handles the returned window. Revalidate saved harness/account/sessi
 generation and requester lifetime after IO; remote failure never authorizes local history reads.
 This does not grant agent context-link permission or start continuous meters.
 
-Development preview transport is not enabled yet. `core/development-previews.ts` requires a
-host-only approved-record authority with fresh process/socket and execution-generation proof;
-`DevPortsReport` alone is not that proof. Keep static HTML previews script-disabled. See
-`docs/development-preview-gateway.md` for deployment, credential filtering and remaining gates.
-Grant origins require DNS bases (never IP literals); verify subdomain assignment and reject key
-collisions so no live connection can be orphaned by grant replacement.
+Development previews are opt-in: Linux/tmux/IPv4, operator-approved exact project/node/port/argv
+records, fresh process/pane birth and listener identity, and accepted-socket proof before HTTP/WS
+bytes. The optional owner namespace never reaches relay guests. Keep static HTML script-disabled.
+Use separate PSL-validated registrable domains and opaque sandboxed active previews; cookies,
+storage and workers are unavailable. DNS grant names must never replace a live registry entry.
+Disabled mode starts no discovery or gateway. See `docs/development-preview-gateway.md` for the
+configuration, deployment acceptance and unsupported SSH/platform/storage cases.
 
 Canvas parity services: `shared/geometry-command.ts` and `shared/board-assignment.ts` are the pure
 planners used by Desktop and Server. Geometry uses `shared/canvas-geometry.ts`; board projection,

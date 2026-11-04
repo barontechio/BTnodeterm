@@ -1,3 +1,4 @@
+import type { DevelopmentPreviewTransport } from './development-preview'
 // Plain node:http request handler for the server edition.
 // Deliberately NOT Fastify: the handler surface is tiny (a handful of auth
 // routes + static renderer serving), it must be embeddable in an existing
@@ -73,6 +74,7 @@ export interface HttpHandlerOpts {
   downloadTickets?: DownloadTickets
   mediaReferences?: MediaReferences
   webPreviews?: WebPreviews
+  developmentPreviews?: DevelopmentPreviewTransport
   /**
    * NODETERM_PUBLIC_ORIGIN (an https origin, normalized). When set the session cookie is always
    * `Secure`, every response carries HSTS, and an `Origin` equal to it passes the same-origin check
@@ -472,6 +474,11 @@ export function createHttpHandler(
     const url = new URL(req.url || '/', 'http://x')
     const pathname = url.pathname
     const method = req.method || 'GET'
+
+    if (opts.developmentPreviews?.ownsHost(req.headers.host ?? '')) {
+      await opts.developmentPreviews.handle(req, res)
+      return
+    }
 
     if (webPreviews && previewHost(req, webPreviews.origin)) {
       await handleWebPreview(req, res, webPreviews)

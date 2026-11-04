@@ -269,6 +269,16 @@ export function buildMediaApi(client: RpcClient): Pick<NodeTerminalApi, 'media'>
   } }
 }
 
+export function buildDevelopmentPreviewApi(client: RpcClient): Pick<NodeTerminalApi, 'developmentPreviews'> {
+  return { developmentPreviews: {
+    status: () => (client.request(IPC.developmentPreviewStatus) as ReturnType<NonNullable<NodeTerminalApi['developmentPreviews']>['status']>)
+      .catch(() => ({ supported: false, reason: 'Development previews are unavailable on this host.', storage: 'disabled' as const })),
+    list: scope => client.request(IPC.developmentPreviewList, scope) as ReturnType<NonNullable<NodeTerminalApi['developmentPreviews']>['list']>,
+    open: record => client.request(IPC.developmentPreviewOpen, record) as Promise<string>,
+    stop: origin => client.request(IPC.developmentPreviewStop, origin) as Promise<void>
+  } }
+}
+
 export function buildWebPreviewApi(client: RpcClient): Pick<NodeTerminalApi, 'webPreview'> {
   const token = (url: string) => {
     try { const parsed = new URL(url); return parsed.pathname === '/web-preview' ? parsed.searchParams.get('ref') ?? '' : '' } catch { return '' }
@@ -1643,6 +1653,7 @@ export async function installWsBridge(): Promise<boolean> {
     ...buildControlApi(client),
     ...buildMediaApi(client),
     ...buildWebPreviewApi(client),
+    ...buildDevelopmentPreviewApi(client),
     ...buildOwnerConfirmationApi(client),
     ...buildTranscriptSearchApi(client),
     ...buildBoardCommentDeliveryApi(client, stubApi.agentMessage),

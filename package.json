@@ -200,7 +200,8 @@
     "ssh2": "^1.17.0",
     "tweetnacl": "^1.0.3",
     "ws": "^8.21.3",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.15",
+    "tldts": "7.4.10"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.2.1",

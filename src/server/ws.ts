@@ -1,3 +1,4 @@
+import type { DevelopmentPreviewTransport } from './development-preview'
 // Authenticated WebSocket endpoint for the Server Edition.
 //
 // Attaches a `WebSocketServer({ noServer: true })` to an existing http.Server and
@@ -81,6 +82,7 @@ export interface WsServerOpts {
   /** NODETERM_PUBLIC_ORIGIN — an `Origin` equal to it passes the same-origin check (see origin.ts). */
   publicOrigin?: string
   previewOrigin?: string
+  developmentPreviews?: DevelopmentPreviewTransport
 }
 
 /**
@@ -176,6 +178,11 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
   server.on('close', () => clearInterval(heartbeat))
 
   server.on('upgrade', (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (opts.developmentPreviews?.ownsHost(req.headers.host ?? '')) {
+      socket.on('error', () => {})
+      void opts.developmentPreviews.upgrade(req, socket, head).catch(() => socket.destroy())
+      return
+    }
     // Only handle our path; a mismatched path is left for any other upgrade
     // listener (and, if none, the socket eventually times out / is destroyed by node).
     const pathname = new URL(req.url || '/', 'http://x').pathname
