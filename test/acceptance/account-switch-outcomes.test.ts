@@ -50,14 +50,14 @@ describe('existing Codex choreography with real temporary exposure and lost boun
     expect(facts.metadataRequested).toBe(stage !== 'commit')
     expect(codexSwitchNotice(facts).text).not.toMatch(/rolled back|Nothing was changed|conversation resumed/i)
     expect(codexSwitchNotice(facts).kind).toBe('error')
-    if (stage === 'finish') expect(codexSwitchNotice(facts).text).toContain('finalization was not confirmed')
+    if (stage === 'finish') expect(codexSwitchNotice(facts).text).toContain('could not be confirmed as finished')
   })
   it('releases a stale prepared reservation before commit, without claiming preparation had no effects', async () => {
     const f = local(fail); f.deps.eligible = () => false
     const facts = (await runCodexSwitch(f.deps))!
     expect(f.reserved()).toBe(false); expect(f.deps.commit).not.toHaveBeenCalled()
     expect(f.deps.restart).not.toHaveBeenCalled(); expect(facts.stale).toBe(true)
-    expect(codexSwitchNotice(facts).text).toContain('before the account switch was committed')
+    expect(codexSwitchNotice(facts).text).toContain('Sharing the conversation with the other account was not requested')
   })
   it('does not retry a failed release or negate pre-commit staleness', async () => {
     const f = local(fail); f.deps.eligible = () => false; f.deps.release.mockImplementation(async () => fail())
@@ -68,7 +68,7 @@ describe('existing Codex choreography with real temporary exposure and lost boun
   it('reports preparation failure without claiming no daemon effects', async () => {
     const f = local(fail); f.deps.prepare.mockImplementation(async () => fail())
     const facts = (await runCodexSwitch(f.deps))!
-    expect(codexSwitchNotice(facts).text).toContain('may have started account services')
+    expect(codexSwitchNotice(facts).text).toContain('could not be prepared')
     expect(f.deps.commit).not.toHaveBeenCalled(); expect(f.deps.release).not.toHaveBeenCalled()
   })
   it('preserves normal order and describes renderer completion without verified resume', async () => {
@@ -79,7 +79,7 @@ describe('existing Codex choreography with real temporary exposure and lost boun
     expect(f.deps.commit.mock.invocationCallOrder[0]).toBeLessThan(f.deps.requestMetadata.mock.invocationCallOrder[0])
     expect(f.deps.requestMetadata.mock.invocationCallOrder[0]).toBeLessThan(f.deps.restart.mock.invocationCallOrder[0])
     expect(f.deps.restart.mock.invocationCallOrder[0]).toBeLessThan(f.deps.finish.mock.invocationCallOrder[0])
-    expect(codexSwitchNotice(facts).text).toContain('resumption is not verified')
+    expect(codexSwitchNotice(facts).text).toContain('Check that the terminal has resumed the right conversation')
   })
   it.each(['lost', 'stale', 'restart'] as const)('remote %s keeps published exposure distinct from pane result', async (stage) => {
     const disk = exposure()
@@ -103,15 +103,15 @@ describe('Claude single and bulk outcomes', () => {
     expect(copy).toHaveBeenCalledTimes(1)
     expect(result).toMatchObject({ kind: 'not-restarted', copy: 'confirmed' })
     expect(switchOutcomeNotice(result, 'Target')?.text).toContain('copy remains available')
-    expect(summarizeBulkSwitch([result], 0, 'Target').text).toContain('1 copies retained')
+    expect(summarizeBulkSwitch([result], 0, 'Target').text).toContain('1 copy available, restart incomplete')
   })
   it('does not assert original-account resume after a partial copy failure', async () => {
     const result = await runClaudeSwitch({ copy: async () => fail(), targetAccountId: 'target', markDirty: vi.fn(),
       restart: async (before) => { expect(await before()).toBeUndefined(); return 'restarted' }
     })
     expect(result.kind).toBe('copy-failed')
-    expect(switchOutcomeNotice(result, 'Target')?.text).toContain('may be incomplete')
-    expect(summarizeBulkSwitch([result], 0, 'Target').text).toContain('copy outcomes unconfirmed')
+    expect(switchOutcomeNotice(result, 'Target')?.text).toContain('partial copy may remain')
+    expect(summarizeBulkSwitch([result], 0, 'Target').text).toContain('copy unconfirmed')
     expect(switchOutcomeNotice(result, 'Target')?.text).not.toContain('resumed on its current account')
   })
   it('separates pre-copy restart refusal from a dispatched copy', async () => {
@@ -152,7 +152,7 @@ it.each([false, true])('Canvas wires actual Codex effect tracking (remote=%s)', 
     runCodexSwitch, runRemoteCodexSwitch, codexSwitchNotice
   })
   await run('node', 'target'); disk.retained()
-  expect(notices[0].text).toContain('exposure may have completed')
+  expect(notices[0].text).toContain('conversation may already be available')
   expect(notices[0].text).not.toMatch(/Nothing was changed|rolled back|conversation resumed/i)
 })
 

@@ -92,24 +92,24 @@ export function codexSwitchNotice(facts: CodexSwitchFacts): { kind: 'info' | 'er
   let text: string
   if (facts.exposure === 'not-dispatched') {
     text = facts.stale
-      ? 'This session changed before the account switch was committed. The exposure was not requested.'
-      : 'Account switch preparation failed; the switch was not confirmed. Preparation may have started account services.'
+      ? 'This session changed before the account switch was applied. Sharing the conversation with the other account was not requested.'
+      : 'The account switch could not be prepared. Check the selected account and terminal before trying again.'
   } else if (facts.exposure === 'unconfirmed') {
-    text = 'The conversation exposure may have completed; its result is unconfirmed. Inspect the conversation and selected account before another attempt.'
+    text = 'The conversation may already be available to the other account. Check both accounts and the terminal before trying again.'
   } else {
-    text = 'The conversation is available to the target account. '
+    text = 'The conversation is available to the other account. '
     text += facts.metadataRequested
-      ? 'The node account update was requested; durable persistence is not confirmed. '
-      : 'The node account update was not requested. '
+      ? 'An account selection update was requested. '
+      : 'This switch did not request an account update. '
     text += facts.restart === 'restarted'
-      ? 'The restart step completed; conversation resumption is not verified.'
+      ? 'A restart was requested. Check that the terminal has resumed the right conversation.'
       : facts.stale
-        ? 'The session changed, so its restart was not requested.'
-        : facts.restart === 'not-requested' || facts.restart === 'not-eligible'
-          ? 'The pane restart was not completed.'
-          : 'The pane restart outcome is unconfirmed; inspect the terminal before another attempt.'
+        ? 'The session changed, so this switch did not request a restart.'
+        : facts.restart === 'not-requested'
+          ? 'This switch did not request a restart.'
+          : 'The terminal restart was not confirmed. Check the selected account and terminal before trying again.'
   }
-  if (facts.finish === 'unconfirmed') text += ' Switch finalization was not confirmed; the exposure remains.'
-  if (facts.cleanupFailed) text += ' Reservation cleanup was not confirmed.'
+  if (facts.finish === 'unconfirmed') text += ' The switch could not be confirmed as finished.'
+  if (facts.cleanupFailed) text += ' The switch may still be pending.'
   return { kind: facts.restart === 'restarted' && !facts.failed && !facts.cleanupFailed ? 'info' : 'error', text }
 }

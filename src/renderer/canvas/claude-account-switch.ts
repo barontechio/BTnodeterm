@@ -90,7 +90,7 @@ export function copyRefusalText(reason: string, targetLabel: string): string {
         : reason === 'unknown-account'
           ? `${targetLabel} is no longer available`
           : 'the transcript could not be copied'
-  return `Could not move this conversation to ${targetLabel} — ${why}. The copy may be incomplete; inspect both accounts. Conversation resumption is not verified.`
+  return `Could not confirm the copy to ${targetLabel} — ${why}. A partial copy may remain. Check both accounts and the terminal before trying again.`
 }
 
 /** The `sshHostKey` of the host an SSH project's node runs on, or undefined for a local node (and
@@ -125,7 +125,7 @@ export function switchOutcomeNotice(
 ): { kind: 'info' | 'error'; text: string } | null {
   switch (o.kind) {
     case 'switched':
-      return { kind: o.saveUnconfirmed ? 'error' : 'info', text: `Conversation copied to ${targetLabel}; account update requested and restart step completed. Conversation resumption is not verified.${o.saveUnconfirmed ? ' Saving the account selection was not confirmed.' : ''}` }
+      return { kind: o.saveUnconfirmed ? 'error' : 'info', text: `The conversation is available in ${targetLabel}, and an account update and restart were requested. Check that the terminal has resumed the right conversation.${o.saveUnconfirmed ? ' Saving the account selection was not confirmed.' : ''}` }
     case 'same-account':
       return null
     case 'copy-failed':
@@ -134,11 +134,11 @@ export function switchOutcomeNotice(
       return {
         kind: 'error',
         text: (o.copy === 'confirmed'
-          ? `The conversation was copied to ${targetLabel}; that copy remains available. `
+          ? `The conversation is available in ${targetLabel}; that copy remains available. `
           : o.copy === 'not-requested'
-            ? 'The transcript copy was not requested. '
-            : 'The transcript copy outcome is unconfirmed; a partial copy may remain. ') +
-          'The pane restart did not complete; inspect the terminal before another attempt.'
+            ? 'The copy was not requested. '
+            : 'The copy could not be confirmed; a partial copy may remain. ') +
+          'The terminal restart was not confirmed. Inspect the terminal before trying again.'
       }
     case 'refused':
       return {
@@ -221,14 +221,20 @@ export function summarizeBulkSwitch(
   const incomplete = outcomes.filter((o) => o.kind === 'not-restarted' && o.copy === 'not-requested').length
   const unsaved = outcomes.filter((o) => o.kind === 'switched' && o.saveUnconfirmed).length
   const refused = busySkipped + outcomes.filter((o) => o.kind === 'refused').length
-  const parts = [`${completed} copied to ${targetLabel} with account update requested and restart step completed`]
-  if (retained) parts.push(`${retained} copies retained with restart incomplete`)
-  if (uncertain) parts.push(`${uncertain} copy outcomes unconfirmed (partial copies may remain)`)
-  if (incomplete) parts.push(`${incomplete} restarts incomplete before copy`)
+  const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+  const parts: string[] = []
+  if (completed) parts.push(`${count(completed, 'conversation', 'conversations')} available in ${targetLabel}; account update and restart requested`)
+  if (retained) parts.push(`${count(retained, 'copy', 'copies')} available, restart incomplete`)
+  if (uncertain) parts.push(`${count(uncertain, 'copy', 'copies')} unconfirmed; partial copies may remain`)
+  if (incomplete) parts.push(`${count(incomplete, 'restart', 'restarts')} incomplete before copying`)
   if (unsaved) parts.push(`${unsaved} account saves unconfirmed`)
-  if (refused) parts.push(`${refused} refused before switch dispatch`)
+  if (refused) parts.push(`${count(refused, 'session', 'sessions')} skipped before switching`)
+  const check = retained || uncertain || incomplete || unsaved
+    ? ' Check the affected accounts and terminals before trying again.'
+    : completed ? ' Check that the terminals have resumed the right conversations.' : ''
   return { kind: retained || uncertain || incomplete || refused || unsaved ? 'error' : 'info',
-    text: `${parts.join(' · ')}. Conversation resumption is not verified.` }
+    text: parts.length ? `${parts.join(' · ')}.${check}` : 'No account switches requested.' }
+
 }
 
 /** Existing quit/copy/recycle choreography, with copy facts retained across restart failure. */
