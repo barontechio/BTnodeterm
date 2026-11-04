@@ -212,11 +212,13 @@ describe.skipIf(process.platform !== 'linux')('SSH bulk transfers over encrypted
       expect((await request(media.url)).status).toBe(503)
       expect(await owner.rpc(IPC.sshTransferRenew, media.reference)).toBe(false)
       const runtimeRef = await prepare('media', 'movie.mp4', {nodeId: node.id})
+      expect(runtimeRef.status).toBe('ready')
       runtime = {}
       expect((await request(runtimeRef.url)).status).toBe(404)
       // Observe a transient source change in the Server adapter BEFORE its guard calls Core.
       // Restoring equivalent state must not resurrect that captured source or its reference.
       const guardRef = await prepare('media', 'movie.mp4', {nodeId: node.id})
+      expect(guardRef.status).toBe('ready')
       const originalStream = service.stream, originalRuntime = runtime
       let checked = false
       service.stream = (args, options) => {
