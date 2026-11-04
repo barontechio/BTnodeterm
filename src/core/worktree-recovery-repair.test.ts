@@ -721,3 +721,62 @@ it.each([false, true])('supports linked repo rebinding while pinning the primary
   const reload = new WorktreeRemovalJournal(f.journal.file, { ownsFiles: () => true }); await reload.load()
   expect(reload.blocks(f.checkout)).toBe(change); expect(reload.isNodePending('terminal')).toBe(true)
 })
+
+// Independent watcher refresh regression and its no-refresh control.
+it.each([false, true])('pins intended bytes through index stat with watcher refresh=%s', async (refresh) => {
+  const f = await rebindFixture()
+  const content = path.join(f.repo, '.nodeterm', 'project.json')
+  const index = path.join(root, 'data', 'workspace.json')
+  const stat = fs.promises.stat.bind(fs.promises)
+  let injected = false
+  vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args: Parameters<typeof stat>) => {
+    const value = await stat(...args)
+    if (String(args[0]) === index && !injected) {
+      const data = JSON.parse(fs.readFileSync(content, 'utf8'))
+      const group = data.nodes.find((n: { id: string }) => n.id === 'group')
+      if (group.worktree?.path !== f.checkout) return value
+      injected = true
+      delete group.worktree; group.cwd = f.repo
+      fs.writeFileSync(content, JSON.stringify(data))
+      if (refresh) await f.store.readLocalRefByPath(content)
+    }
+    return value
+  })
+  const result = await f.service.rebind(f.row.id, f.owner)
+  const persisted = (await new WorkspaceStore().load({sideline:false})).projects[0].nodes.find(n => n.id === 'group')
+  expect(injected).toBe(true)
+  expect(persisted?.worktree).toBeUndefined()
+  expect(result).toMatchObject({ok:false})
+  expect(f.journal.blocks(f.checkout)).toBe(true)
+})
+
+it('pins unchanged serialized content during explicit retry despite a watcher refreshing the cache', async () => {
+  const f = await rebindFixture(); const content = path.join(f.repo, '.nodeterm', 'project.json')
+  const open = fs.promises.open
+  const failure = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === content) vi.spyOn(handle, 'sync').mockRejectedValue(new Error('first flush lost'))
+    return handle
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  failure.mockRestore()
+  const stat = fs.promises.stat; const write = fs.promises.writeFile; let injected = false; let contentWrites = 0
+  vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof write>) => {
+    if (String(args[0]).startsWith(content + '.')) contentWrites++
+    return write(...args)
+  })
+  vi.spyOn(fs.promises, 'stat').mockImplementation(async (...args: Parameters<typeof stat>) => {
+    const result = await stat(...args)
+    if (args[0] === path.join(root, 'data', 'workspace.json') && !injected) {
+      injected = true
+      const bytes = JSON.parse(fs.readFileSync(content, 'utf8'))
+      const group = bytes.nodes.find((n: { id: string }) => n.id === 'group')
+      delete group.worktree; group.cwd = f.repo; fs.writeFileSync(content, JSON.stringify(bytes))
+      await f.store.readLocalRefByPath(content)
+    }
+    return result
+  })
+  expect(await f.service.rebind(f.row.id, f.owner)).toMatchObject({ ok: false, outcome: 'uncertain' })
+  expect(injected).toBe(true); expect(contentWrites).toBe(0)
+  expect(f.journal.blocks(f.checkout)).toBe(true); expect(f.journal.isNodePending('terminal')).toBe(true)
+})

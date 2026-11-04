@@ -1292,9 +1292,10 @@ export class WorkspaceStore {
     beforeSave?: (current: Workspace, next: Workspace) => void,
     afterDurable?: (workspace: Workspace, assertDurable: () => void) => Promise<void>): Promise<{ saved: boolean; workspace: Workspace }> {
     const run = this.saveChain.then(() => hold.repair(async (transition) => {
+      const intended = new Map<string, string>()
       const result = await this.updateWorkspaceNow((fresh) => {
         const next = edit(fresh); transition(next); return next
-      }, beforeSave, { localOnly: true })
+      }, beforeSave, { localOnly: true }, intended)
       // Normal saves are atomic, not fsync acknowledgements. Keep the hold and FIFO through
       // durability of both content and the private execution overlay before journal completion.
       const files = new Set([this.indexPath])
@@ -1311,10 +1312,8 @@ export class WorkspaceStore {
         }
       }
       const receipts: Array<() => void> = []
-      // Pin the serialized projection we intended to save, not whichever bytes an external
-      // writer placed at the path before the durability descriptor was opened.
-      const intended = new Map([...files].map((file) => [file,
-        file === this.indexPath ? JSON.stringify(this.index) : this.lastWritten.get(file)]))
+      // Operation-local bytes are captured by the actual serializer before its IO awaits.
+      // Watcher reads can refresh lastWritten outside this FIFO; that cache is not provenance.
       for (const file of files) {
         const content = intended.get(file)
         if (content === undefined) throw new Error('workspace-repair-serialized-content-unavailable')
@@ -1334,7 +1333,7 @@ export class WorkspaceStore {
 
   private async updateWorkspaceNow(edit: (fresh: Workspace) => Workspace,
     beforeSave: ((current: Workspace, next: Workspace) => void) | undefined,
-    opts: WorkspaceSaveOptions): Promise<{ saved: boolean; workspace: Workspace }> {
+    opts: WorkspaceSaveOptions, intended?: Map<string, string>): Promise<{ saved: boolean; workspace: Workspace }> {
     const current = await this.load({ sideline: false })
     const next = edit(structuredClone(current))
     const changed = new Set(next.projects.filter((p) => {
@@ -1349,8 +1348,8 @@ export class WorkspaceStore {
     }
     this.executionAdmission?.assertWorkspace(next)
     beforeSave?.(current, next)
-    if (sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
-    await this.saveNow(next, opts.localOnly === true, changed)
+    if (!intended && sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
+    await this.saveNow(next, opts.localOnly === true, changed, intended)
     return { saved: true, workspace: next }
   }
 
@@ -1581,7 +1580,7 @@ export class WorkspaceStore {
   }
 
   private async saveNow(workspace: Workspace, localOnly = false,
-    strictProjectWrites: ReadonlySet<string> = new Set()): Promise<void> {
+    strictProjectWrites: ReadonlySet<string> = new Set(), intended?: Map<string, string>): Promise<void> {
     if (!workspace.projects.length && !this.index) {
       // A store that never read the index may not replace a populated one with "no projects":
       // that is the boot-save wipe — load() failed transiently, the renderer hydrated zero
@@ -1697,7 +1696,12 @@ export class WorkspaceStore {
       const projectId = projectIdForCwd.get(cwd) ?? cwd
       const file = projectFilePath(cwd)
       const prevParsed = this.parsedLastWritten(file)
-      if (prevParsed && sameProjectContent(prevParsed, candidate)) continue
+      if (prevParsed && sameProjectContent(prevParsed, candidate)) {
+        // This raw observation was synchronously checked against the intended projection.
+        const known = this.lastWritten.get(file)
+        if (known !== undefined) intended?.set(file, known)
+        continue
+      }
       if (!prevParsed && candidate.nodes.length === 0 && !(await this.emptyOrAbsentOnDisk(file))) {
         // The local twin of the SSH "never blind-write a file we have not read" rule: an empty
         // canvas from a store that never read this file (setProjectFolder, migration, a hydrate
@@ -1707,6 +1711,7 @@ export class WorkspaceStore {
       }
       const next: ProjectFileV1 = { ...candidate, rev: (this.revs.get(projectId) ?? 0) + 1 }
       const content = serializeProjectFile(next)
+      intended?.set(file, content)
       try {
         this.executionAdmission?.assertDispatch?.()
         await fs.mkdir(path.dirname(file), { recursive: true })
@@ -1770,7 +1775,7 @@ export class WorkspaceStore {
       this.lastWrittenParsed.delete(file)
     }
     for (const [projectId, candidate] of dataFiles) {
-      const result = await this.writeDataFile(projectId, candidate, index.entries.find((entry) => entry.id === projectId))
+      const result = await this.writeDataFile(projectId, candidate, index.entries.find((entry) => entry.id === projectId), intended)
       if (strictProjectWrites.has(projectId) && result !== 'written' && result !== 'unchanged') {
         throw new Error(`workspace-save-not-written: ${projectId}`)
       }
@@ -1841,6 +1846,7 @@ export class WorkspaceStore {
     // instance sharing this userData rewrote it otherwise). A migration always writes: the v3 flip
     // is the point of that save.
     const indexJson = JSON.stringify(index)
+    intended?.set(this.indexPath, indexJson)
     const last = this.lastIndexWrite
     const onDisk = !migrating && last?.json === indexJson
       ? await fs.stat(this.indexPath).catch(() => null)
@@ -1891,7 +1897,7 @@ export class WorkspaceStore {
    * canvas in `project` (the dual-write), so the content is readable either way round — which is
    * also what makes a half-done migration consistent in both directions.
    */
-  private async writeDataFile(projectId: string, candidate: ProjectFileV1, plannedEntry?: IndexEntryV3): Promise<DataFileWrite> {
+  private async writeDataFile(projectId: string, candidate: ProjectFileV1, plannedEntry?: IndexEntryV3, intended?: Map<string, string>): Promise<DataFileWrite> {
     // A split save admits against its new private overlay, before publishing the index.
     // Other content writers still use the current trusted overlay. Neither bypasses admission.
     const admittedEntry = plannedEntry ?? this.index?.entries.find((entry) => entry.id === projectId)
@@ -1905,7 +1911,10 @@ export class WorkspaceStore {
         prevParsed = JSON.parse(prev) as ProjectFileV1
       } catch { /* our own cache, but never trusted blindly */ }
     }
-    if (prevParsed && sameProjectContent(prevParsed, candidate)) return 'unchanged'
+    if (prevParsed && sameProjectContent(prevParsed, candidate)) {
+      if (prev !== undefined) intended?.set(file, prev)
+      return 'unchanged'
+    }
     const ourRev = this.revs.get(projectId) ?? 0
     // Read the file only when we are actually about to write it.
     const onDisk = await this.readDataFile(projectId, false)
@@ -1919,6 +1928,7 @@ export class WorkspaceStore {
     if (!prevParsed && candidate.nodes.length === 0 && (onDisk?.file.nodes.length ?? 0) > 0) return 'refused'
     const next: ProjectFileV1 = { ...candidate, rev: ourRev + 1 }
     const content = serializeProjectFile(next)
+    intended?.set(file, content)
     try {
       this.executionAdmission?.assertDispatch?.()
       await fs.mkdir(path.dirname(file), { recursive: true })
