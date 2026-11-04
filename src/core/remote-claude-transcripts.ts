@@ -11,6 +11,8 @@ export interface RemoteClaudeTranscriptTarget {
   agentId?: 'claude' | 'codex'
   projectId: string
   sessionId?: string
+  /** Saved binding participates even when live hook evidence supplies the effective session. */
+  savedSessionId?: string
   accountId?: string
   cwd?: string
   home: string

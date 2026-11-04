@@ -98,13 +98,14 @@ describe('Server SSH transcript routing and caller lifetime', () => {
     expect(f.run).not.toHaveBeenCalled(); f.api.dispose()
   })
 
-  it.each(['reconnect', 'session', 'account', 'harness', 'departure'] as const)('discards a Codex read after %s during IO', async (change) => {
+  it.each(['reconnect', 'session', 'saved-session', 'account', 'harness', 'departure'] as const)('discards a Codex read after %s during IO', async (change) => {
     const f = fixture(); f.node.agentId = 'codex'; delete f.node.accountId
     let finish!: (value: typeof result) => void
     f.run.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve }))
     const read = f.api.rpcScope(1, () => f.api.codexReader.readPage({ ...q, accountId: undefined }, page))
     if (change === 'reconnect') f.reconnect()
     if (change === 'session') f.changeSession()
+    if (change === 'saved-session') f.node.agentSessionId = 'replacement'
     if (change === 'account') f.node.accountId = 'other'
     if (change === 'harness') f.node.agentId = 'claude'
     if (change === 'departure') f.api.forgetClient(1)

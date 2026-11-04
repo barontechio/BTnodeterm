@@ -70,7 +70,7 @@ export function createServerRemoteTranscripts(deps: Dependencies) {
       const account = (agentId === 'codex' ? deps.settings().codexAccounts : deps.settings().claudeAccounts).find((candidate) => candidate.id === node.accountId)
       if (!account || account.pending || ('configDir' in account && account.configDir) || account.host !== sshHostKey(ref.conn)) return null
     }
-    return { nodeId, agentId, projectId: ids[0], accountId: node.accountId, sessionId: deps.sessionOf(nodeId) || node.agentSessionId,
+    return { nodeId, agentId, savedSessionId: node.agentSessionId, projectId: ids[0], accountId: node.accountId, sessionId: deps.sessionOf(nodeId) || node.agentSessionId,
       cwd: node.cwd ?? project.ssh.remoteCwd, home, conn: ref.conn, controlPath: ref.controlPath, connectionKey }
   }
   const makeReader = (expected: 'claude' | 'codex') => new RemoteClaudeTranscripts({ targetFor: (id) => targetFor(id, expected), allowed: () => {
