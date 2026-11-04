@@ -1183,11 +1183,15 @@ const SEPARATE_SUBMIT_DELAY_MS = 150
 export class PtyManager {
   private sessions = new Map<string, Session>()
   private readonly nodeExecution = new NodeExecutionCoordinator()
+  private readonly observedBackendExit = this.nodeExecution.backendCallback((id: string, session: Session, code: number) =>
+    this.handleSessionExit(id, session, code))
+  private readonly backendRecycleTimeout = this.nodeExecution.backendCallback((nodeId: string) => this.fireRecycled(nodeId, false))
   private readonly blockedInputNotices = new Map<string, number>()
   /** Real control deliveries can outlive their caller's deadline; keep those nodes fenced. */
   private readonly controlDeliveries = new Map<string, number>()
   private backendStarts = 0
   private backendStartsPaused = false
+  private worktreePermit: NodeExecutionBatchPermit | null = null
   private worktreeRecoveryAdmission: ((directory: string) => void) | null = null
 
   /** Host-local recovery facts, injected by the owning shell; never a renderer-supplied check. */
@@ -1233,7 +1237,11 @@ export class PtyManager {
     work: (permit: NodeExecutionBatchPermit) => Promise<T> | T): Promise<T> {
     if (this.backendStarts || this.backendStartsPaused) throw new NodeExecutionError('busy')
     this.backendStartsPaused = true
-    try { return await this.runNodeActions(nodes, 'worktree', options, work) }
+    try { return await this.runNodeActions(nodes, 'worktree', options, async (permit) => {
+      this.worktreePermit = permit
+      try { return await work(permit) }
+      finally { if (this.worktreePermit === permit) this.worktreePermit = null }
+    }) }
     finally { this.backendStartsPaused = false }
   }
 
@@ -5376,7 +5384,7 @@ export class PtyManager {
       owner: owner === null ? null : subKey(owner, PRIMARY_VIEWER),
       ...(target ? { target } : {}),
       waiters,
-      timer: setTimeout(() => this.fireRecycled(persistKey, false), RECYCLE_NOTIFY_TIMEOUT_MS)
+      timer: setTimeout(() => this.backendRecycleTimeout(persistKey), RECYCLE_NOTIFY_TIMEOUT_MS)
     })
   }
 
@@ -7581,6 +7589,25 @@ export class PtyManager {
     return this.endSession(clientId, persistKey, 'recycle')
   }
 
+  /** Host recovery only: the actual batch claim and backend-start barrier must both be held.
+   * Recovery quarantine remains an independent dispatch policy; a worktree label is no waiver.
+   * Uses the same acknowledged teardown as owner profile recycling, with no IPC/automatic spawn. */
+  async recycleWorktreeMember(persistKey: string, permit: NodeExecutionBatchPermit): Promise<void> {
+    const current = () => {
+      if (this.worktreePermit !== permit || permit.kind !== 'worktree' || !permit.nodeIds.includes(persistKey))
+        throw new NodeExecutionError('invalid')
+      permit.assertCurrent(); this.nodeExecution.assertAllowed(persistKey)
+    }
+    current()
+    if (this.confirmedRecycles.has(persistKey)) throw new NodeExecutionError('busy')
+    // The Core's existing headless transport view owns the replacement slot. This is backend
+    // routing, never an actor/approval identity; viewers wait for its verified replacement.
+    const operation = this.confirmAndRecycleSession(HEADLESS_CLIENT, persistKey, undefined, current)
+    this.confirmedRecycles.set(persistKey, operation)
+    try { await operation }
+    finally { if (this.confirmedRecycles.get(persistKey) === operation) this.confirmedRecycles.delete(persistKey) }
+  }
+
   /** Awaited desktop profile-switch variant of recycle. Main registers the invoke handler itself
    * so it can release agent-tail ownership after this teardown succeeds. Keep the client-facing
    * validation and rate budget identical to the existing fire-and-forget recycle channel. */
@@ -7615,10 +7642,12 @@ export class PtyManager {
    * backend transactionally. Actual spawn resolves the stable id again at point of use: preflight
    * prevents a knowingly destructive switch, but never turns executable/argv into persisted state. */
   private async confirmAndRecycleSession(
-    clientId: ClientId,
+    clientId: ClientId | null,
     persistKey: string,
-    target?: PtyRecycleTarget
+    target?: PtyRecycleTarget,
+    assertWorktreeCurrent?: () => void
   ): Promise<void> {
+    this.nodeExecution.assertAllowed(persistKey); assertWorktreeCurrent?.()
     let trustedTarget: PtyRecycleTarget | undefined
     if (target) {
       // Profile-switch replacement targets land with the windows-terminal-profiles phase; until
@@ -7627,7 +7656,7 @@ export class PtyManager {
     }
     const liveId = this.byPersistKey.get(persistKey)
     const live = this.liveSessionForPersistKey(persistKey)
-    if (live?.sshRemote) {
+    if (this.paneRemoteRef(persistKey, live).kind !== 'local') {
       throw new Error('Remote terminals cannot be restarted with a local Windows profile.')
     }
     const liveSessionId = live
@@ -7656,8 +7685,12 @@ export class PtyManager {
       // dead generation honestly, but do not apply/spawn the selected profile without every
       // persistent-backend proof (and, for a hosted replacement, its host-granted lease).
       if (liveSessionId && deferred?.exitCode !== undefined)
-        this.handleSessionExit(liveSessionId, deferred.session, deferred.exitCode)
+        this.observedBackendExit(liveSessionId, deferred.session, deferred.exitCode)
       throw error
+    }
+    const assertCurrent = (): void => {
+      try { this.nodeExecution.assertAllowed(persistKey); assertWorktreeCurrent?.() }
+      catch (error) { abandonConfirmedRecycle(error) }
     }
     let confirmedSessionHost = false
     let confirmedTmux = false
@@ -7670,10 +7703,13 @@ export class PtyManager {
     // not respect today's tmuxEnabled value: disabling persistence cannot make yesterday's live
     // process disappear.
     try {
+      assertCurrent()
       if (hostAvailable) {
-        confirmedSessionHost = await sessionHostHasSession(sessionName(persistKey))
+        confirmedSessionHost = await this.nodeExecution.backend(() => sessionHostHasSession(sessionName(persistKey)))
       }
-      if (this.tmuxPath) confirmedTmux = await this.confirmedTmuxSessionExists(persistKey)
+      assertCurrent()
+      if (this.tmuxPath) confirmedTmux = await this.nodeExecution.backend(() => this.confirmedTmuxSessionExists(persistKey))
+      assertCurrent()
     } catch (error) {
       abandonConfirmedRecycle(
         error instanceof SessionHostProtocolCompatibilityError
@@ -7724,8 +7760,9 @@ export class PtyManager {
     // generation semantics, even when the selected replacement is deliberately direct and needs
     // no lease. Generic delete remains the separate, legacy-compatible path in endSession().
     if (reserveHostReplacement || sourceSessionHost) {
+      assertCurrent()
       try {
-        await sessionHostKillSession(hostName, confirmedHostKillOptions)
+        await this.nodeExecution.backend(() => sessionHostKillSession(hostName, confirmedHostKillOptions))
       } catch (error) {
         if (error instanceof SessionHostProtocolCompatibilityError)
           abandonConfirmedRecycle(error)
@@ -7738,19 +7775,21 @@ export class PtyManager {
           // synthesize ownership because its operation id is different and the host rejects it.
           let mayRetryRetainedOperation = exactHostExit
           if (!mayRetryRetainedOperation) {
+            assertCurrent()
             try {
-              mayRetryRetainedOperation = !(await sessionHostHasSession(hostName))
+              mayRetryRetainedOperation = !(await this.nodeExecution.backend(() => sessionHostHasSession(hostName)))
             } catch (probeError) {
               abandonConfirmedRecycle(probeError)
             }
           }
           if (mayRetryRetainedOperation) {
+            assertCurrent()
             try {
-              await sessionHostKillSession(hostName, {
+              await this.nodeExecution.backend(() => sessionHostKillSession(hostName, {
                 reserveReplacement: true,
                 requireV2: true,
                 ...(expectHostAbsent ? { expectedAbsent: true } : {})
-              })
+              }))
             } catch (leaseError) {
               abandonConfirmedRecycle(leaseError)
             }
@@ -7764,15 +7803,17 @@ export class PtyManager {
           // retry the SAME retained non-reserve operation and wait for its idempotent result.
           if (!exactHostExit) {
             let hostStillExists = true
+            assertCurrent()
             try {
-              hostStillExists = await sessionHostHasSession(hostName)
+              hostStillExists = await this.nodeExecution.backend(() => sessionHostHasSession(hostName))
             } catch (probeError) {
               abandonConfirmedRecycle(probeError)
             }
             if (hostStillExists) abandonConfirmedRecycle(error)
           }
+          assertCurrent()
           try {
-            await sessionHostKillSession(hostName, confirmedHostKillOptions)
+            await this.nodeExecution.backend(() => sessionHostKillSession(hostName, confirmedHostKillOptions))
           } catch (retryError) {
             abandonConfirmedRecycle(retryError)
           }
@@ -7783,15 +7824,17 @@ export class PtyManager {
     // Tmux SECOND and independently. A tmux client exit is not pane/session death proof; only the
     // named-session kill acknowledgement or a strict absent re-probe lets this stage commit.
     if (sourceTmux && this.tmuxPath) {
+      assertCurrent()
       try {
-        await this.confirmedProcessRun(
-          this.tmuxPath,
+        await this.nodeExecution.backend(() => this.confirmedProcessRun(
+          this.tmuxPath!,
           localTmuxKillArgs(TMUX_SOCKET, hostName)
-        )
+        ))
       } catch (error) {
         let tmuxStillExists = true
+        assertCurrent()
         try {
-          tmuxStillExists = await this.confirmedTmuxSessionExists(persistKey)
+          tmuxStillExists = await this.nodeExecution.backend(() => this.confirmedTmuxSessionExists(persistKey))
         } catch (probeError) {
           abandonConfirmedRecycle(probeError)
         }
@@ -7802,13 +7845,17 @@ export class PtyManager {
     // Zellij, independently, with the same proof rule as tmux: the kill's acknowledgement or a
     // re-probe that no longer finds a LIVE session. `unknown` is not proof and abandons.
     if (sourceZellij) {
+      assertCurrent()
       const run = this.zellijRun()
       if (!run) abandonConfirmedRecycle(new Error('Zellij is not available to end this session.'))
-      else if (!(await zellijKillSession(run, hostName))) {
-        const state = await zellijSessionState(run, hostName)
-        if (state === 'live' || state === 'unknown')
-          abandonConfirmedRecycle(new Error('Could not end the Zellij session before restarting it.'))
-      }
+      else try {
+        if (!(await this.nodeExecution.backend(() => zellijKillSession(run, hostName)))) {
+          assertCurrent()
+          const state = await this.nodeExecution.backend(() => zellijSessionState(run, hostName))
+          if (state === 'live' || state === 'unknown')
+            abandonConfirmedRecycle(new Error('Could not end the Zellij session before restarting it.'))
+        }
+      } catch (error) { abandonConfirmedRecycle(error) }
     }
 
     // Plain LAST and independently from hidden persistent backends. A natural exact exit recorded
@@ -7816,11 +7863,12 @@ export class PtyManager {
     // successful process-tree termination is stronger than node-pty's sometimes-missed callback;
     // elsewhere/no pid, bound the wait for this exact generation's exit.
     if (sourcePlain && live && deferred?.exitCode === undefined) {
+      assertCurrent()
       try {
-        releasePty(live.proc as ReleasablePty)
+        this.nodeExecution.backend(() => releasePty(live.proc as ReleasablePty))
         const pid = (live.proc as pty.IPty & { pid?: number }).pid
         if (this.runtimePlatform === 'win32' && Number.isSafeInteger(pid) && (pid as number) > 0) {
-          await terminateWindowsProcessTree(pid as number)
+          await this.nodeExecution.backend(() => terminateWindowsProcessTree(pid as number))
         } else if (deferred?.exitCode === undefined) {
           let timeout: ReturnType<typeof setTimeout> | undefined
           try {
@@ -7850,10 +7898,12 @@ export class PtyManager {
       }
     }
 
+    assertCurrent()
     clearExactBarrier()
     // Every applicable backend was either ended above or strictly probed absent. Do not fall back
     // to endSession's legacy best-effort kill (which swallows ambiguity and carries no lease).
-    await this.endSession(clientId, persistKey, 'recycle', false, true, trustedTarget)
+    try { await this.endSession(clientId, persistKey, 'recycle', false, true, trustedTarget) }
+    catch (error) { abandonConfirmedRecycle(error) }
   }
 
   /**

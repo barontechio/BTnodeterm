@@ -11437,6 +11437,15 @@ busy member/capacity overflow before claiming any; owner departure keeps every f
 work settles. Expired continuations remain invalid after release. This host-only primitive grants
 neither filesystem path ownership nor worktree-removal authority.
 
+`recycleWorktreeMember` accepts only the actual active `runWorktreeAction` batch permit in the
+same async claim, with its backend-start barrier held. A copied permit or a `worktree` action label
+is insufficient. Recovery quarantine additionally requires `WorktreeRecoveryDispatch.withRecovery`.
+Saved disconnected remote targets refuse before local probes. Teardown awaits backend proof;
+owner departure retains exclusion until dispatched work settles, and no later terminal effect is
+authorized. Transport lifecycle callbacks and recycle timers run outside request ALS. Core's
+`HEADLESS_CLIENT` owns the replacement slot as routing, never as approval identity; viewers wait
+and the helper performs no spawn or input. The barrier is not an OS-wide filesystem lock.
+
 Server CLI branching uses `ConfirmedNodeBranch` plus `LocalClaudeActionTarget`, sharing `write`'s
 caller/project/account checks. Bind linked config directories too. Owner consent precedes queues;
 the fixed local POSIX tmux submit path announces Enter dispatch before allowing the expected target

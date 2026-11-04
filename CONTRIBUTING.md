@@ -76,6 +76,13 @@ claim, including a `worktree` label, cannot waive it. The host recovery adapter 
 register the actual batch permit through `WorktreeRecoveryDispatch.withRecovery` and await the
 effect. It grants no actor/owner approval. Keep uncertain recovery facts; no deletion RPC is enabled.
 
+`PtyManager.recycleWorktreeMember` requires that same live `runWorktreeAction` permit and its
+backend-start barrier. Await exact backend teardown before metadata recovery. Owner departure
+retains exclusion until dispatched work settles and prevents further effects. Backend callbacks
+leave request ALS; application continuations do not. Replacement routing belongs to Core's
+headless client, and viewers wait. This helper neither launches nor types into a replacement.
+The barrier is process-local; it does not lock the filesystem against other applications.
+
 `WorktreeRecoveryService` provides owner-only inspection and kept-checkout recovery in both shells.
 An explicit owner click can keep only the original canonical directory/inode and linked branch.
 Recheck Git and owner lifetime inside the journal FIFO under `runWorktreeAction`; keeping performs
