@@ -2123,3 +2123,13 @@ provenance and upgrade only on a durable mutation. Old binaries reject v3, inclu
 The durable journal writer carries a live dispatch guard through asynchronous file preparation and
 each publication attempt when new owner-bound facts are being authorized; observed completed effect
 facts remain separate from new action authority.
+
+Observed absence also pins the original Git directory/common directory and a private fingerprint of
+canonical markers, config, HEAD and bounded linked-worktree administration (at most 128 entries and
+512 KiB of metadata). Actual local Git rev-parse routes must match this captured evidence. The same
+synchronous no-follow proof runs at durable temporary writes/renames and later effect dispatches;
+it never refreshes consent onto replacement metadata after an await. Separate canonical Git dirs
+remain supported; redirected, unreadable, oversized or changed metadata refuses. Unrelated Git
+administration changes can conservatively invalidate approval. This is not an external filesystem
+lock. Version 3 envelopes reject unknown top-level fields; legacy v1/v2 reads keep their explicit
+historical contract, rather than silently interpreting future authority fields.

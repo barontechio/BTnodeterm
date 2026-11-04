@@ -183,7 +183,7 @@ it('strictly distinguishes observed absence from recorded inode evidence and ret
   await f.journal.load()
   const { directoryStamp: _stamp, ...intent } = f.intent
   const proposed = { ...intent, id: 'observed', createdAt: Date.now(), phase: 'removed' as const,
-    provenance: { kind: 'observed-missing' as const, observedAt: Date.now(), ancestor: f.root, ancestorStamp: '1:2', repoStamp: '1:3' } }
+    provenance: { kind: 'observed-missing' as const, observedAt: Date.now(), ancestor: f.root, ancestorStamp: '1:2', repoStamp: '1:3', git: { gitDirectory: path.join(f.root, '.git'), commonDirectory: path.join(f.root, '.git'), fingerprint: 'a'.repeat(64) } } }
   expect(() => f.journal.observeMissing({ ...proposed, directoryStamp: '1:9' }, () => {})).toThrow('invalid-provenance')
   await expect(f.journal.observeMissing(proposed, () => {})).rejects.toThrow('ack lost')
   expect(f.journal.isNodePending('group')).toBe(true)

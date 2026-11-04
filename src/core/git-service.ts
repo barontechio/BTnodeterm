@@ -308,6 +308,18 @@ export class GitService {
   repoRoot(cwd: string) {
     return worktreeOps.repoRoot(git, cwd)
   }
+  /** Local recovery proof only; absent from generic Git IPC. Each probe retains the original
+   * captured evidence guard rather than adopting whatever repository answers after an await. */
+  async worktreeRecoveryDirectories(repoPath: string, assertCurrent: () => void): Promise<{ gitDirectory: string; commonDirectory: string } | null> {
+    if (isRemoteRepo(repoPath)) return null
+    const directory = await git(repoPath, ['rev-parse', '--absolute-git-dir'], assertCurrent)
+    const common = await git(repoPath, ['rev-parse', '--path-format=absolute', '--git-common-dir'], assertCurrent)
+    assertCurrent()
+    if (!directory.ok || !common.ok || !path.isAbsolute(directory.out) || !path.isAbsolute(common.out) ||
+      /[\0\r\n]/.test(directory.out + common.out)) return null
+    return { gitDirectory: fs.realpathSync.native(directory.out), commonDirectory: fs.realpathSync.native(common.out) }
+  }
+
   worktreeList(repoPath: string): Promise<WorktreeListResult> {
     // A repo on an SSH host cannot be stat'd from here (see `isRemoteRepo`): answer "the read
     // failed", which is exactly what it is — NOT an empty list, which every caller would read as

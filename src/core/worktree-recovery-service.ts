@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { captureWorktreeGitEvidence, assertWorktreeGitEvidence } from './worktree-git-evidence'
 import path from 'node:path'
 import { CanvasContentWriter } from './canvas-content-writer'
 import { carryLocalNodeExec } from '../shared/node-exec'
@@ -22,7 +23,7 @@ import type { WorktreeRemovalJournal, WorktreeRemovalRecord } from './worktree-r
 interface Dependencies {
   journal: WorktreeRemovalJournal
   pty: Pick<PtyManager, 'runWorktreeAction'> & Partial<Pick<PtyManager, 'recycleWorktreeMember' | 'nodeExecutionIdentity'>>
-  git: Pick<GitService, 'worktreeList'>
+  git: Pick<GitService, 'worktreeList'> & Partial<Pick<GitService, 'worktreeRecoveryDirectories'>>
   repair?: { workspace: WorkspaceStore; admission: WorktreeCanvasAdmission; dispatch: WorktreeRecoveryDispatch; confirmations: Pick<OwnerConfirmationBroker, 'request'> }
 }
 const item = (row: WorktreeRemovalRecord): WorktreeRecoveryItem => ({ id: row.id, createdAt: row.createdAt,
@@ -94,6 +95,7 @@ export class WorktreeRecoveryService {
     const ancestry = this.missingAncestry(row.worktreePath)
     if (!ancestry) return false
     if (row.provenance.kind === 'observed-missing') {
+      assertWorktreeGitEvidence(row.repoPath, row.provenance.git)
       const stat = fs.lstatSync(row.repoPath, { bigint: true })
       if (!stat.isDirectory() || fs.realpathSync.native(row.repoPath) !== row.repoPath ||
         `${stat.dev}:${stat.ino}` !== row.provenance.repoStamp || ancestry.ancestor !== row.provenance.ancestor ||
@@ -120,7 +122,7 @@ export class WorktreeRecoveryService {
     const observedAt = Date.now()
     const row: WorktreeRemovalRecord = { id: randomUUID(), createdAt: observedAt, phase: 'removed', projectId: project.id, groupId,
       repoPath: binding.repoPath, worktreePath: binding.path, branch: binding.branch, fallbackCwd: binding.repoPath,
-      provenance: { kind: 'observed-missing', observedAt, ...ancestry, repoStamp: `${repo.dev}:${repo.ino}` },
+      provenance: { kind: 'observed-missing', observedAt, ...ancestry, repoStamp: `${repo.dev}:${repo.ino}`, git: captureWorktreeGitEvidence(binding.repoPath) },
       members: project.nodes.filter((node) => ids.has(node.id)).map((node) => ({ nodeId: node.id, binding: canvasExecutionBinding(project, node) })) }
     this.repairSnapshot(workspace, row)
     return row
@@ -147,6 +149,13 @@ export class WorktreeRecoveryService {
 
   private async verifyMissingRepository(row: WorktreeRemovalRecord): Promise<void> {
     if (!this.directoryMissing(row)) throw new Error('The checkout is no longer absent.')
+    if (row.provenance.kind !== 'observed-missing' || !this.deps.git.worktreeRecoveryDirectories)
+      throw new Error('Git recovery identity inspection is unavailable.')
+    const evidence = row.provenance.git
+    const directories = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeRecoveryDirectories!(row.repoPath,
+      () => assertWorktreeGitEvidence(row.repoPath, evidence)))
+    if (!directories || directories.gitDirectory !== evidence.gitDirectory || directories.commonDirectory !== evidence.commonDirectory)
+      throw new Error('The approved Git repository route changed.')
     const result = await withGitRemoteResolver(() => undefined, () => this.deps.git.worktreeList(row.repoPath))
     if (!result.ok || !result.entries.length) throw new Error('The local Git repository cannot be verified.')
     const matches = result.entries.filter((entry) => path.resolve(entry.path) === row.worktreePath)

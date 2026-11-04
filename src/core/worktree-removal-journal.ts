@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { WorktreeGitEvidence } from './worktree-git-evidence'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { isSafeNodeId } from '../shared/safe-id'
@@ -30,7 +31,7 @@ export interface WorktreeRepairPlan {
   manualStart: string[]
 }
 export type WorktreeProvenance = { kind: 'recorded-directory' } | {
-  kind: 'observed-missing'; observedAt: number; ancestor: string; ancestorStamp: string; repoStamp: string
+  kind: 'observed-missing'; observedAt: number; ancestor: string; ancestorStamp: string; repoStamp: string; git: WorktreeGitEvidence
 }
 export interface WorktreeRemovalRecord extends Omit<WorktreeRemovalIntent, 'directoryStamp'> {
   directoryStamp?: string
@@ -66,11 +67,14 @@ function record(raw: unknown): WorktreeRemovalRecord {
     throw new Error('worktree-journal-invalid-provenance')
   if (origin.kind === 'recorded-directory') {
     if (Object.keys(origin).length !== 1 || !stamp(row.directoryStamp)) throw new Error('worktree-journal-invalid-provenance')
-  } else if (Object.keys(origin).some((key) => !['kind', 'observedAt', 'ancestor', 'ancestorStamp', 'repoStamp'].includes(key)) ||
+  } else if (Object.keys(origin).some((key) => !['kind', 'observedAt', 'ancestor', 'ancestorStamp', 'repoStamp', 'git'].includes(key)) ||
     row.directoryStamp !== undefined || row.phase === 'prepared' || !Number.isSafeInteger(origin.observedAt) || origin.observedAt <= 0 ||
     typeof origin.ancestor !== 'string' || !path.isAbsolute(origin.ancestor) || path.resolve(origin.ancestor) !== origin.ancestor ||
     !isAncestorPath(origin.ancestor, row.worktreePath) || origin.ancestor === row.worktreePath ||
-    !stamp(origin.ancestorStamp) || !stamp(origin.repoStamp)) throw new Error('worktree-journal-invalid-provenance')
+    !stamp(origin.ancestorStamp) || !stamp(origin.repoStamp) || !origin.git ||
+    Object.keys(origin.git).some((key) => !['gitDirectory', 'commonDirectory', 'fingerprint'].includes(key)) ||
+    !absolute(origin.git.gitDirectory) || !absolute(origin.git.commonDirectory) ||
+    typeof origin.git.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(origin.git.fingerprint)) throw new Error('worktree-journal-invalid-provenance')
   if (row.repair !== undefined) {
     const repair = row.repair
     const validMembers = (members: WorktreeRepairPlan['members']) => Array.isArray(members) && members.length === row.members.length &&
@@ -135,6 +139,8 @@ export class WorktreeRemovalJournal {
           const parsed = JSON.parse(raw)
           if (!parsed || parsed.kind !== 'worktree-removals' || ![1, 2, 3].includes(parsed.version) ||
             !Array.isArray(parsed.records) || parsed.records.length > MAX_RECORDS) throw new Error('worktree-journal-invalid-envelope')
+          if (parsed.version === 3 && Object.keys(parsed).some((key) => !['kind', 'version', 'records'].includes(key)))
+            throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version === 1 && parsed.records.some((row: WorktreeRemovalRecord) => row?.repair !== undefined))
             throw new Error('worktree-journal-invalid-envelope')
           if (parsed.version < 3 && parsed.records.some((row: WorktreeRemovalRecord) => row?.provenance !== undefined))

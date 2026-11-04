@@ -59,7 +59,9 @@ async function fixture(agent = false, storage: 'folder' | 'appdata' | 'inline' =
   const pty = { nodeExecutionIdentity: () => live,
     runWorktreeAction: <T>(ids: readonly string[], options: NodeExecutionOptions, work: (permit: NodeExecutionBatchPermit) => Promise<T> | T) =>
       coordinator.runMany(ids, 'worktree', options, work), recycleWorktreeMember: recycle }
-  const git = { worktreeList: vi.fn<GitService['worktreeList']>(async () => ({ ok: true, entries: [] })) }
+  const localGit = new GitService()
+  const git = { worktreeList: vi.fn<GitService['worktreeList']>(async () => ({ ok: true, entries: [] })),
+    worktreeRecoveryDirectories: localGit.worktreeRecoveryDirectories.bind(localGit) }
   const owners = new OwnerLifetimes(); const owner = owners.get(1, () => true)
   const confirmations = { request: vi.fn(async () => ({ ok: true as const, consume: async () => true, current: () => owner.active(), cancel() {} })) }
   const service = new WorktreeRecoveryService({ journal, pty, git, repair: { workspace: store, admission, dispatch, confirmations } })
@@ -332,4 +334,110 @@ it('refuses a missing checkout with changed linked branch metadata before journa
   fs.rmSync(f.checkout, { recursive: true })
   expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
   expect(f.confirmations.request).not.toHaveBeenCalled(); expect(f.recycle).not.toHaveBeenCalled(); expect(f.journal.list()).toEqual([])
+})
+
+it.each(['directory-open', 'temp-write', 'published'] as const)('changed Git branch during first journal %s must prevent subsequent effects', async (boundary) => {
+ const f = await missingFixture()
+ execFileSync('git', ['-C', f.repo, 'worktree', 'add', '-b', 'feature', f.checkout], {stdio:'pipe'})
+ fs.rmSync(f.checkout, {recursive:true})
+ const head = path.join(f.repo, '.git', 'worktrees', 'checkout', 'HEAD')
+ const open = fs.promises.open; const write = fs.promises.writeFile; const rename = fs.promises.rename; let injected = false
+ const change = () => { injected = true; fs.writeFileSync(head, 'ref: refs/heads/other\n') }
+ vi.spyOn(fs.promises, 'writeFile').mockImplementation(async (...args: Parameters<typeof write>) => {
+   const result = await write(...args)
+   if (!injected && boundary === 'temp-write' && String(args[0]).startsWith(f.journal.file + '.')) change()
+   return result
+ })
+ vi.spyOn(fs.promises, 'rename').mockImplementation(async (...args: Parameters<typeof rename>) => {
+   const result = await rename(...args)
+   if (!injected && boundary === 'published' && args[1] === f.journal.file) change()
+   return result
+ })
+ vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+   const handle = await open(...args)
+   if (!injected && boundary === 'directory-open' && args[0] === path.dirname(f.journal.file)) change()
+   return handle
+ })
+ const result = await f.service.recoverMissing('group', f.owner)
+ expect(injected).toBe(true)
+ expect(result).toMatchObject({ok:false})
+ expect(f.recycle).not.toHaveBeenCalled()
+ expect(fs.existsSync(f.journal.file)).toBe(boundary === 'published')
+ expect(f.store.getNodeForHostAction('group')?.worktree).toBeDefined()
+ expect(f.journal.isNodePending('terminal')).toBe(true)
+})
+it('independent: replacing Git metadata during consent must invalidate captured repository', async () => {
+ const f = await missingFixture()
+ const request = f.confirmations.request.getMockImplementation()!
+ f.confirmations.request.mockImplementationOnce(async (...args) => {
+   fs.renameSync(path.join(f.repo,'.git'), path.join(f.repo,'.git-old'))
+   execFileSync('git', ['-C', f.repo, 'init', '-b', 'unrelated'], {stdio:'pipe'})
+   return request(...args)
+ })
+ const result = await f.service.recoverMissing('group', f.owner)
+ expect(result).toMatchObject({ok:false})
+ expect(f.recycle).not.toHaveBeenCalled()
+ expect(fs.existsSync(f.journal.file)).toBe(false)
+})
+it('independent: v3 envelope unknown fields must be rejected', async () => {
+ const f = await missingFixture()
+ fs.writeFileSync(f.journal.file, JSON.stringify({kind:'worktree-removals',version:3,records:[],futureAuthority:true}))
+ const reload = new WorktreeRemovalJournal(f.journal.file,{ownsFiles:()=>true})
+ await expect(reload.load()).rejects.toThrow()
+})
+
+it('independent: first publication acknowledgement loss must not recycle or repair', async () => {
+ const f = await missingFixture(); const rename = fs.promises.rename
+ vi.spyOn(fs.promises,'rename').mockImplementation(async (...args: Parameters<typeof rename>) => {
+   const result = await rename(...args)
+   if (args[1] === f.journal.file) throw new Error('independent lost publication ack')
+   return result
+ })
+ expect(await f.service.recoverMissing('group',f.owner)).toMatchObject({ok:false,outcome:'uncertain'})
+ expect(f.recycle).not.toHaveBeenCalled()
+ expect(f.store.getNodeForHostAction('group')?.worktree).toBeDefined()
+ expect(f.journal.isNodePending('terminal')).toBe(true)
+ const reload = new WorktreeRemovalJournal(f.journal.file,{ownsFiles:()=>true}); await reload.load()
+ expect(reload.isNodePending('terminal')).toBe(true)
+ expect(reload.list()[0].provenance.kind).toBe('observed-missing')
+})
+it('independent: owner expiration during first journal directory open prevents publication', async () => {
+ const f = await missingFixture(); const open = fs.promises.open; let injected = false
+ vi.spyOn(fs.promises,'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+  const handle = await open(...args)
+  if (!injected && args[0] === path.dirname(f.journal.file)) { injected=true; f.owners.forget(1) }
+  return handle
+ })
+ expect(await f.service.recoverMissing('group',f.owner)).toMatchObject({ok:false})
+ expect(injected).toBe(true); expect(f.recycle).not.toHaveBeenCalled()
+ expect(fs.existsSync(f.journal.file)).toBe(false)
+})
+it('independent: dangling parent is not checkout absence', async () => {
+ const f = await missingFixture()
+ const alias = path.join(root,'alias'); fs.symlinkSync(path.join(root,'not-present'),alias)
+ await f.writer.edit(w => {const g = w.projects[0].nodes.find(n=>n.id==='group')!; g.worktree!.path=path.join(alias,'checkout')})
+ expect(await f.service.recoverMissing('group',f.owner)).toMatchObject({ok:false,outcome:'refused'})
+ expect(f.recycle).not.toHaveBeenCalled(); expect(fs.existsSync(f.journal.file)).toBe(false)
+})
+it('independent: descendant added during confirmation invalidates exact captured plan', async () => {
+ const f=await missingFixture(); const request=f.confirmations.request.getMockImplementation()!
+ f.confirmations.request.mockImplementationOnce(async (...args)=>{
+  await f.writer.edit(w=>{w.projects[0].nodes.push(node('new-child','terminal',{parentId:'group',cwd:f.repo}))})
+  return request(...args)
+ })
+ expect(await f.service.recoverMissing('group',f.owner)).toMatchObject({ok:false,outcome:'refused'})
+ expect(f.recycle).not.toHaveBeenCalled(); expect(fs.existsSync(f.journal.file)).toBe(false)
+})
+
+it('pins a legitimate separate Git directory and does not require a surviving linked entry', async () => {
+  const f = await missingFixture(); const metadata = path.join(root, 'separate-git')
+  execFileSync('git', ['-C', f.repo, 'init', '--separate-git-dir', metadata], { stdio: 'pipe' })
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: true, outcome: 'recovered' })
+  expect(f.journal.list()[0].provenance).toMatchObject({ kind: 'observed-missing', git: { gitDirectory: metadata, commonDirectory: metadata } })
+})
+it('refuses a redirected Git marker even when the underlying repository still answers', async () => {
+  const f = await missingFixture(); const metadata = path.join(root, 'redirected-git')
+  fs.renameSync(path.join(f.repo, '.git'), metadata); fs.symlinkSync(metadata, path.join(f.repo, '.git'))
+  expect(await f.service.recoverMissing('group', f.owner)).toMatchObject({ ok: false, outcome: 'refused' })
+  expect(f.confirmations.request).not.toHaveBeenCalled(); expect(f.recycle).not.toHaveBeenCalled()
 })
