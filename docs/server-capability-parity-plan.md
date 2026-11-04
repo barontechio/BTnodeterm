@@ -4,6 +4,41 @@ Extend Server Edition with useful Desktop automation and browser equivalents whi
 
 This is an implementation proposal. Work proceeds by the acceptance gates below, rather than by enabling every currently stubbed API. Server automation must work without an open browser tab. Interactive actions may require an authenticated owner, and native features retain their platform-specific implementations.
 
+## Resumed implementation (2026-11-04)
+
+The owner has authorized completing the unfinished useful parity work. The current delivery is
+split into isolated worktree/session, SSH, and web/collaboration tracks. Shared contracts and
+composition-root changes are integrated sequentially; no track writes another track's checkout.
+Keep the existing upstream order (#1332, then #1333) and do not reopen the old export batch.
+The project-scope safety fix is `bc18e843` on the remote scope branch and must be preserved;
+the older local scope branch alone does not contain it. Both upstream proposals remain open.
+
+The acknowledged member-recycle foundation is complete at `42d39167`, integrated as `a4b3e556`.
+Its frozen Linux snapshot passes 24,648 tests (109 skipped), typecheck and Desktop/Server builds.
+Independent review found no demonstrable defects after 250 existing tests, seven additional
+behavioral cases and typecheck. The integration's `src` tree matches that reviewed snapshot.
+Backend-specific independent cases use mocks; physical macOS/Windows behavior is not newly claimed.
+This foundation adds no deletion command or automatic launch/input.
+
+| Track | Remaining functional deliveries | Acceptance boundary |
+| --- | --- | --- |
+| Worktrees and sessions | Confirmed clean removal, missing-checkout recovery, verified rebinding, coordinated restart/account adapters | Real owner approval, durable facts, actual PTY acknowledgement and conditional workspace repair; no replay of uncertain effects |
+| SSH | Additional supported readers, continuous meters/tails, separately authorized context links, streaming transfers/media | Current remote endpoint/account/session/generation throughout IO, no local fallback, bounded resources and real transport fixtures |
+| Web and collaboration | Development gateway, optional isolated browser worker/control, browser team joining and supported notifications | Approved process/port identity, isolated origins/profiles, existing protocol/role/pin checks and explicit deployment/external dependencies |
+
+Removal must preserve sessions when Git refuses. A real Git fixture confirmed that ordinary
+`git worktree remove` can delete ignored files; consent must disclose that loss or refuse those
+files, rather than claiming that absence of `--force` preserves them. Recovery must distinguish
+missing-before-recording from a previously observed directory; never fabricate an inode. A
+reservation transition must stay inside the workspace FIFO and retain its fence through persistence.
+
+The live orchestration host lacks several canvas capabilities, so visible sessions use the
+available role launcher and supported grouping operations. Its `verify` verb is unavailable;
+independent review uses separate visible reviewer sessions. Agent messaging remains disabled;
+coordination uses explicit shared handoff artifacts and authorized linked-context reads. These
+runtime limits do not authorize a transport or consent bypass. No Obsidian vault has been assigned,
+so repository documentation remains canonical and no vault has been selected implicitly.
+
 ## Baseline and upstream delivery
 
 Current integration validation (2026-10-30): the frozen owner kept-checkout recovery snapshot
