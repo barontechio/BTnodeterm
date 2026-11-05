@@ -14,8 +14,6 @@ const root = await fs.realpath(rootArg)
 const evidence = path.resolve(evidenceArg)
 assert(evidence !== root && !evidence.startsWith(root + path.sep), 'Evidence must be outside the package')
 await fs.mkdir(evidence, { mode: 0o700 }) // Fail rather than reuse another smoke environment.
-const dirs = Object.fromEntries(['home', 'data', 'tmp', 'tmux', 'profile', 'config', 'cache'].map(k => [k, path.join(evidence, k)]))
-for (const dir of Object.values(dirs)) await fs.mkdir(dir, { mode: 0o700 })
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
 assert.equal(pkg.version, '0.5.0-bt.1')
 assert.equal(pkg.nodeTermUpdates, 'disabled')
@@ -28,9 +26,12 @@ for (const binary of ['node-pty/build/Release/pty.node', 'smart-whisper/build/Re
   assert((await fs.stat(path.join(root, 'node_modules', binary))).isFile(), 'Missing packaged native binary: ' + binary)
 }
 const WebSocket = require('ws')
-// Chromium and tmux sockets must fit sockaddr_un even when evidence paths are
-// long. Give both fresh short private temp directories, after all
+// Chromium, tmux and the hook listener (including its HOME fallback) must fit
+// sockaddr_un even when evidence paths are long. Use short private directories after all
 // package validation that can reject before starting any processes.
+const runtimeTmp = await fs.mkdtemp('/tmp/bt1-run-')
+const dirs = Object.fromEntries(['home', 'data', 'tmp', 'tmux', 'profile', 'config', 'cache'].map(k => [k, path.join(runtimeTmp, k)]))
+for (const dir of Object.values(dirs)) await fs.mkdir(dir, { mode: 0o700 })
 const browserTmp = await fs.mkdtemp('/tmp/bt1-browser-')
 const tmuxTmp = await fs.mkdtemp('/tmp/bt1-tmux-')
 const password = randomBytes(24).toString('hex')
@@ -219,6 +220,7 @@ try {
     try { execFileSync('tmux', ['-L', 'node-terminal', 'kill-session', '-t', '=nt-' + persistKey], { env, stdio: 'ignore', timeout: 5000 }) } catch {}
   }
   await fs.rm(tmuxTmp, { recursive: true, force: true })
+  await fs.rm(runtimeTmp, { recursive: true, force: true })
   clearTimeout(watchdog)
   result.serverExit = { code: server?.exitCode, signal: server?.signalCode }
   result.serverDiagnostics = serverDiagnostics
