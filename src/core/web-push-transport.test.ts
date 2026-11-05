@@ -47,3 +47,39 @@ it('pins the actual request lookup, sends VAPID and encrypted bytes, and returns
   expect(await sendWebPush({ subscription: sub, providers, payload: '{"PRIVATE":"content"}', vapid: webpush.generateVAPIDKeys(), subject: 'mailto:operator@example.com', current: () => true, signal: new AbortController().signal })).toBe(302)
   expect(request).toHaveBeenCalledTimes(1)
 })
+it('uses the real Node lookup callback contract and transmits encrypted bytes to a private provider fixture', async () => {
+  const http = await import('node:http')
+  const { createRequire } = await import('node:module')
+  const ece = createRequire(import.meta.url)('http_ece') as { decrypt(data: Buffer, params: unknown): Buffer }
+  let received = ''
+  const server = http.createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', chunk => chunks.push(chunk))
+    req.on('end', () => {
+      received = ece.decrypt(Buffer.concat(chunks), { version: 'aes128gcm', privateKey: key, authSecret: Buffer.from(sub.keys.auth, 'base64url') }).toString()
+      res.writeHead(201); res.end()
+    })
+  })
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = (server.address() as { port: number }).port
+  vi.spyOn(dns, 'lookup').mockResolvedValue([{ address: '8.8.8.8', family: 4 }] as never)
+  // Keep Node's actual socket/lookup machinery. Only this fixture routes the checked public
+  // address to its loopback HTTP receiver; production continues using verified HTTPS/SNI.
+  vi.spyOn(https, 'request').mockImplementation((...args: unknown[]) => {
+    const options = args[1] as https.RequestOptions
+    const pinned = options.lookup as Function
+    return http.request(`http://fixture.invalid:${port}/push`, { ...options, lookup: (host, opts, cb) => {
+      pinned(host, opts, (err: Error | null, address: string | {address: string; family: number}[], family: number) => {
+        expect(typeof address === 'string' ? address : address[0].address).toBe('8.8.8.8')
+        // Preserve scalar vs array callback contract: the original bug fails in real Node here.
+        if (typeof address === 'string') (cb as Function)(err, '127.0.0.1', family)
+        else (cb as Function)(err, address.map(a => ({ ...a, address: '127.0.0.1' })))
+      })
+    } }, args[2] as (res: import('node:http').IncomingMessage) => void) as never
+  })
+  try {
+    const payload = JSON.stringify({ v: 1, noticeId: 'opaque-receipt', kind: 'done' })
+    const status = await sendWebPush({ subscription: sub, providers, payload, vapid: webpush.generateVAPIDKeys(), subject: 'mailto:operator@example.com', current: () => true, signal: new AbortController().signal })
+    expect(status).toBe(201); expect(received).toBe(payload)
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())) }
+})

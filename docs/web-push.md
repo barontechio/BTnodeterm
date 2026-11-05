@@ -100,7 +100,7 @@ refused; provider TTL is 60 seconds. At most 1024 attempt/click receipts are kep
 capacity exhaustion drops new sends rather than evicting fresh dedup receipts. Each grant/event
 attempt is durably reserved **before** dispatch. Timeouts, errors and ambiguous responses are not
 retried. 404/410 removes only the exact subscription revision that sent, preserving a replacement.
-Explicit disable/logout aborts pending network work on a best-effort basis. This is bounded,
+Explicit disable/logout aborts only affected grant revisions on a best-effort basis. This is bounded,
 best-effort notification, not a transactional delivery queue or audit of OS receipt.
 
 The worker has only `push` and `notificationclick` handlers. It installs no fetch interception,
@@ -111,8 +111,10 @@ locators, authenticated against the current cookie and live host target; they ar
 
 Focused service, auth/HTTP, endpoint/transport, click and existing-notification regression tests are
 in `src/{core,server,renderer/bridge}/web-push*.test.ts`. The service/HTTP tests process a real
-normalized host event without a page or WS. The transport fixture checks actual generated encrypted
-request bytes and pinned lookup, including mixed DNS, redirects and owner loss.
+normalized host event without a page or WS. The transport fixtures check generated encrypted request bytes, pinned lookup and the real Node
+socket lookup contract against a private loopback provider, including mixed DNS, redirects and
+owner loss. The private provider decrypts the standard payload; its HTTP socket adapter is a test
+fixture and does not alter production HTTPS/TLS enforcement.
 
 `node scripts/web-push/browser-proof.cjs /absolute/evidence/directory` uses a **disposable** Chromium
 profile and the unmodified production worker. It registers a real Service Worker, closes every app

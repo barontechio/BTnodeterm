@@ -68,7 +68,10 @@ export async function sendWebPush(input: {
   if (!input.current()) throw new Error('Push revoked')
   return new Promise((resolve, reject) => {
     const address = answers[0]
+    // Node's socket option is accepted by HTTP but not listed in @types/node RequestOptions.
+    const connection = { family: address.family, autoSelectFamily: false }
     const req = https.request(endpoint, {
+      ...connection,
       method: 'POST', headers: details.headers, agent: false, signal: input.signal,
       // A fresh socket uses exactly this vetted address, retaining hostname for TLS/SNI checks.
       lookup: (_host, _opts, cb) => cb(null, address.address, address.family)

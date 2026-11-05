@@ -36,7 +36,7 @@ export class WebPushService {
   private queued = 0
   private stopped = false
   private faulted = false
-  private inFlight = new Set<AbortController>()
+  private inFlight = new Map<AbortController, Grant>()
   private jobs = new Set<Promise<unknown>>()
   private now: () => number
   constructor(private deps: WebPushDeps) { this.now = deps.now ?? Date.now }
@@ -80,14 +80,28 @@ export class WebPushService {
     this.queue = result.catch(() => {})
     return result.finally(() => { this.queued-- })
   }
+  private abortRevoked(): void {
+    for (const [controller, grant] of this.inFlight) {
+      if (!this.live(grant) || !this.state.grants.includes(grant)) controller.abort()
+    }
+  }
   private async persist(next: State, check?: () => void): Promise<void> {
+    let cancelledBeforePublication = false
+    const assertDispatch = (): void => {
+      try { check?.() }
+      catch (err) { cancelledBeforePublication = true; throw err }
+    }
     try {
-      await writeFileDurableAtomic(this.deps.file, JSON.stringify(next), { mode: 0o600, assertDispatch: check })
+      await writeFileDurableAtomic(this.deps.file, JSON.stringify(next), { mode: 0o600, assertDispatch })
       this.state = next
     } catch (e) {
-      // A post-rename acknowledgement may fail. Never continue from an uncertain cache.
-      this.faulted = true
-      for (const c of this.inFlight) c.abort()
+      // assertDispatch only runs before publication (including failed-rename retries).
+      // Expected consent cancellation there cannot make the durable cache uncertain.
+      // Actual IO/fsync/rename errors still close the service conservatively.
+      if (!cancelledBeforePublication) {
+        this.faulted = true
+        this.abortRevoked()
+      }
       throw e
     }
   }
@@ -105,6 +119,7 @@ export class WebPushService {
       const at = this.now()
       const grant: Grant = { id: randomUUID(), owner, projectId, createdAt: at, expiresAt: at + GRANT_TTL, subscription }
       await this.persist({ ...this.state, grants: [...remaining, grant] }, check)
+      this.abortRevoked()
       check()
     })
   }
@@ -113,14 +128,14 @@ export class WebPushService {
     return g ? { enabled: true, projectId: g.projectId, expiresAt: g.expiresAt } : { enabled: false }
   }
   async unsubscribe(owner: string, endpoint: unknown): Promise<void> {
-    for (const c of this.inFlight) c.abort()
     await this.mutate(async () => {
       await this.persist({ ...this.state, grants: this.state.grants.filter(g => g.owner !== owner || g.subscription.endpoint !== endpoint) })
+      this.abortRevoked()
     })
     // current() also checks the exact grant revision before any later dispatch.
   }
   async sweep(): Promise<void> {
-    for (const c of this.inFlight) c.abort()
+    this.abortRevoked()
     await this.mutate(async () => {
       const grants = this.state.grants.filter(g => this.live(g))
       const attempts = this.state.attempts.filter(a => a.at > this.now() - NOTICE_TTL && grants.some(g => g.id === a.grantId))
@@ -160,7 +175,7 @@ export class WebPushService {
       })
       if (!a || !current() || this.inFlight.size >= 4) continue
       const controller = new AbortController()
-      this.inFlight.add(controller)
+      this.inFlight.set(controller, g)
       try {
         const status = await this.deps.send(g.subscription, JSON.stringify({ v: 1, noticeId: a.id, kind: event.kind }), this.state.vapid, current, controller.signal)
         if ((status === 404 || status === 410) && this.state.grants.includes(g)) {
@@ -173,5 +188,5 @@ export class WebPushService {
     }
   }
   async idle(): Promise<void> { await Promise.all([...this.jobs]); await this.queue }
-  async close(): Promise<void> { this.stopped = true; for (const c of this.inFlight) c.abort(); await this.idle() }
+  async close(): Promise<void> { this.stopped = true; this.abortRevoked(); await this.idle() }
 }

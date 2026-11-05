@@ -104,3 +104,61 @@ it('refuses corrupt, oversized, permissive and symlink stores rather than genera
   await expect(new WebPushService(deps).init()).rejects.toThrow(/Unsafe/)
   expect(await fs.readFile(deps.file, 'utf8')).toBe(original)
 })
+it('cancels only revoked grant revisions; an unrelated disable/logout cannot abort another owner send', async () => {
+  const sub = subscription(); await service.subscribe(owner, 'project', sub, () => true)
+  const otherToken = auth.createSession(), other = auth.sessionId(otherToken)!
+  let started!: () => void
+  const ready = new Promise<void>(resolve => { started = resolve })
+  let aborted = false
+  vi.mocked(deps.send).mockImplementation((_s, _p, _k, _c, signal) => new Promise((_resolve, reject) => {
+    signal.addEventListener('abort', () => { aborted = true; reject(new Error('revoked')) }, { once: true }); started()
+  }))
+  service.accept(event()); await ready
+  await service.unsubscribe(other, 'https://push.example.com/p/not-owned')
+  expect(aborted).toBe(false)
+  auth.revokeSession(otherToken); await service.sweep(); expect(aborted).toBe(false)
+  expect(service.status(owner, sub.endpoint).enabled).toBe(true)
+  await service.unsubscribe(owner, sub.endpoint); expect(aborted).toBe(true)
+  await service.idle(); expect(deps.send).toHaveBeenCalledTimes(1)
+})
+it('a cancelled enrollment before publication leaves the private store and other grants available', async () => {
+  const sub = subscription(); await service.subscribe(owner, 'project', sub, () => true)
+  const original = await fs.readFile(deps.file, 'utf8')
+  let current = true
+  const open = fs.open
+  const spy = vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode); current = false; return handle
+  })
+  await expect(service.subscribe(owner, 'project', subscription('cancelled'), () => current)).rejects.toThrow(/Consent revoked/)
+  spy.mockRestore()
+  expect(service.available).toBe(true)
+  expect(await fs.readFile(deps.file, 'utf8')).toBe(original)
+  expect(service.status(owner, sub.endpoint).enabled).toBe(true)
+  await service.subscribe(owner, 'project', subscription('later'), () => true)
+})
+it('actual login expiry and grant expiry stop dispatch even when no logout callback runs', async () => {
+  const sub = subscription(); await service.subscribe(owner, 'project', sub, () => true)
+  const clock = vi.spyOn(Date, 'now').mockReturnValue(at + 30 * 24 * 60 * 60_000 + 1)
+  expect(auth.validateSessionId(owner)).toBe(false)
+  service.accept(event()); await service.idle(); expect(deps.send).not.toHaveBeenCalled()
+  clock.mockRestore()
+  token = auth.createSession(); owner = auth.sessionId(token)!
+  await service.subscribe(owner, 'project', sub, () => true)
+  at += 30 * 24 * 60 * 60_000 + 1
+  service.accept(event('expired')); await service.idle(); expect(deps.send).not.toHaveBeenCalled()
+  expect(service.status(owner, sub.endpoint).enabled).toBe(false)
+})
+it('an actual acknowledgement failure after publication still disables the service conservatively', async () => {
+  const open = fs.open
+  const spy = vi.spyOn(fs, 'open').mockImplementation(async (file, flags, mode) => {
+    const handle = await open(file, flags, mode)
+    if (file === path.dirname(deps.file)) {
+      const sync = handle.sync.bind(handle)
+      vi.spyOn(handle, 'sync').mockImplementationOnce(sync).mockRejectedValueOnce(new Error('directory acknowledgement lost'))
+    }
+    return handle
+  })
+  await expect(service.subscribe(owner, 'project', subscription(), () => true)).rejects.toThrow(/acknowledgement lost/)
+  spy.mockRestore(); expect(service.available).toBe(false)
+  await expect(service.subscribe(owner, 'project', subscription('later'), () => true)).rejects.toThrow(/unavailable/)
+})
