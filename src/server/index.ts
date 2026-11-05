@@ -1,3 +1,4 @@
+import { createServerWebPush } from './web-push'
 import { registerBrowserJoin } from './browser-join'
 import { registerDevelopmentPreviewService } from './development-preview-service'
 import { createServerRemoteTransfers } from './remote-transfers'
@@ -1452,9 +1453,12 @@ export async function startServer(
     }
   }
 
+  const webPush = await createServerWebPush({ auth, workspace: workspaceStore, dataDir: config.dataDir,
+    publicOrigin: config.publicOrigin, headless: config.headless })
   const server = http.createServer(
     createHttpHandler({
       auth,
+      webPush,
       rendererDir: config.rendererDir,
       trustProxy: config.trustProxy,
       publicOrigin: config.publicOrigin,
@@ -1498,6 +1502,7 @@ export async function startServer(
       remoteMeters.dispose()
       remoteTranscripts.dispose()
       mediaReferences.dispose()
+      await webPush.close()
       ownerConfirmations.dispose()
       branchOwners.dispose()
       worktreeRecoveryOwners.dispose()

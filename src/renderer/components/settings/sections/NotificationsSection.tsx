@@ -1,3 +1,4 @@
+import { WebPushPanel } from './WebPushPanel'
 import { isBrowserRuntime } from '@renderer/bridge/runtime'
 import { useRef, useState } from 'react'
 import { useSettings } from '../../../state/settings'
@@ -28,6 +29,10 @@ const ROWS = {
   sound: {
     title: 'Play a sound when a turn finishes or needs you',
     keywords: ['sound', 'audio', 'sfx', 'effect', 'chime', 'beep', 'retro', '8-bit', 'chiptune', 'volume', 'mute', 'finished', 'needs you', 'custom', 'file', 'mp3', 'wav', 'own sound']
+  },
+  webPush: {
+    title: 'Notify even when this page is closed',
+    keywords: ['web push', 'closed', 'browser', 'service worker', 'background', 'VAPID']
   },
   mobilePush: {
     title: 'Send push notifications to your paired phone',
@@ -171,7 +176,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
     <SettingsSection
       id="notifications"
       title="Notifications"
-      description={isBrowserRuntime() ? "Get notified while this page stays open in a supported browser. Enable to request this site’s notification permission." : "Get notified when an agent finishes while the app is in the background."}
+      description={isBrowserRuntime() ? "Choose open-page alerts or enable browser push for delivery while this page is closed." : "Get notified when an agent finishes while the app is in the background."}
       isActive={isActive}
       searchEntries={ENTRIES}
     >
@@ -212,6 +217,7 @@ export function NotificationsSection({ isActive }: { isActive: boolean }): React
           </div>
         )}
       </SearchableRow>
+      {isBrowserRuntime() && <SearchableRow {...ROWS.webPush}><WebPushPanel /></SearchableRow>}
       <SearchableRow {...ROWS.sound}>
         <FieldRow
           label="Play a sound when a turn finishes or needs you"

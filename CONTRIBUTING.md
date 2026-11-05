@@ -2222,3 +2222,14 @@ Keep existing eligibility, authority and effect ordering; these notices grant no
 whole-node coordination or durable recovery capability.
 
 Project allowance claims send device and machine identity only to the configured API. Keep `redirect: 'error'` on `/v1/limits/claim`: a 307/308 must not forward the POST to another authority. Failed redirects use the existing offline result and must not persist an allowance.
+
+
+Browser closed-page Web Push is a separate opt-in Server cookie-owner service (`core/web-push.ts`,
+`server/web-push.ts`), not the mobile push protocol or a document/WS grant. Bind consent to the
+real durable auth session hash and project; logout/expiry revokes it, closing pages does not.
+Consume the mirror's actionable seam, reserve attempts durably before send, and revalidate the
+unique local node/session and consent across IO. Use only approved-provider, public-DNS-pinned,
+nonredirecting bounded egress; standard encryption/VAPID never makes a caller endpoint trusted.
+The minimal worker has no fetch/cache/offline handlers. Click receipts grant no authority and
+must pass authenticated host resolution plus the actual local Canvas membership/session guard.
+See `docs/web-push.md` for operator configuration, privacy, caps and the limits of CDP evidence.

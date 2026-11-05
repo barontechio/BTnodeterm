@@ -11823,3 +11823,14 @@ whole-node coordination or durable recovery capability.
 ### Allowance claim destination
 
 `core/project-limit.ts` rejects redirects on the allowance claim. Consent and activation gates run before identification/network IO; a redirected response cannot move the identifying POST body to a second authority. Real 307/308 tests use two separate loopback listeners and assert zero destination requests, unchanged allowance persistence and the existing offline result. Token verification, usage limits, deadlines and timeouts remain unchanged.
+
+
+Browser closed-page Web Push is a separate opt-in Server cookie-owner service (`core/web-push.ts`,
+`server/web-push.ts`), not the mobile push protocol or a document/WS grant. Bind consent to the
+real durable auth session hash and project; logout/expiry revokes it, closing pages does not.
+Consume the mirror's actionable seam, reserve attempts durably before send, and revalidate the
+unique local node/session and consent across IO. Use only approved-provider, public-DNS-pinned,
+nonredirecting bounded egress; standard encryption/VAPID never makes a caller endpoint trusted.
+The minimal worker has no fetch/cache/offline handlers. Click receipts grant no authority and
+must pass authenticated host resolution plus the actual local Canvas membership/session guard.
+See `docs/web-push.md` for operator configuration, privacy, caps and the limits of CDP evidence.

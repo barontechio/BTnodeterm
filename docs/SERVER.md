@@ -1030,3 +1030,6 @@ only exercises the HTTP/auth surface). With `npm run server:dev` running:
     parent node; click it to watch its live transcript stream.
 13. **Context meter (Phase 3b)** — as a Claude session accumulates transcript, the node's
     **context-window meter** should fill.
+
+
+For opt-in browser notifications with the page closed, see [Web Push setup](web-push.md).

@@ -1,3 +1,5 @@
+import { installWebPushClicks } from '../bridge/web-push'
+import { getSessionStores as webPushSessionStores, subscribeSessionRegistry as webPushSubscribeRegistry } from '../session/session'
 import { runCodexSwitch, runRemoteCodexSwitch, codexSwitchNotice } from './codex-switch-outcome'
 import { installBrowserNotificationRouter } from '../bridge/browser-notifications'
 import { captureNotificationTarget } from './browserNotificationTarget'
@@ -18581,6 +18583,29 @@ export function Canvas() {
   useEffect(() => {
     if (!isBrowserRuntime()) return
     return installBrowserNotificationRouter((source, payload) => notificationRouterRef.current(source, payload))
+  }, [])
+
+  useEffect(() => {
+    if (!isBrowserRuntime() || !('serviceWorker' in navigator)) return
+    return installWebPushClicks((target) => {
+      const read = () => notificationMembership({ projectId: nodesProjectIdRef.current, nodes: nodesRef.current })
+      const matches = read().filter(m => m.nodeId === target.nodeId)
+      const m = matches.length === 1 ? matches[0] : undefined
+      if (!m || m.projectId !== target.projectId || m.session !== localSession ||
+          m.agentSessionId !== target.sessionId || m.session.status !== 'connected') return false
+      const routed = notificationRouterRef.current(localSession.api, { ...target, title: '', body: '' })
+      if (!routed) return false
+      const current = (): boolean => routed.current() && read().some(fresh => fresh.nodeId === target.nodeId &&
+        fresh.projectId === target.projectId && fresh.session === localSession && fresh.agentSessionId === target.sessionId)
+      if (!current()) return false
+      routed.focus(current)
+      return true
+    }, (retry) => {
+      const offProjects = useProjects.subscribe(retry)
+      const offStatus = webPushSessionStores(localSession.id).agentStatus.store.subscribe(retry)
+      const offSessions = webPushSubscribeRegistry(retry)
+      return () => { offProjects(); offStatus(); offSessions() }
+    })
   }, [])
 
   // OS-notification click → focus the originating node (see the note beside focusNodeById:
