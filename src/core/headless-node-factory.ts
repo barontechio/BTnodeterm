@@ -1237,7 +1237,7 @@ export class HeadlessNodeFactory {
             workspace,
             source.project
           )
-          if (unownedChild) return this.ownershipRefusal('close', sourceNodeId, unownedChild)
+          if (unownedChild !== undefined) return this.ownershipRefusal('close', sourceNodeId, unownedChild)
           frameIds.add(id)
         }
       }
@@ -1421,8 +1421,17 @@ export class HeadlessNodeFactory {
           }
         }
       }
-      const unowned = this.unownedMutation(sourceNodeId, [from, ...targets], workspace, source.project)
-      if (unowned) return this.ownershipRefusal('link', sourceNodeId, unowned)
+      // A caller did not open its own node, so the ledger cannot vouch for it, yet a link only records
+      // who may read whom and the caller is consenting for its own side. Verified identity and
+      // `sourceProject` above already prove which node this is. The exception names the caller's id
+      // and nothing else: every other endpoint still needs ownership.
+      const unowned = this.unownedMutation(
+        sourceNodeId,
+        [from, ...targets].filter((id) => id !== sourceNodeId),
+        workspace,
+        source.project
+      )
+      if (unowned !== undefined) return this.ownershipRefusal('link', sourceNodeId, unowned)
 
       const byId = new Map(source.project.nodes.map((node) => [node.id, node]))
       if (!byId.has(from)) {
@@ -1450,7 +1459,9 @@ export class HeadlessNodeFactory {
       }
 
       source.project.bridges = [...existing, ...plan.edges]
-      await this.castAndSave(workspace)
+      if (!(await this.castAndSave(workspace))) {
+        return { ok: false, error: 'link-not-saved: nothing was linked: the canvas could not be written' }
+      }
       await this.publishPersisted([source.project.id])
       const note = plan.skipped.length
         ? ` (skipped ${plan.skipped.map((skipped) => `${skipped.id}: ${skipped.why}`).join('; ')})`
@@ -1853,7 +1864,7 @@ export class HeadlessNodeFactory {
 
       const ids = (args.nodes ?? '').split(',').map((id) => id.trim()).filter(Boolean)
       const unowned = this.unownedMutation(sourceNodeId, ids, workspace, source.project)
-      if (unowned) return this.ownershipRefusal('group', sourceNodeId, unowned)
+      if (unowned !== undefined) return this.ownershipRefusal('group', sourceNodeId, unowned)
       const resolvable = ids.filter((id) => source.project.nodes.some((node) => node.id === id))
       if (!resolvable.length) {
         return { ok: false, error: 'group: none of the given node ids exist' }
@@ -2179,7 +2190,7 @@ export class HeadlessNodeFactory {
 
       const ids = [...new Set((args.node ?? '').split(',').map((id) => id.trim()).filter(Boolean))]
       const unowned = this.unownedMutation(sourceNodeId, ids, workspace, source.project)
-      if (unowned) return this.ownershipRefusal('color', sourceNodeId, unowned)
+      if (unowned !== undefined) return this.ownershipRefusal('color', sourceNodeId, unowned)
       const changed = ids
         .map((id) => source.project.nodes.find((node) => node.id === id))
         .filter((node): node is CanvasNodeState => !!node)
@@ -2557,7 +2568,7 @@ export class HeadlessNodeFactory {
       const after = this.resolveAfter(target, afterArg, verb)
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after, workspace, target)
-      if (unownedAfter) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
+      if (unownedAfter !== undefined) return this.ownershipRefusal(verb, sourceNodeId, unownedAfter)
       // A success wait is only as good as the station's ability to REPORT: only an agent with canvas
       // control has `report-outcome`, so waiting on anything else could only end at the deadline.
       for (const depId of successIds) {

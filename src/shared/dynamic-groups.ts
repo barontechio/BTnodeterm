@@ -136,6 +136,11 @@ function cloneScene(input: readonly CanvasNodeState[]): CanvasNodeState[] {
   validateTree(nodes)
   return nodes
 }
+/**
+ * A parent missing from the scene reads as top level, as in stored-canvas-geometry.ts: one lost frame
+ * must not refuse every group operation in the project. A plan cannot create one: `setParent` requires
+ * an existing group, and removing a frame promotes its children.
+ */
 function validateTree(nodes: readonly CanvasNodeState[]): void {
   if (nodes.length > MAX_NODES) fail('scene exceeds node budget')
   const byId = new Map(nodes.map((n) => [n.id, n]))
@@ -144,15 +149,22 @@ function validateTree(nodes: readonly CanvasNodeState[]): void {
     const seen = new Set([n.id])
     let p = n.parentId
     while (p !== undefined) {
-      if (!id(p) || !byId.has(p) || byId.get(p)!.kind !== 'group' || seen.has(p) || seen.size > MAX_DEPTH) fail(`invalid parent or cycle: ${n.id}`)
+      if (!id(p)) fail(`invalid parent or cycle: ${n.id}`)
+      const parent = byId.get(p)
+      if (!parent) break
+      if (parent.kind !== 'group' || seen.has(p) || seen.size > MAX_DEPTH) fail(`invalid parent or cycle: ${n.id}`)
       seen.add(p)
-      p = byId.get(p)!.parentId
+      p = parent.parentId
     }
   }
 }
 function absolute(n: CanvasNodeState, byId: Map<string, CanvasNodeState>): { x: number; y: number } {
-  let x = n.position.x, y = n.position.y, p = n.parentId
-  while (p) { const parent = byId.get(p)!; x += parent.position.x; y += parent.position.y; p = parent.parentId }
+  let x = n.position.x, y = n.position.y
+  const p = n.parentId
+  for (let parent = p ? byId.get(p) : undefined; parent; parent = parent.parentId ? byId.get(parent.parentId) : undefined) {
+    x += parent.position.x
+    y += parent.position.y
+  }
   if (!coord(x) || !coord(y)) fail('canvas coordinate budget exceeded')
   return { x, y }
 }
@@ -212,10 +224,11 @@ function freePosition(wanted: Rect, obstacles: Rect[], min: { x: number; y: numb
 function layout(nodes: CanvasNodeState[], touched: Set<string>, grid: number): void {
   ancestry([...touched], nodes, touched)
   const byId = new Map(nodes.map((n) => [n.id, n]))
-  const depth = (n: CanvasNodeState) => { let d = 0, p = n.parentId; while (p) { d++; p = byId.get(p)!.parentId } return d }
+  const parentOf = (n: CanvasNodeState) => (n.parentId && byId.has(n.parentId) ? n.parentId : undefined)
+  const depth = (n: CanvasNodeState) => { let d = 0, p = parentOf(n); while (p) { d++; p = parentOf(byId.get(p)!) } return d }
   const containers = nodes.filter((n) => n.kind === 'group' && touched.has(n.id)).sort((a, b) => depth(b) - depth(a) || compareIds(a, b))
   const solve = (group?: CanvasNodeState) => {
-    const children = nodes.filter((n) => n.parentId === group?.id)
+    const children = nodes.filter((n) => parentOf(n) === group?.id)
     const slots = group?.dynamicGroup?.reservations.filter((r) => r.state === 'reserved') ?? []
     if (group) {
       const footprints = children.map(rect)
@@ -389,7 +402,7 @@ export function planDynamicGroups(input: readonly CanvasNodeState[], spec: Dynam
       for (const key of pending) {
         const n = byId.get(key)!
         let p = n.parentId, waiting = false
-        while (p) { if (pending.has(p)) waiting = true; p = byId.get(p)!.parentId }
+        while (p) { if (pending.has(p)) waiting = true; p = byId.get(p)?.parentId }
         if (waiting) continue
         const old = positions.get(key)
         if (old) {

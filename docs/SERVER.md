@@ -831,7 +831,9 @@ Ownership is intentionally narrower than the desktop confirmation UI: an agent m
 or close only a node it opened during the current Server process run (one exception: a `reply` to
 the node that opened it). Link, group, rename, color,
 sticky updates, dependency targets, message delivery, and close validate their complete target set
-before any write or PTY kill; an unowned member refuses the whole operation. Queued messages repeat
+before any write or PTY kill; an unowned member refuses the whole operation. `link` may also name
+the verified caller's own node, which lets a session restore a link to an agent it opened; the other
+endpoints still need ownership, and this changes no other verb. Queued messages repeat
 the creator check at flush time in addition to the existing verified and per-project switch gates.
 
 `write --node <id> --text <text>` supports an existing local Claude pane with verified idle state,

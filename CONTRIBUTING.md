@@ -1152,7 +1152,9 @@ ownership, performs no node/session adoption, and leaves durable queued launches
 mutations and message delivery validate every target before writing anything; missing proof is a
 named refusal. The operator may widen the reach to the caller's whole project
 (`--control-scope project`, `src/server/control-scope.ts`): every ownership check goes through
-`ownsMutation`, and `creator` must stay byte-identical. Validate Server upgrades against a disposable data directory and port. Restarting a
+`ownsMutation`, and `creator` must stay byte-identical. `link` skips that check for the verified
+caller's own id, as `verify`, `board`, `assign` and `open-worktree` do by their own rules; do not
+generalize this into `ownsMutation`. Validate Server upgrades against a disposable data directory and port. Restarting a
 shared live service is
 an explicit operator action, never a test or an automatic repair step.
 

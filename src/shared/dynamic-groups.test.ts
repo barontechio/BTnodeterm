@@ -367,3 +367,67 @@ describe('reserved and ordinary group opens', () => {
     expect(reconcileDynamicGroups(input, ['moving'], { grid: -1 }).ok).toBe(false)
   })
 })
+
+describe('a saved parentId naming a frame that is gone', () => {
+  const lost = (id = 'orphan', x = 900, y = 900) => node(id, x, y, 300, 200, 'gone')
+
+  it('places a member and reconciles, leaving the lost parent where it is', () => {
+    const scene = [group('f', 0, 0, 900, 700), node('a', GROUP_PAD, GROUP_PAD + GROUP_HEADER, 300, 200, 'f'), lost()]
+
+    const placed = success(placeDynamicGroupMember(scene, 'f', node('new')))
+    const reconciled = success(reconcileDynamicGroups(scene, ['a']))
+
+    for (const nodes of [placed.nodes, reconciled.nodes]) {
+      expect(get(nodes, 'orphan').parentId).toBe('gone')
+      expect(get(nodes, 'orphan').position).toEqual({ x: 900, y: 900 })
+    }
+    expect(placed.required).not.toContain('orphan')
+    expect(reconciled.required).not.toContain('orphan')
+  })
+
+  it('places a member inside nested frames whose outermost lost its parent', () => {
+    const scene = [group('middle', 100, 100, 900, 700, 'gone'), group('inner', GROUP_PAD, GROUP_PAD + GROUP_HEADER, 500, 400, 'middle')]
+
+    const placed = success(placeDynamicGroupMember(scene, 'inner', node('new'), undefined, { grid: 10 }))
+
+    expect(get(placed.nodes, 'new').parentId).toBe('inner')
+    expect(get(placed.nodes, 'middle').parentId).toBe('gone')
+    expect(get(placed.nodes, 'middle').position).toEqual({ x: 100, y: 100 })
+  })
+
+  it('adds existing members to a named frame that lost its parent', () => {
+    const planned = success(planDynamicGroups([group('g', 0, 0, 500, 400, 'gone'), node('a', 100, 100)],
+      spec({ groups: [{ id: 'g' }], members: [{ id: 'a', group: 'g' }] })))
+
+    expect(get(planned.nodes, 'a').parentId).toBe('g')
+    expect(get(planned.nodes, 'g').parentId).toBe('gone')
+  })
+
+  it('repairs the node a plan moves out of its lost frame, keeping it where it was drawn', () => {
+    const moved = success(planDynamicGroups([group('g', 0, 0, 2000, 2000), lost('orphan', 400, 400)],
+      spec({ members: [{ id: 'orphan', group: 'g' }] })))
+
+    expect(get(moved.nodes, 'orphan').parentId).toBe('g')
+    expect(root(moved.nodes, 'orphan')).toEqual({ x: 400, y: 400 })
+  })
+
+  it('treats a node with a lost parent as a top-level obstacle', () => {
+    const planned = success(planDynamicGroups([lost('orphan', 510, 0)],
+      spec({ groups: [{ id: 'top', title: 'T' }] }), { origin: { x: 510, y: 0 } }))
+
+    const top = get(planned.nodes, 'top')
+    const covers = top.position.x < 810 && top.position.x + top.size.width > 510 &&
+      top.position.y < 200 && top.position.y + top.size.height > 0
+    expect(covers, 'a new frame must not cover the node').toBe(false)
+  })
+
+  it('still refuses a malformed parent id, a parent that is not a frame, and a cycle', () => {
+    expect(reconcileDynamicGroups([node('a', 0, 0, 300, 200, '../x')], ['a'])).toMatchObject({ ok: false })
+    expect(reconcileDynamicGroups([node('t'), node('a', 0, 0, 300, 200, 't')], ['a'])).toMatchObject({ ok: false })
+    expect(reconcileDynamicGroups([group('x', 0, 0, 500, 400, 'y'), group('y', 0, 0, 500, 400, 'x')], ['x'])).toMatchObject({ ok: false })
+  })
+
+  it('never lets a plan leave a parent missing: a target must exist', () => {
+    expect(planDynamicGroups([node('a')], spec({ members: [{ id: 'a', group: 'gone' }] }))).toMatchObject({ ok: false })
+  })
+})

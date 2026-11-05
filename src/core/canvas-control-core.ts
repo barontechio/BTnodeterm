@@ -1006,8 +1006,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  they cannot read it back. The human can flip or reset a link\'s direction from its right-click menu.',
     `  Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.`,
     '  This does not reveal whether the id exists in another project.',
-    '  On Server Edition the ownership rule is stricter: every endpoint must be a node you opened',
-    '  during this server run.',
+    '  On Server Edition the ownership rule is stricter: every endpoint must be your own node or a node',
+    '  you opened during this server run.',
     '- `verify --node <id> [--lenses correctness,security,tests] [--focus "..."] [--synthesis off]` — open a',
     '  review panel over that node\'s work: one reviewer per lens, each armed behind the target and linked',
     '  to it, plus a judge armed behind the panel that merges the findings into one verdict. Reviewers are',
@@ -1053,8 +1053,8 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  have turned the dialog off for a verb, in which case it simply applies — you cannot tell,',
     '  and nothing changes about how you call it. Server Edition',
     '  is narrower: close requires a node this caller opened during the current server run, and all',
-    '  node-mutating verbs accept only current-run creations. Every other target receives a named',
-    '  ownership refusal before any partial mutation.',
+    '  node-mutating verbs accept only current-run creations (`link` may also name your own node).',
+    '  Every other target receives a named ownership refusal before any partial mutation.',
     '- `send --node <id> --text "..."` / `reply --node <id> --text "..."` — deliver a message into',
     '  an AGENT node the caller opened this run, or for `reply` the node that opened the caller (no',
     '  confirm dialog: verified-only, gated by the project\'s',
@@ -1639,8 +1639,8 @@ ${geometryGuidanceLines().join('\n')}
   reset a link's direction from its right-click menu.
   Both endpoints must be in your project. A missing endpoint reports: ${LINK_ENDPOINT_NOT_FOUND}.
   This does not reveal whether the id exists in another project.
-  On Server Edition the ownership rule is stricter: every endpoint must be a node you opened
-  during this server run.
+  On Server Edition the ownership rule is stricter: every endpoint must be your own node or a node
+  you opened during this server run.
 - \`verify --node <id> [--lenses correctness,security,tests] [--focus "..."] [--agent <id>] [--synthesis off] [--label L]\` —
   open a review PANEL over that node's work: one reviewer per lens, each armed behind the target
   (they start when it goes idle) and linked to it so they can read what it actually did, plus a
@@ -1703,7 +1703,8 @@ ${geometryGuidanceLines().join('\n')}
   user to confirm. Server Edition closes
   only nodes this caller opened during the current server run, without a dialog. Its other
   node-mutating verbs (link/group/rename/color/sticky update) likewise accept only current-run
-  creations, and refuse the whole request before any partial mutation.
+  creations (\`link\` may also name your own node), and refuse the whole request
+  before any partial mutation.
 - \`send --node <id> --text "..."\` — deliver a message INTO an agent node the caller opened during
   this server run, in this project only. No confirm dialog; instead it is verified-only, gated by the project's
   agent-messaging switch (Settings → Agents, OFF by default — the settings verb's

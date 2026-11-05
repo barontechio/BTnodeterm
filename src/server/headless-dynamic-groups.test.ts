@@ -125,6 +125,19 @@ describe('host dynamic groups use the canonical project transaction', () => {
     expect(await read()).toEqual(before); expect(pty.creates).toEqual([])
   })
 
+  it('still opens and arranges groups when an unrelated node names a frame that is gone', async () => {
+    const workspace = await store.load({ sideline: false })
+    workspace.projects[0].nodes.push({ ...node('damaged', 3000), parentId: 'group-gone' })
+    await store.save(workspace)
+
+    expect(await apply({ version: 1, groups: [{ id: 'managed', title: 'M' }] })).toMatchObject({ ok: true })
+    expect(await factory.openTerminal('source', { group: 'managed' }, true)).toMatchObject({ ok: true })
+
+    const stored = (await store.load({ sideline: false })).projects[0].nodes
+    expect(stored.find((n) => n.id === 'damaged')).toMatchObject({ parentId: 'group-gone', position: { x: 3000, y: 0 } })
+    expect(stored.filter((n) => n.parentId === 'managed')).toHaveLength(1)
+  })
+
   it('keeps context edges from a new grouped agent to its existing dependency', async () => {
     await apply({ version: 1, groups: [{ id: 'managed' }] })
     const result = await factory.openAgent('source', { agent: 'codex', group: 'managed', after: 'a' }, true)
