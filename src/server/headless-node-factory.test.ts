@@ -948,6 +948,29 @@ describe('HeadlessNodeFactory', () => {
       await expectNoEffect()
     })
 
+    it('treats an empty id as a refused id, even when a node has that id', async () => {
+      await addForeign()
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].nodes.push(terminal('', 'No id'))
+      await store.save(workspace)
+
+      await expect(factory.link('term-source', { from: '', to: 'term-foreign' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-owner')
+      })
+      await expectNoEffect()
+    })
+
+    it('does not report a link it could not save', async () => {
+      vi.spyOn(factory as unknown as { castAndSave: () => Promise<boolean> }, 'castAndSave').mockResolvedValue(false)
+
+      await expect(factory.link('term-source', { to: 'term-upstream' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-saved')
+      })
+      expect(publishedProjects).toEqual([])
+    })
+
     it('does not let a created node claim the node that opened it, or a sibling', async () => {
       await expect(factory.link('term-upstream', { to: 'term-source' }, true)).resolves.toMatchObject({
         ok: false,
@@ -1188,14 +1211,40 @@ describe('HeadlessNodeFactory', () => {
       })
       await store.save(workspace)
     }
+    const stored = async (id: string) =>
+      (await new WorkspaceStore().load({ sideline: false })).projects[0].nodes.find((node) => node.id === id)
 
     // The frame vanished from a node the caller does not own, so nothing the caller does may be
     // blocked by it: one damaged node must not stop canvas control for a whole project.
-    it('does not block a verb on the caller\'s own nodes', async () => {
+    it('does not block a verb on the caller\'s own nodes, and leaves the damaged node alone', async () => {
       await damage()
       expect(await factory.group('term-source', { nodes: 'term-owned' })).toMatchObject({ ok: true })
       expect(await factory.geometry('place', 'term-source', { nodes: 'term-upstream', dx: '5' })).toMatchObject({ ok: true })
       expect(await factory.showWeb('term-source', { url: 'https://example.invalid/' }, true)).toMatchObject({ ok: true })
+      expect((await stored('term-unrelated'))?.parentId).toBe('group-gone')
+    })
+
+    it('does not rewrite another project\'s file over its damaged node', async () => {
+      const workspace = await store.load({ sideline: false })
+      const otherDir = path.join(dataDir, 'other-project')
+      fs.mkdirSync(otherDir, { recursive: true })
+      workspace.projects.push({
+        id: 'project-2',
+        name: 'Other',
+        color: '#32d74b',
+        cwd: otherDir,
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [{ ...terminal('term-there', 'There', 'claude'), parentId: 'group-gone' }],
+        bridges: [],
+        ropes: []
+      })
+      await store.save(workspace)
+      const file = path.join(otherDir, '.nodeterm', 'project.json')
+      const before = fs.readFileSync(file, 'utf8')
+
+      expect(await factory.link('term-source', { to: 'term-upstream' }, true)).toMatchObject({ ok: true })
+
+      expect(fs.readFileSync(file, 'utf8')).toBe(before)
     })
 
     it('gives a new frame no parent when its member was the damaged node', async () => {
@@ -1206,9 +1255,8 @@ describe('HeadlessNodeFactory', () => {
 
       expect(reply).toMatchObject({ ok: true })
       const groupId = (reply.result as { groupId: string }).groupId
-      const nodes = (await new WorkspaceStore().load({ sideline: false })).projects[0].nodes
-      expect(nodes.find((node) => node.id === groupId)?.parentId).toBeUndefined()
-      expect(nodes.find((node) => node.id === 'term-unrelated')?.parentId).toBe(groupId)
+      expect((await stored(groupId))?.parentId).toBeUndefined()
+      expect((await stored('term-unrelated'))?.parentId).toBe(groupId)
     })
   })
 

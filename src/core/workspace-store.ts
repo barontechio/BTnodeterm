@@ -34,7 +34,6 @@ import {
   type ProjectSettingsSnapshot
 } from '../shared/project-settings'
 import { readProjectCapabilities, type ProjectCapability } from '../shared/project-capabilities'
-import { sanitizeNodeParents } from '../shared/stored-canvas-geometry'
 import type { CapabilityAckMap } from './project-capability-consent'
 import { applyLocalNodeExec, carryLocalNodeExec, hoistLegacyNodeExec, stripSharedNodeExec, type LocalNodeExecMap } from '../shared/node-exec'
 import { collisionSeed, derivedProjectId, freshProjectId } from '../shared/project-id'
@@ -217,7 +216,7 @@ function withContent(base: Project, content: CanvasContent): Project {
 function inlineContent(p: Project): CanvasContent | null {
   if (!Array.isArray(p.nodes)) return null
   return contentOf({
-    nodes: sanitizeNodeParents(sanitizeNodeTriggers(p.nodes)),
+    nodes: sanitizeNodeTriggers(p.nodes),
     bridges: p.bridges ? sanitizeLinks(p.bridges) : undefined,
     ropes: p.ropes ? sanitizeLinks(p.ropes) : undefined,
     kanban: sanitizeKanban(p.kanban)
@@ -645,7 +644,7 @@ export class WorkspaceStore {
           entry: e,
           project: inFolder({
             ...base,
-            nodes: sanitizeNodeParents(sanitizeNodeTriggers(base.nodes)),
+            nodes: sanitizeNodeTriggers(base.nodes),
             ...(admittedBridges ? { bridges: admittedBridges } : {}),
             ...(admittedRopes ? { ropes: admittedRopes } : {}),
             ...(history ? { closedSessions: history } : {}),

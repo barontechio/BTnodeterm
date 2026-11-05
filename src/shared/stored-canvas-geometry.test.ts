@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CanvasNodeState } from './types'
-import { wrapStoredNodes } from './stored-canvas-geometry'
+import { applyStoredGeometry, storedGeometryNodes, wrapStoredNodes } from './stored-canvas-geometry'
 import { COLLAPSED_HEIGHT } from './node-sizing'
 import { GROUP_PAD, GROUP_HEADER } from './canvas-geometry'
 
@@ -25,5 +25,46 @@ describe('group wrapping over persisted geometry', () => {
     expect(wrapStoredNodes(live, ['a', 'b'], { ...frame, id: 'new' })).toBeNull()
     expect(() => wrapStoredNodes(live, ['a'], frame)).toThrow('geometry-invalid-frame')
     expect(live[1].parentId).toBeUndefined()
+  })
+
+  describe('a parentId naming no frame on this canvas', () => {
+    const frame = { ...node('new-frame'), kind: 'group' as const }
+
+    it('reads as top level instead of refusing the whole project', () => {
+      const live = storedGeometryNodes([{ ...node('a'), parentId: 'gone' }, { ...node('b'), parentId: 'a' }])
+      expect(live.map((n) => n.parentId)).toEqual([undefined, undefined])
+    })
+
+    it('stays as found on a write that does not give the node a parent', () => {
+      const damaged = { ...node('a'), parentId: 'gone' }
+      const nested = [{ ...node('p'), kind: 'group' as const }, { ...node('c'), parentId: 'p' }]
+      const original = [damaged, ...nested]
+
+      const unchanged = applyStoredGeometry(original, storedGeometryNodes(original))
+      expect(unchanged).toEqual(original)
+
+      // Leaving a real frame still clears the id.
+      const moved = storedGeometryNodes(original).map((n) => (n.id === 'c' ? { ...n, parentId: undefined } : n))
+      expect(applyStoredGeometry(original, moved).find((n) => n.id === 'c')?.parentId).toBeUndefined()
+    })
+
+    it('gives a new frame no parent, and its member the new frame', () => {
+      const next = wrapStoredNodes([{ ...node('a'), parentId: 'gone' }], ['a'], frame)!
+
+      expect(next[0].id).toBe('new-frame')
+      expect(next[0].parentId).toBeUndefined()
+      expect(next[1]).toMatchObject({ id: 'a', parentId: 'new-frame' })
+    })
+
+    it('counts as the same container as a top-level node, and still refuses a real mix', () => {
+      const parent = { ...node('p'), kind: 'group' as const }
+      expect(wrapStoredNodes([{ ...node('a'), parentId: 'gone' }, node('b')], ['a', 'b'], frame)).not.toBeNull()
+      expect(wrapStoredNodes([parent, { ...node('a'), parentId: 'p' }, { ...node('b'), parentId: 'gone' }], ['a', 'b'], frame)).toBeNull()
+    })
+
+    it('still refuses a parent cycle', () => {
+      const cycle = [{ ...node('x'), kind: 'group' as const, parentId: 'y' }, { ...node('y'), kind: 'group' as const, parentId: 'x' }]
+      expect(() => storedGeometryNodes(cycle)).toThrow('geometry-invalid-scene')
+    })
   })
 })
