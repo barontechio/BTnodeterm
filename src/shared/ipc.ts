@@ -185,6 +185,11 @@ export const IPC = {
   canvasTrackpadGesture: 'canvas:trackpad-gesture',
   agentStatus: 'agent:status',
   agentSubagentSnapshot: 'agent:subagent-snapshot',
+  /** Renderer → main/server: the host's current per-node agent states, read off the agent-status
+   *  mirror (`AgentStatusSnapshotEntry[]`, shared/agent-status-snapshot.ts). A relay tab asks right
+   *  after subscribing to `agent:status`, so a node that went working before it joined is not blank.
+   *  The response is view-filtered for non-editors like `agent:status` (access-policy.ts). */
+  agentStatusSnapshot: 'agent:status-snapshot',
   /** Renderer → main/server: answer a held Claude permission hook (deterministic approvals).
    *  Payload: `{ nodeId, pendingId, decision: 'allow'|'deny' }`; resolves boolean. See
    *  docs/hook-reply-approvals.md. */
@@ -389,8 +394,18 @@ export const IPC = {
   licenseUpgrade: 'license:upgrade',
   licenseDetail: 'license:detail',
   licenseRelease: 'license:release',
+  // Free-tier open-project limit (src/shared/project-limit.ts). renderer → main (invoke): the
+  // current `ProjectLimitState`, and a lazy allowance claim → `ClaimResult`; a relay peer's request
+  // for either is refused (`projectLimit:` in HOST_ONLY_CHANNEL_PREFIXES). `projectLimitChanged` is
+  // main → renderer with the new state, sent to this machine's windows only — never broadcast,
+  // since a broadcast also reaches relay peers. The allowance is this machine's alone.
+  projectLimitState: 'projectLimit:state',
+  projectLimitClaim: 'projectLimit:claim',
+  projectLimitChanged: 'projectLimit:changed',
   appRestartToUpdate: 'app:restart-to-update',
   announcementsFetch: 'announcements:fetch',
+  announcementsPopups: 'announcements:popups',
+  announcementsPopupImage: 'announcements:popup-image',
   usageFetch: 'usage:fetch',
   usageRefresh: 'usage:refresh',
   usageUpdate: 'usage:update',

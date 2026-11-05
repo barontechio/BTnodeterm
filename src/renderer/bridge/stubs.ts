@@ -26,6 +26,7 @@ import {
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
+import { INACTIVE_PROJECT_LIMIT, type ClaimResult, type ProjectLimitState } from '../../shared/project-limit'
 import { isMacPlatform } from '../../shared/platform-utils'
 import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
 import type { ContextElement } from '../lib/keyContext'
@@ -130,6 +131,7 @@ export function buildStubApi(): Omit<
   | 'canvas'
   | 'dialog'
   | 'onAgentStatus'
+  | 'agentStatusSnapshot'
   | 'onSubagentActivity'
   | 'onUnreadClear'
   | 'answerPermission'
@@ -269,7 +271,10 @@ export function buildStubApi(): Omit<
       prepareQuit: noop
     },
     announcements: {
-      fetch: () => Promise.resolve([])
+      fetch: () => Promise.resolve([]),
+      // The Server Edition does not read the check feed, so there is never a popup to show.
+      popups: () => Promise.resolve([]),
+      popupImage: () => Promise.resolve(null)
     },
     license: {
       upgrade: U('license.upgrade'),
@@ -281,6 +286,18 @@ export function buildStubApi(): Omit<
       // reject rather than answer a fabricated "0 devices" — the same degrade as getStatus above.
       detail: U('license.detail'),
       releaseOthers: U('license.releaseOthers'),
+      onChange: noopUnsub
+    },
+    projectLimit: {
+      // The Server Edition has no open-project gate (docs/project-limit.md), so it answers the
+      // dormant state and every open stays synchronous. Resolved, not rejected: unlike
+      // `license.getStatus`, this is read on the open path, and "inactive" is the true answer here
+      // rather than "unknown". `claim` answers `disabled` (this shell never talks to the license
+      // server) for the same reason: a refusal `ClaimResult` names, where an E_UNSUPPORTED throw is
+      // outside the contract.
+      state: (): Promise<ProjectLimitState> => Promise.resolve(INACTIVE_PROJECT_LIMIT),
+      claim: (): Promise<ClaimResult> =>
+        Promise.resolve({ ok: false, error: 'disabled', state: INACTIVE_PROJECT_LIMIT }),
       onChange: noopUnsub
     },
     contextLink: {
@@ -751,6 +768,7 @@ export function buildStubApi(): Omit<
     | 'canvas'
     | 'dialog'
     | 'onAgentStatus'
+    | 'agentStatusSnapshot'
     | 'onSubagentActivity'
     | 'onUnreadClear'
     | 'answerPermission'

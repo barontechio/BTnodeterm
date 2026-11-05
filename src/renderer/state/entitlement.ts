@@ -8,6 +8,10 @@ interface EntitlementState {
   isPremium: boolean
   /** Capability of the owner Server API, distinct from paid entitlement. */
   serverLicenseEnabled: boolean
+  /** True once a real license status has arrived (the first `hydrate()` or main's broadcast).
+   *  Until then `isPremium` is only the default `false`, not an answer — wait on this before
+   *  deciding something a Pro user must never see. */
+  known: boolean
   /** Team seat cap (premium → max(3, N), premium-no-field → 3 = Pro's free seats, free/inactive
    *  → 0). Mirrors `status.seats` so the Team seats section can select it directly. */
   seats: number
@@ -75,13 +79,14 @@ const EMPTY_DETAIL: LicenseDetail = {
 
 export const useEntitlement = create<EntitlementState>((set, get) => {
   const apply = (status: LicenseStatus) =>
-    set({ status, isPremium: status.active, seats: status.seats })
+    set({ status, isPremium: status.active, seats: status.seats, known: true })
   // Live updates from the main process (launch refresh, offline grace).
   window.nodeTerminal.license.onChange(apply)
   return {
     status: EMPTY,
     isPremium: false,
     serverLicenseEnabled: false,
+    known: false,
     seats: 0,
     detail: null,
     async hydrate() {

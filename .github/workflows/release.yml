@@ -30,6 +30,16 @@ jobs:
           # network blip — after every asset had uploaded — which skipped the publish gate and
           # stranded v0.2.23 as a prerelease. The ephemeral Linux runner below keeps its cache.
 
+      # The free-tier project limit's embedded deadline (PROJECT_LIMIT_DEADLINE_MS) must be bumped
+      # in every release before the flip, or DO_NOT_TRACK users are gated before anyone else. This
+      # refuses a tag whose deadline is under 30 days away (until it is frozen at the flip). Plain
+      # node, no npm ci, so a refused release fails in seconds. It is the FIRST step that runs in
+      # every build job (mac, linux, win): those jobs do not wait for each other and each creates
+      # the release on its first upload, so a refused tag must stop all three before they build.
+      # See docs/project-limit.md.
+      - name: Project-limit deadline guard
+        run: node scripts/check-project-limit-deadline.mjs
+
       # caffeinate on EVERY long-running step in this job, not just build+upload: the Air
       # sleeping during npm ci or the tmux compile cancels the step just the same (the
       # v0.3.1 attempt died mid tmux build). -dims only blocks idle sleep — a closed lid
@@ -157,7 +167,11 @@ jobs:
   # Publishes AppImage + deb + rpm + latest-linux.yml to the SAME tag's GitHub Release; the
   # nodeterm.dev update feed serves latest-linux.yml alongside the mac files.
   release-linux:
-    runs-on: ubuntu-latest
+    # PINNED, and for a different reason than ci.yml's: this job builds the AppImage, deb and rpm,
+    # so the build host sets the glibc floor every Linux user is held to. v0.4.4 and v0.4.5 were
+    # built on 24.04; letting `ubuntu-latest` carry this to 26.04 would raise that floor silently,
+    # in a release whose notes promise nothing of the kind. Raise it on purpose, in its own change.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -165,6 +179,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
+      # Same guard as release-mac (see the comment there): first, so a refused tag uploads nothing.
+      - name: Project-limit deadline guard
+        run: node scripts/check-project-limit-deadline.mjs
 
       # electron-builder ships its own fpm, but the rpm target shells out to the system
       # rpmbuild ("Need executable 'rpmbuild' to convert dir to rpm"). Installed explicitly
@@ -220,6 +238,10 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+
+      # Same guard as release-mac (see the comment there): first, so a refused tag uploads nothing.
+      - name: Project-limit deadline guard
+        run: node scripts/check-project-limit-deadline.mjs
 
       # postinstall patches node-pty and rebuilds node-pty + smart-whisper against Electron's
       # ABI — the same install win-package-smoke.yml and the quality-windows CI job prove green.
@@ -279,6 +301,12 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     needs: [release-mac, release-linux]
+    # A job-level block replaces the workflow's, so contents: write is restated. issues: read lets
+    # the release-notes generator look up the PRs labelled `no-release-notes` (labels live on the
+    # issues API); without it that lookup fails and the notes fall back to the plain commit list.
+    permissions:
+      contents: write
+      issues: read
     steps:
       - uses: actions/checkout@v7
         with:
@@ -290,15 +318,17 @@ jobs:
       #   Layer 1  scripts/release-notes.mjs asks GitHub's own generator for the PR-resolved
       #            list (PR number, PR title, author) and regroups it into New / Improved /
       #            Fixed, with test/refactor/chore/ci/build collapsed at the bottom — kept, not
-      #            deleted. Every entry links its PR, and any issue its title names.
+      #            deleted. Every entry links its PR, and any issue its title names. A PR
+      #            labelled `no-release-notes` is left out entirely (docs/release-notes/README.md).
       #   Layer 2  docs/release-notes/<TAG>.md, a hand-written Highlights block reviewed in the
       #            release PR, placed at the top. ABSENT FILE ⇒ THE GROUPED LIST ALONE. No
       #            release is ever blocked waiting for prose, and nobody has to be in the loop.
       #
       # DEGRADES, NEVER FAILS: if the generator throws for any reason (gh api down, a body
-      # shape we do not parse, a missing node), the step falls back to EXACTLY the plain
-      # `git log` list this release used to publish. A release that cannot publish because
-      # prose generation broke would be strictly worse than the list we are replacing.
+      # shape we do not parse, a missing node), the step falls back to the plain `git log` list
+      # this release used to publish — or to the compare link alone when a `no-release-notes` PR
+      # is in the range or the label lookup does not answer. A release that cannot publish
+      # because prose generation broke would be strictly worse than the list we are replacing.
       - name: Generate release notes
         env:
           GH_TOKEN: ${{ github.token }}
@@ -321,11 +351,31 @@ jobs:
           if ! node scripts/release-notes.mjs --tag "$tag" --prev "$prev" \
                  --repo "$GITHUB_REPOSITORY" --out notes.md; then
             echo "::warning::structured release notes failed; falling back to the plain commit list"
+            # The plain list is commit subjects, and git knows nothing about the `no-release-notes`
+            # label — the fallback would publish exactly what the label keeps out. So the list is
+            # printed only when the label lookup ANSWERS and no labelled PR was merged in this
+            # range; otherwise the notes are the compare link alone. A failed lookup is not "no
+            # labelled PRs".
+            withheld=yes
+            if labelled=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?labels=no-release-notes&state=all&per_page=100" \
+                            --jq '.[] | select(.pull_request) | .number' 2>/dev/null); then
+              withheld=no
+              subjects=$(git log --format='%s' "$range")
+              for n in $labelled; do
+                if grep -qE "^Merge pull request #${n} |\(#${n}\)\$" <<<"$subjects"; then withheld=yes; break; fi
+              done
+            fi
+            if [ -n "$prev" ]; then link="https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...${tag}"
+            else link="https://github.com/${GITHUB_REPOSITORY}/commits/${tag}"; fi
             {
               echo "## Changes${prev:+ since ${prev}}"
-              git log --no-merges --format='- %s' "$range" | grep -vE '^- chore\(release\)' | head -60
-              total=$(git log --no-merges --format='- %s' "$range" | grep -cvE '^- chore\(release\)' || true)
-              if [ "${total:-0}" -gt 60 ]; then echo "- …and $((total - 60)) more commits"; fi
+              if [ "$withheld" = yes ]; then
+                echo "Full list of changes: ${link}"
+              else
+                git log --no-merges --format='- %s' "$range" | grep -vE '^- chore\(release\)' | head -60
+                total=$(git log --no-merges --format='- %s' "$range" | grep -cvE '^- chore\(release\)' || true)
+                if [ "${total:-0}" -gt 60 ]; then echo "- …and $((total - 60)) more commits"; fi
+              fi
             } > notes.md
           fi
           gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --notes-file notes.md

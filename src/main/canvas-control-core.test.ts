@@ -710,6 +710,19 @@ describe('parseControlRequest', () => {
     }
   })
 
+  it('both agent-facing texts say a `reply` may reach the node that opened the caller (#1357)', () => {
+    for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
+      // The Server Edition's creator gate refused every station → orchestrator reply, so the
+      // squad pattern had to be woken by hand. The exception is `reply`-only; the text must say
+      // the reply reaches the OPENER, and must not promise the same for `send`. A doc line with no
+      // test is a plan, not a fact (CLAUDE.md, canvas control).
+      const flat = body.replace(/\s+/g, ' ')
+      // Each body phrases it once, and both name `reply` right before the exception.
+      expect(flat).toMatch(/for `reply` the node that opened the caller|`reply --node[^`]*`[^`]*reach the node that opened you/)
+      expect(flat).not.toMatch(/`send --node[^`]*`[^`]*reach the node that opened you/)
+    }
+  })
+
   it('both agent-facing texts say a busy target is QUEUED, not refused (deliver-on-idle, PR 7)', () => {
     for (const body of [buildCanvasSkillBody('/x/shim.sh'), buildCanvasControlInstructions('/tmp/nodeterm.sh')]) {
       // PR 7 replaced "busy target is refused with targetBusy" with a bounded deliver-on-idle
@@ -1621,7 +1634,7 @@ describe('--after-success + report-outcome: a dependent that waits for a reporte
 
   it.each(bodies)('%s teaches stations to report, honestly, about themselves only', (_name, body) => {
     const flat = body.replace(/\s+/g, ' ')
-    expect(flat).toContain(`\`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"]\``)
+    expect(flat).toContain(`\`${REPORT_OUTCOME_VERB} --outcome succeeded|failed [--note "<one line>"] [--notify-opener]\``)
     expect(flat).toContain('REPORT WHEN EVERY TASK YOU ARE GIVEN ENDS')
     expect(flat).toContain('not merely that you stopped')
     expect(flat).toContain('`--node` naming another node is refused')
@@ -1703,6 +1716,22 @@ describe('open-project --name limit in the agent-facing text (issue #940)', () =
     const squash = (s: string): string => s.replace(/\s+/g, ' ')
     expect(squash(buildCanvasSkillBody('/tmp/nodeterm.sh'))).toContain(sentence)
     expect(squash(buildCanvasControlInstructions('/tmp/nodeterm.sh'))).toContain(sentence)
+  })
+})
+
+describe('open-project and the free-tier project limit — agent-facing docs', () => {
+  // The verb help says nothing about the limit: it is installed into every agent's config on launch,
+  // and while the limit is off there must be nothing about it for an agent to read. The guidance
+  // rides the refusal itself (`refuseAgent` in renderer/lib/projectLimitGate.ts: `free plan: N of N
+  // projects are open; the user has been shown the options — do not retry`), which only exists while
+  // the limit is on — so the outcome text IS the documentation, and it cannot drift from the code.
+  it.each([
+    ['skill', buildCanvasSkillBody('/x/shim.sh')],
+    ['instructions', buildCanvasControlInstructions('/x/shim.sh')]
+  ])('%s body: says nothing about the limit', (name, body) => {
+    for (const phrase of ['open-project limit', 'free plan', 'free-project', 'allowance', 'shown the options']) {
+      expect(body, `${name}: ${phrase}`).not.toContain(phrase)
+    }
   })
 })
 

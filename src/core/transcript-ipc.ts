@@ -31,6 +31,7 @@ import { capabilityAgentId } from '../shared/agents/config'
 import {
   parseChatMessages,
   parseChatWindow,
+  claudeChatRecordParser,
   parseTranscriptLines,
   type ChatWindowParse,
   readChatWindow,
@@ -195,6 +196,17 @@ async function readChatPage(
   page: ChatTranscriptPage,
   deps: TranscriptIpcDeps
 ): Promise<ChatTranscriptResult> {
+  // Thinking summaries and rich parts only when asked (the ⌘M panel asks; the phone does not), on
+  // BOTH legs. Neither flag set = the bare parser, so the phone's page is byte-for-byte unchanged.
+  const parse =
+    page.thinking || page.rich
+      ? (buf: Buffer, bufStart: number) =>
+          parseChatWindow(
+            buf,
+            bufStart,
+            claudeChatRecordParser({ thinking: page.thinking === true, rich: page.rich === true })
+          )
+      : parseChatWindow
   const readRemotePage = deps.readRemotePage
   if (readRemotePage) {
     const remote = await readRemotePage(q, page)
@@ -202,10 +214,15 @@ async function readChatPage(
       if (!remote.ok) return remote.absent ? notFoundPage() : unreadablePage(remote.reason)
       // A growth re-read that suddenly says "not remote" (null) is a failed read too — never a
       // reason to go read THIS machine's disk halfway through a remote page.
-      return parseGrowingWindow(page, remote, async (p) => {
-        const r = await readRemotePage(q, p)
-        return r && r.ok ? r : null
-      })
+      return parseGrowingWindow(
+        page,
+        remote,
+        async (p) => {
+          const r = await readRemotePage(q, p)
+          return r && r.ok ? r : null
+        },
+        parse
+      )
     }
   }
   // A node its caller KNOWS is remote (an SSH project's node, whether or not a pty is attached):
@@ -217,7 +234,7 @@ async function readChatPage(
   const w = await readChatWindow(p, page)
   // Resolved but unreadable (deleted between resolve and read): not-found, like a failed remote.
   if (!w) return notFoundPage()
-  return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null)
+  return parseGrowingWindow(page, w, async (pg) => (await readChatWindow(p, pg)) ?? null, parse)
 }
 
 /**

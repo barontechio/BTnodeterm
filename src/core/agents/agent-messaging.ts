@@ -735,12 +735,14 @@ export async function runDelivery(
   // Agent creator proof cannot stand for a person. Only an explicitly wired owner entrance can
   // deliver a person's comment on a shell that otherwise enforces the agent creator ledger.
   // A station notice asks the ledger the other way round (see `stationNotice` above).
+  // A reply to the verified opener reverses the same creator relationship.
   if (!notPermitted && deps.callerOwnsTarget) {
     if (board) { if (!deps.ownerBoardComments) notPermitted = 'unsupported-edition' }
     else if (
       !(stationNotice
         ? deps.callerOwnsTarget(req.targetNodeId, ident.sourceNodeId)
-        : deps.callerOwnsTarget(ident.sourceNodeId, req.targetNodeId))
+        : deps.callerOwnsTarget(ident.sourceNodeId, req.targetNodeId) ||
+          (req.verb === 'reply' && deps.callerOwnsTarget(req.targetNodeId, ident.sourceNodeId)))
     )
       notPermitted = 'caller-not-owner'
   }

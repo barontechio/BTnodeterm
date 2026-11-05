@@ -6,6 +6,7 @@ import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
 import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
 import { subagentReplay } from '../core/subagent-replay'
 import { SettingsControl } from '../core/settings-control'
+import { registerAgentStatusSnapshotIpc } from '../core/agent-status-snapshot'
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
 import { join, resolve, posix } from 'path'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
@@ -185,7 +186,7 @@ import { generateCommitMessage } from '../core/commit-message'
 import { registerNamingIpc } from '../core/naming-ipc'
 import { initUpdater, type UpdaterHandle } from './updater'
 import { requestRendererFlush } from './renderer-flush'
-import { fetchCheck } from '../core/check'
+import { configureCheck, fetchCheck, fetchPopupImage } from '../core/check'
 import {
   hookServer,
   OPEN_PROJECT_CONTROL_REFUSAL,
@@ -385,7 +386,9 @@ import {
 } from './window-state'
 import { remoteCodexUsageTargets } from '../core/usage/remote-codex-usage'
 import { remoteUsageTargets } from '../core/usage/remote-claude-usage'
-import { initLicense, isPremium, getStoredEntitlement } from '../core/license'
+import { initLicense, isPremium, getStoredEntitlement, setLicenseNetworkConsent } from '../core/license'
+import { initProjectLimit } from '../core/project-limit'
+import { readMachineHashResult } from '../core/machine-id'
 import { WhisperModelStore } from '../core/speech/whisper-models'
 import { SpeechService } from '../core/speech/speech-service'
 import { registerSpeechIpc } from '../core/speech/register-ipc'
@@ -2052,7 +2055,15 @@ app.whenReady().then(async () => {
     if (target) void shell.openExternal(target)
   })
 
+  // The open-project count rides /v1/check only while the Settings → Privacy telemetry toggle is
+  // on, and only once the workspace index is known (core/check.ts). Both read per call.
+  configureCheck({
+    openProjects: () => workspaceStore.openProjectCount(),
+    telemetryEnabled: () => settingsStore.get().telemetryEnabled
+  })
   ipcMain.handle(IPC.announcementsFetch, async () => (await fetchCheck()).messages)
+  ipcMain.handle(IPC.announcementsPopups, async () => (await fetchCheck()).popups)
+  ipcMain.handle(IPC.announcementsPopupImage, (_e, sha256: string) => fetchPopupImage(String(sha256)))
   ipcMain.handle(IPC.appUpdatePolicy, async () => (await fetchCheck()).update)
 
   // Writable base dir for app-managed files (e.g. default git worktree location). On the platform:
@@ -2320,14 +2331,20 @@ app.whenReady().then(async () => {
   // (the station's `openedBy` plus that agent's rope to it), never from the renderer; the canvas
   // leg (board-log line + chip) needs no switch, the pane leg is the messaging service above with
   // every one of its gates, the per-project `agentMessaging` switch included.
+  // Shared with `report-outcome --notify-opener` (#1356): same recipient, same delivery.
+  const stationOpener = {
+    recipientFor: (id: string) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    deliver: (notice: Parameters<typeof deliverStationNotice>[0]) =>
+      deliverStationNotice(notice, messagingDeps)
+  }
   const stationNotices = new StationNoticeMonitor({
     now: () => Date.now(),
-    recipientFor: (id) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    recipientFor: stationOpener.recipientFor,
     // The mirror's correlated, unanswered question — the one fact that says a station is really
     // waiting on a human (station-notice.ts: permission prompts are not a trigger).
     pendingQuestionOf: (id) => mirrorEntry(id)?.pendingQuestion?.toolUseId,
     appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
-    deliver: (notice) => deliverStationNotice(notice, messagingDeps),
+    deliver: stationOpener.deliver,
     publish: (views) => sendToMain(IPC.stationNoticeChanged, views),
     // The memoized index scan, not `getNode` (which re-parses a project file per call): the sweep
     // asks this for every node it tracks.
@@ -2954,7 +2971,7 @@ app.whenReady().then(async () => {
   // which need the raw transcript_path the NormalizedAgentEvent intentionally drops.
   const subagentTail = createSubagentTail(({ toolUseId, chunk }) => {
     subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
-    if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
+    corePlatform.broadcast(IPC.agentSubagentActivity, { toolUseId, chunk })
   })
   // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop
   // win once a session sends them — core/claude-subagent-lifecycle.ts). Every normalized event
@@ -2984,7 +3001,7 @@ app.whenReady().then(async () => {
     for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
     if (!nodeId) return
     const ev = recordQuestionResult(nodeId, sessionId, toolUseId)
-    if (ev) sendToMain(IPC.agentStatus, ev)
+    if (ev) corePlatform.broadcast(IPC.agentStatus, ev)
   }
   /**
    * The transcript recorded an interrupt marker (Esc / Ctrl+C). Claude sends no hook for an
@@ -3017,7 +3034,7 @@ app.whenReady().then(async () => {
     // Through the lifecycle like every other event: in a session that sends native hooks the card
     // is keyed by the child's agent_id, and this tool-keyed end is re-keyed onto it (idempotent).
     for (const out of claudeSubagents.apply(taskDoneEvent)) {
-      sendToMain(IPC.agentStatus, out)
+      corePlatform.broadcast(IPC.agentStatus, out)
       recordAgentEvent(out)
     }
     subagentTail.finish(n.toolUseId)
@@ -3028,14 +3045,16 @@ app.whenReady().then(async () => {
   const cursorSubagents = createCursorSubagentTracker({
     tail: subagentTail,
     emit: (ev) => {
-      sendToMain(IPC.agentStatus, ev)
+      corePlatform.broadcast(IPC.agentStatus, ev)
       recordAgentEvent(ev)
     }
   })
   // Every context tail pushes through here, so an agent's meter reaches the renderer, the Notch HUD
-  // and the phone's context ring identically whichever CLI produced the numbers.
+  // and the phone's context ring identically whichever CLI produced the numbers. `broadcast` is the
+  // main window (sendToMain) plus every non-quiet relay peer. A joined team tab does not subscribe
+  // `context:update`, so its meter stays empty (docs/hosted-team-relay.md, follow-ups).
   const pushContextUpdate = (payload: unknown): void => {
-    if (!win.isDestroyed()) win.webContents.send(IPC.contextUpdate, payload)
+    corePlatform.broadcast(IPC.contextUpdate, payload)
     // Feed the macOS Notch HUD the model name (keyed by sessionId; no-op off/non-darwin).
     notchHudOnContextUpdate(payload as Parameters<typeof notchHudOnContextUpdate>[0])
     // Feed the mirror's per-node context ring (mobile-usage-inbox). The context tail keys by
@@ -3123,7 +3142,7 @@ app.whenReady().then(async () => {
     onTrack: (nodeId, sessionId) => { nodeContextSession.set(nodeId, sessionId) },
     onClear: (nodeId, sessionId) => {
       notchHudOnContextUpdate({ nodeId, sessionId, cleared: true })
-      if (!win.isDestroyed()) win.webContents.send(IPC.contextUpdate, { nodeId, sessionId, cleared: true,
+      corePlatform.broadcast(IPC.contextUpdate, { nodeId, sessionId, cleared: true,
         usedTokens: 0, windowTokens: 0, usedPercent: 0, model: null, updatedAt: Date.now() })
     }
   })
@@ -3474,7 +3493,10 @@ app.whenReady().then(async () => {
       // renderer hears the event, so no `--after-success` can fire on it in between.
       stationOutcomes.onAgentEvent(enriched)
       coreTeams?.onAgentEvent(enriched)
-      sendToMain(IPC.agentStatus, enriched)
+      // The main window and every non-quiet relay peer: a joined team tab keeps the host's agent
+      // status in its own session store (a scoped guest hears only its project's nodes —
+      // filterScopedEvent).
+      corePlatform.broadcast(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
       // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
@@ -3527,6 +3549,8 @@ app.whenReady().then(async () => {
   // (phone Inbox archives the card) and re-sends an 'end' live-update so the paired phone dismisses
   // its lingering DONE Live Activity. Fire-and-forget; the mirror no-ops with no unresolved done.
   corePlatform.handle(IPC.agentSubagentSnapshot, () => subagentReplay.snapshot())
+  // The host's per-node agent states off the mirror, for a relay tab that joins late (bug D).
+  registerAgentStatusSnapshotIpc(corePlatform)
   corePlatform.handle(IPC.agentAckDone, (nodeId: string) => {
     ackDone(nodeId)
   })
@@ -4642,7 +4666,8 @@ app.whenReady().then(async () => {
           store: stationOutcomes,
           now: () => Date.now(),
           projectIdOfNode,
-          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
+          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
+          opener: stationOpener
         }
       )
     }
@@ -4900,9 +4925,32 @@ app.whenReady().then(async () => {
     buildMirrorUsage(usageService.snapshot(), settingsStore.get().claudeAccounts ?? [], Date.now())
   )
   initTelemetry(() => settingsStore.get())
+  // The free-tier open-project limit (core/project-limit.ts). Its state goes to THIS machine's
+  // window only: sendToMain, never platform().broadcast, which also fans out to every relay peer
+  // (the state carries this host's Pro and DO_NOT_TRACK facts). The Server Edition does not run it.
+  // Its first check read waits for the boot workspace load, the one the delivery queue waits on: read
+  // before the index is loaded, the open-project count is unknown and would not ride that read.
+  const projectLimit = initProjectLimit({
+    openProjects: () => workspaceStore.openProjectCount(),
+    machineHash: readMachineHashResult,
+    notify: (s) => sendToMain(IPC.projectLimitChanged, s),
+    ready: bootWorkspaceLoad
+  })
+  settingsStore.onChange(() => projectLimit.pushIfChanged())
+  // DO_NOT_TRACK consent for license and allowance calls (docs/project-limit.md): Settings →
+  // Privacy, read on every gated call so revoking it applies at once. Installed BEFORE initLicense,
+  // whose launch refresh runs immediately. Only `licenseNetworkGate()` callers read it — never
+  // telemetry or the check feed. (Giving consent does not trigger a refresh: license.ts exposes
+  // none, so the next license call is the 6 h refresh, an activate or an upgrade; a claim reads the
+  // gate itself.)
+  setLicenseNetworkConsent(() => settingsStore.get().licenseNetworkConsent === true)
   // A license change (activate, refresh, a lapsed token replaced) re-arms every live link the API
   // refused: a link host whose 7-day entitlement expired under it stops minting until then (R41).
-  licenseClient = initLicense(() => watchLinks?.onEntitlementChanged())
+  // It can also change Pro for the project limit, which nothing else would tell the renderer.
+  licenseClient = initLicense(() => {
+    watchLinks?.onEntitlementChanged()
+    projectLimit.pushIfChanged()
+  })
   // Lazy getter: sshProjectManager is created just below, so a remote account op (which only runs
   // after the user has connected an SSH project) always sees the live manager.
   initClaudeAccounts(() => sshProjectManager)

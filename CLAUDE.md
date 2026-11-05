@@ -3074,7 +3074,11 @@ shared 4-state model, and a **transient** zustand store `state/agentStatus.ts`
 **not** persisted — only `unread`/`session`/`sessionId`/`agentId`/`loop`/`hibernated` go to
 localStorage under `nodeterm.agentStatus`, migrated once from the legacy `nodeterm.claudeStatus`
 key. `agentId` is durable because a hand-launched `claude` in a plain terminal is known nowhere
-else, and its context links must keep classifying across restarts).
+else, and its context links must keep classifying across restarts). That is the DEFAULT instance,
+the local core's. A relay / team tab's session gets its own **keyless** store (`agentStatusForApi`):
+it persists nothing, never acks a read (no `ackDone` callback), and is fed by `applyAgentEvent`
+(`state/applyAgentEvent.ts`), the same reducer Canvas's listener uses — see "A relay session owns
+its agent status" under Hosted team relay.
 
 - **Agent registry + capabilities** — `src/shared/agents/config.ts` holds `AGENT_CONFIG`
   (claude/codex/gemini/copilot/opencode/grok: id, label, spawn command, color, `promptInjectionMode`, …) keyed
@@ -3636,8 +3640,12 @@ else, and its context links must keep classifying across restarts).
   (`normalizeClaude`/`normalizeCodex`/`normalizeGemini`/`normalizeCopilot`/`normalizeOpencode`/`normalizeGrok`/`normalizeAntigravity`) that map each agent's native hook
   events to a `NormalizedAgentEvent` over the shared `AgentState` (`working | waiting | blocked
   | done`) plus subagent/recurring/session kinds. Canvas's listener consumes
-  `NormalizedAgentEvent` from `agent:status`, drives the `agentStatus` store, fires throttled
-  (5s/node) background notifications, and records the session id. Header shows a pulsing
+  `NormalizedAgentEvent` from `agent:status` and hands it to `applyAgentEvent`, the pure reducer
+  that does every store write (state, session id, account, loop, subagent cards) and reports which
+  alert the event raised; the listener keeps what is a fact about THIS window — the unread mark and
+  its ack, the sound, the throttled (5s/node) background notifications, the handoff fold. A relay
+  session feeds the same reducer into its own keyless store (`wireRelayAgentStatus`), with no ack,
+  sound, notification or subagent cards. Header shows a pulsing
   **RUNNING** (working) / **NEEDS YOU** (waiting/blocked) badge.
 - **DROPPED — the CLI died and nobody told us** (`renderer/terminal/agent-liveness.ts`, issue #616).
   Every ORDERLY exit announces itself: Eco's `/exit` sets `hibernated`, "Pause session" sets
@@ -4648,7 +4656,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   the dialog check `sendChatPrompt` makes is seconds old by then, and an Enter into a dialog that
   opened meanwhile would ANSWER it — the text stays in the composer and the caller hears
   `pasted-not-submitted`. The panel ignores a second Enter while a send is in flight (the draft is
-  cleared only once it lands).
+  cleared only once it lands). **"The text arrived" is read from the COMPOSER, never counted
+  across the screen** (`TypedSurface.draftOf` → `readClaudeDraft`, on a styled capture so the dim
+  placeholder is not draft text): the draft must end with the message's tail and differ from the
+  draft before typing. Typing also clears the placeholder and shortens the status line ("· ← for
+  agents" goes away), so a one-letter answer like `a` appeared once more in the box and once less
+  elsewhere; the screen-wide count never rose and every such send ended `pasted-not-submitted` with
+  the answer sitting in the box. The screen-wide count stays only as the fallback for a poll with
+  no readable input box (a draft too tall for the box reader).
   **The agent's OWN dialogs are read off the screen** (`shared/agents/claude-screen.ts`, claude
   only — `SCREEN_DIALOG_READABLE`). The folder-trust prompt, `/model` and one-time setup questions
   fire NO hook, so the state gate above reads `done` while one owns the keyboard, and a paste into
@@ -5960,7 +5975,13 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   a reported success. Grammar, the persisted shape and the pure evaluation are ONE module,
   `@shared/station-outcome`, used by desktop main's shape gate, the Server Edition's parser AND
   headless factory, and the renderer's launch loop, so the two shells cannot disagree about when a
-  dependent starts. Rules a refactor must not undo:
+  dependent starts. `report-outcome --notify-opener` (#1356) also sends the opener one app-written
+  notice through `deliverStationNotice`, to the recipient the failure monitor uses (each shell passes
+  the same `opener` pair to both); a shell that passes none refuses the flag. It speaks only when
+  the outcome the opener last HEARD changes (`StationOutcomeStore.openerHeard` — process-local,
+  dropped with the report), never when the previous RECORD had the same outcome: a report made
+  without the flag, or whose notice was not sent, told the opener nothing, and a flagged repeat of
+  it must still wake the orchestrator. Rules a refactor must not undo:
   - **A success wait is `--after` plus the report.** Every `--after-success` id is FOLDED INTO
     `pendingLaunch.after` (renderer: once, right after `prWaitPre`; server: before `resolveAfter`),
     so the existing rules apply unchanged — the station must exist and report status, the wait rope
@@ -7950,9 +7971,17 @@ glass never sits over plain black; a wallpaper the user chose is never replaced.
   same 24.4px at the tick, `16 + 12t − 12·max(0, 1 − t/0.7)`, picked by eye so Clear reads through; saturation
   `--glass-sat` 180% at Clear → 150% from the Readable tick to Tinted, text surfaces a flat 150% —
   round 2 N9: 1.6–2.0 turned glass olive or pink over bright wallpapers). **Refraction** is ONE shared SVG filter
-  (`components/GlassRefraction.tsx`, `#nt-refract`: a 256² edge-lens displacement map generated once,
+  (`components/GlassRefraction.tsx`, `#nt-refract`: a 32² edge-lens displacement map generated once,
   `primitiveUnits="objectBoundingBox"` so one filter fits every element), referenced from
-  `--glass-blur` as `url(#nt-refract)` — no per-node filters. **It runs after the blur**
+  `--glass-blur` as `var(--glass-refract,)` — no per-node filters. **It runs only LEFT of the
+  Readable tick** (`glassRefractionOn`): App.tsx sets `--glass-refract: url(#nt-refract)` inline and
+  mounts the filter only there; the stylesheet never declares it (`styles.palette.test.ts`). From the
+  tick to Tinted it bent an already ~20px-blurred backdrop by ≤3px (0 at Tinted) and was the costliest
+  filter in the chain: MEASURED (M2, six glass terminals, one streaming) 74% → 42% GPU without it. Its
+  `feImage` source makes Chromium treat a refracting surface as damaged across its whole rect, so one
+  changing pixel re-ran the blur of the glass around it. The map was 256²: that bitmap cost the
+  renderer ~10% CPU per streaming terminal (paid per frame per refracting surface); 16–32² costs
+  nothing measurable and draws the same lens (32 vs 256 at Clear: mean 0.02/255, max 7). **It runs after the blur**
   (`blur() saturate() url()`; only the colour-matrix squeeze may follow it, since it moves no pixels) and composites over its SourceGraphic so its output is opaque: first in
   the chain (plus an in-filter soft blur with default edgeMode) it let Chromium show a 20–40px band of
   SHARP backdrop inside every glass rim at every slider value (visual QA C1). Measured on an empty
@@ -7971,7 +8000,42 @@ glass never sits over plain black; a wallpaper the user chose is never replaced.
   default ON, read through `keepGlassBlurWhileMoving` — only a literal `false` pauses): on, Canvas
   never adds the class, so the glass stays live through a pan at a GPU cost; chrome keeps both always. MEASURED on the live dev build (CDP computed style):
   Chromium keeps `url("#nt-refract") blur(…) saturate(…)` on the tab bar, dock, sessions sidebar,
-  minimap, zoom controls and terminal nodes.
+  minimap, zoom controls and terminal nodes (that was measured before refraction became Clear-side
+  only; at Readable and right of it the chain now ends at the colour filters).
+- **Glass terminal nodes frost with a STATIC copy of the wallpaper, not a live backdrop-filter**
+  (`lib/glassFrost.ts`, `canvas/GlassFrostSync.tsx`, the `.term-node__frost` rules). Chromium re-runs
+  a backdrop filter every time its surface is redrawn, and a terminal is redrawn for every line an
+  agent prints, so each streaming terminal re-blurred itself (and, through damage expansion, the
+  glass around it) at frame rate; idle cost nothing. MEASURED (M2, six glass terminals, Sonoma still,
+  CDP + `ioreg` GPU utilisation, 3 interleaved rounds, medians): six streaming 92% → 42% GPU, 100% →
+  50% CPU; one streaming 71% → 20% GPU, 32% → 20% CPU (with the refraction change above); no glass at
+  all is 27% / 9%. A node's `.term-node__frost` child paints the wallpaper behind it with the SAME
+  chain as an ordinary `filter` (`var(--glass-term-blur) var(--term-glass-backdrop,)`) and the tint
+  on its `::after`; that content does not change while the camera is still, so Chromium draws it once
+  and reuses it. Rules a refactor must keep:
+  - **Alignment is in flow units.** `frostBox` maps `.canvas-root`'s wallpaper (cover, centred; a
+    gradient fills the root box) into flow coordinates from React Flow's transform and the pane's
+    offset; each node subtracts its own `positionAbsoluteX/Y` (`--node-x/y`). Measured against the
+    live backdrop at zoom 1, 0.78 after a pan, and after a drag: node interiors mean ≤0.8/255, max 5.
+  - **The alignment vars are written onto each frost layer, never onto React Flow's root**: a custom
+    property change restyles every element under it (`lib/canvasZoomVar.ts`), and a pan is a change
+    per frame. Layers register through `useFrostLayer`.
+  - **The picture is ONE stylesheet rule** GlassFrostSync renders, a ≤1280px WebP copy as a data: URL
+    (the CSP allows data: images, not blob:), never a custom property (Chromium drops a var() value
+    past ~2 MB).
+  - **No stacking context on the node** (no `isolation`): the frost's `z-index: -1` must land in the
+    React Flow wrapper's context, under the node's border; inside the node it painted over the 1px
+    glass edge.
+  - It reaches `FROST_PAD` (80px) past the node so the blur samples the wallpaper beside it: the
+    live backdrop clamped at the node's edge instead, so the outermost 1–2px are a touch lighter.
+  - **Live backdrop stays** for a focused node (focus mode moves it out of the canvas), an aerial
+    video wallpaper (cannot be copied), Reduce Transparency, and until the copy is ready. Canvas cards
+    (files/subagent/loop/trigger/dino) still frost live.
+  - **What it cannot show**: anything behind the node but the wallpaper — the dot grid, edges, and
+    above all another node a glass node overlaps (visible at Clear, where the live glass was thin).
+  - Pan cost: the frost re-renders per camera frame like the live blur did (measured 44% vs 38% GPU
+    during a continuous pan, CPU equal); with Keep blur while moving off it drops to the squeeze.
+  `scripts/glass-trap-probe.mjs` counts a displayed frost layer as the blurred backdrop of its node.
 - **Needs-you on glass is an INNER light** (the user's pick, "variant B"): the outer red `::after`
   halo is hidden and a `::before` on the React Flow wrapper paints an inset rim light in
   `--state-attention` (orange) that breathes 0.35 → 1 over 2.4 s — `pointer-events: none`, above the
@@ -8556,6 +8620,23 @@ the Settings section and ShortcutsPanel start disagreeing about what a chord mea
     what a column layout discards); mobile N/A - *nodeterm mobile* attaches to tmux sessions over
     the transport protocol and has no canvas, so surfacing a layout means extending that protocol
     (follow-up in the iOS repo).
+- **Directional focus (⌘←/→/↑/↓, `node.focus*`)** — the multiplexer gesture (Ghostty `goto_split`,
+  tmux `select-pane -L`) on a canvas with no split tree: `lib/directionalFocus.ts` ranks candidates
+  by geometry (same-row/column overlap first, then diagonal with a sideways penalty; no wrap). The
+  ONE decision — where to land AND how — is the pure `planDirectionalMove`, and the "how" has two
+  answers that must not be merged: on the canvas the move **travels** (`focusNodeById`: frame +
+  keyboard + read-ack), origin = the node the keyboard is in, else the selection, else the first
+  press ADOPTS the node nearest the view center. In **focus mode** (⌘⇧F, issue #78) the move
+  **swaps the focused node** (`useFocusNode.focus(next)`) — the flow pane is `display:none` there,
+  so a travel would frame a node on a 0-sized pane (the origin-jump bug) while the user kept
+  staring at the old terminal; before this, moving between two focused terminals was ⌘⇧F, ⌘→, ⌘⇧F.
+  Three details carry it: the origin is the FOCUSED id (the reparent detaches the node root from
+  its `.react-flow__node` wrapper, so the keyboard origin reads null there); candidates are
+  TERMINALS only (the one kind focus mode can show — `focusTargetId`); and the keyboard is handed
+  over explicitly (`useTerminalFocus.request`), because the reparent gives focus back to whichever
+  xterm had it, i.e. the OLD node. Selection follows the swap so leaving focus mode lands on the
+  node the user was in. An edge with nowhere to go is a CLAIMED no-op in both modes — declining
+  would hand ⌘→ to the terminal, which is not "nothing".
 - **Command palette** (`CommandPalette.tsx`): ⌘/Ctrl+K; `Canvas.buildCommands` (create,
   switch project, jump to node by title/tag, open file…).
 - **Explorer** (`ExplorerPanel.tsx`, 🗂 / ⌘⇧E): lazy file tree of the active project `cwd`
@@ -9817,6 +9898,14 @@ script (`fetch('http://localhost:9333/json')`, then a WebSocket to the page):
   46-node canvas: idle renderer+GPU ~120% → ~25% (#1050).
 - **Never promote the React Flow viewport** (`will-change: transform`) — it is a canvas-sized
   layer; on a real canvas it overran the tile budget (flicker) with no CPU gain (#1047).
+- **A `backdrop-filter` is re-run every time its surface is drawn, and nothing caches it** — not
+  for the surface's own content changes, not when moved to a sibling layer under the content (both
+  measured). Glass on anything that updates often (a terminal) costs a full blur per update, and
+  pixel-moving filters spread the damage to neighbouring glass. A plain `filter` on content that
+  does not change IS reused. Liquid Glass terminals therefore frost a static wallpaper copy (see
+  **Glass terminal nodes frost with a STATIC copy**): six streaming terminals 92% → 42% GPU. And an
+  SVG `feImage` in a filter chain marks its whole surface damaged: keep reference filters off
+  surfaces that redraw.
 - **An all-filtered node-change batch must not reach `onNodesChange`** (`handleNodesChange` returns
   early). `applyNodeChanges([])` returns a NEW array; a new `nodes` rebuilds the ephemeral
   subagent/loop cards without `measured`, React Flow re-observes them and its ResizeObserver
@@ -10157,6 +10246,23 @@ unix-socket forward and dev-server `-L` forward over it. POSIX keeps OpenSSH unt
   goes over its owner's ControlMaster or nowhere — never the local socket), read-acks `inbox.ack`
   (`applyPhoneReadAck`, the ack sweeper's body), plus `fs.browse` (home-jailed, dirs only) and
   `pty.capture`; `host.info` lists them. All additive — an old phone keeps its old path.
+
+## Free-tier open-project limit (shipped dormant; the server switches it on)
+
+A non-Pro desktop install may keep FREE (a server value) projects open, a pre-cutoff install its
+signed allowance; Pro is unlimited. Design, runbook, checklist: **`docs/project-limit.md`**.
+- **One count**: `countOpenProjects` (`shared/project-limit.ts`) / `WorkspaceStore.openProjectCount`
+  — in the workspace, not `closed`, not a relay tab. Never write a second one.
+- **Never force-close.** The gate refuses a NEW open and nothing else; no project, node or tmux
+  session is ever closed, deleted or detached because of the limit, even above the allowance.
+- **Placement**: a human open calls `gateProjectOpen` (`renderer/lib/projectLimitGate.ts`) as the
+  LAST await before its synchronous store mutation, skipped when `opensProject(...)` is false;
+  allowed returns the literal `true` in the same tick, so while the limit is off every path stays
+  synchronous with no network, dialog or write. The agent `open-project` verb decides and writes in
+  one tick (`finishAgentProjectOpen`).
+- **Relay tabs are never gated or counted**; `projectLimit:*` is host-only and `projectLimit:changed`
+  reaches this machine's windows only. **The Server Edition has no gate** (stub answers inactive).
+- `PROJECT_LIMIT_DEADLINE_MS` is bumped every release until the flip — release.yml refuses < 30 days.
 
 ## `nodeterm://` links (another app asks to open a node)
 
@@ -10574,6 +10680,42 @@ invariants:
   project keeps the agent status of node ids another project still holds (`nodeIdsHeldElsewhere`).
   Deliberately NOT moved to it: `routeControlSource` (a control request comes from a LOCAL agent, so
   preferring an open relay tab would route it to another machine).
+- **A relay session owns its agent status** (bug D: a team tab never showed RUNNING / NEEDS YOU /
+  unread, because the joiner's only `agent:status` subscriber was Canvas's listener on the LOCAL
+  api, which writes the DEFAULT store). `wireRelayAgentStatus` (`session/relay-agent-status.ts`,
+  held as a session teardown in `openRelayTab` right after `createSession`, before any further
+  await, so the RpcClient's early buffer flushes into it) subscribes the session's OWN api's `onAgentStatus` for the session's
+  lifetime and feeds `applyAgentEvent` into that session's keyless store
+  (`getSessionStores(id).agentStatus`). Routing is by api, never by a project lookup: two relay
+  sessions may serve one project id. **A reader of a team tab's node must not ask the default
+  store** (the known ones that still do are the doc's follow-ups): after Share with team the
+  handed-off SSH project (local session, default store) and its team tab (relay session) hold the
+  SAME node ids, so a reader that asked the default store, or the active project's, shows one
+  project's status on the other's node, and a restart that read it would quit a host session the
+  badge shows as RUNNING. Readers resolve per project
+  (`agentStatusForProject`; `useAgentStatusLookup` / `useAgentStatusSig` re-subscribe inside the
+  session-registry listener, so a reconnect that leaves the signature unchanged still moves them to
+  the new store) or per node (`useSessionStores()`, render-safe for a session disposed a moment
+  ago). **No ack**: a read on a team tab clears unread on this desktop only (`agentStatusForApi`
+  builds the store with no `ackDone` callback), because an `agent:ack-done` would dismiss the
+  OWNER's phone Live Activity for a session they never looked at; the tab subscribes neither
+  `agent:unread-clear` nor `agent:subagent-activity`, and plays no sound and raises no notification.
+  **Snapshot ordering**: subscribe FIRST, then ask `agent:status-snapshot` (served by both shells
+  through `registerAgentStatusSnapshotIpc`, the newest 2000 mirror entries, narrowed for VIEW roles
+  and scoped guests by `narrowResponseForRole` via `sharedNode`), and apply it only to nodes no live
+  event touched in between (`liveSeen`; subagent events do not count, or the subscribe-time subagent
+  replay would hold the busiest nodes blank). A restored or identity-only mirror entry travels with
+  no `state`. A stateful one carries `ageMs` (an age, so no host clock crosses the wire) and sets
+  ONLY `stateAt = now - ageMs`, never `lastEventAt` / `lastSeen`: the joiner saw no transition, and
+  a fabricated one would claim it did. The teardown empties the store, so a dropped tab reads
+  Unknown. The status-driven readers that act on THIS machine are off for a relay node
+  (`relayStatusGates`: Approve/Deny, title sync, transcript search, the ⌘M chat view; the card
+  modal's `ModalTerminal` gates its transcript search the same way); only `'local'` runs them, and
+  `'relay'`, `'server'` and an unknown source fail closed. A desktop Team
+  Access host's agent emits go through `corePlatform.broadcast` (its window plus every non-quiet
+  peer); `agent:unread-clear` stays main-window only. Mobile: N/A (the phone speaks the legacy
+  dialect and reads the mirror file). Follow-ups, including the Canvas-level readers still on the
+  default store: docs/hosted-team-relay.md, "Agent status on a joined tab".
 - **Admin errors are stable codes, and a `--json` refusal goes to STDOUT.** `E_BAD_KEY`,
   `E_BAD_CWD`, `E_HOSTING_OFF`, `E_ADOPT_FAILED`, `E_BAD_REQUEST`, `E_UNSUPPORTED`
   (`core/relay/admin-error.ts`); a remote caller branches on the code, never the sentence, and
@@ -10964,14 +11106,45 @@ Server Edition: no updater (stubs; `onInstalling`/`onFlushRequest` are documente
 The "auto-download off" setting is NOT here — that is PR #956's.
 
 **Backend check feed** (`src/core/check.ts`, successor to the static `announcements.json`): the
-**main process** calls `GET https://api.nodeterm.dev/v1/check?version=&os=&channel=stable` (so the
-renderer CSP stays `'self'`) on launch + every 6h, cached 5 min, returning `{ messages, update }`.
+**main process** calls `GET https://api.nodeterm.dev/v1/check?deviceId=&version=&os=&arch=&channel=stable&plan=`
+(so the renderer CSP stays `'self'`) on launch + every 6h, cached 5 min, returning `{ messages, update }`.
+The one cache exception: a reply fetched before the open-project count was known (launch reads the
+feed before the workspace index has loaded) is refetched once the count is, so the launch check is
+not left count-less for five minutes. `deviceId` is the anonymous install id the backend counts active installs by. **Only while Settings →
+Privacy → Telemetry is on** does the query also carry `openProjects=<n>` (the open-project count, a
+number only; the backend keeps each device's maximum for the project limit). The reply may also
+carry `limits: { projects: { free, epoch } }` while the free-tier project limit is on (absent = off);
+core hears it through `onCheckAnswer`, and only a CHECK-SHAPED reply (a `messages` array + an
+`update` object) without `limits` reads as off and clears the latch — anything else is `unknown` and
+changes nothing (see **Free-tier open-project limit**).
 Exposed split over two IPC handlers: `announcements.fetch()` → `messages`, `appUpdatePolicy` →
 `update`. `components/AnnouncementBanner.tsx` (stacked above `UpdateCard` under the tab bar in a
 `.top-banners` column) shows the newest message the user hasn't dismissed (dismissed `id`s persist
 in `localStorage`); `update.mandatory`/`minSupported` flips `UpdateCard` into a blocking required-
-update state. The call no-ops under `DO_NOT_TRACK`/`NODETERM_TELEMETRY_DISABLED` or in unpackaged
-builds (unless `NODETERM_API_BASE` targets a local server). Schema example:
+update state. **One-time popups** ride the same reply under their own `popups` key (admin console:
+Display → "popup (once)") — a separate key, so every build that reads only `messages` (older
+desktops, mobile) never receives one as a banner that would come back every launch.
+`components/AnnouncementPopup.tsx` (pure rules in `lib/announcementPopup.ts`) shows the newest one
+not shown before and records it in localStorage (`nodeterm.seenPopups`) the moment it is SHOWN, not
+when closed, and shows at most one per feed read. It waits — re-reading the feed every 5 min, so a
+deactivated popup is dropped — until settings AND the license are known (`useEntitlement.known`:
+`isPremium` is a default `false` before that, and an upgrade popup must never reach a Pro user),
+nothing is open on the dialog stack OR among Canvas's own non-stack surfaces (`blocked`: setup
+tour, Settings, palette, dictation, …), and no key was pressed for 4 s. It then focuses its own box
+— never a button, so Enter/Space press nothing, and keys stop reaching the terminal under the scrim
+— and takes Escape in the CAPTURE phase: xterm stops propagation of Escape, so a bubble listener
+never hears it and the agent in the pane gets an ESC that interrupts its turn. Its button opens
+`url`, or with `action: 'upgrade'` starts the Pro checkout — an upgrade popup is skipped for a Pro
+user, dropped the moment the plan flips, and closes when Pro arrives. A popup may carry a picture
+(`image`, a SHA-256): `fetchPopupImage` in `core/check.ts` gets it from `API_BASE` by that hash, so
+the feed can name no URL, checks the hash and the magic bytes, caps the size while reading, and hands
+the renderer a `data:` URL because the CSP's `img-src` takes no network source. It is fetched as part
+of the feed read, and a popup whose picture cannot be had waits for the next read, unrecorded: it
+shows only once, and it was written around that picture. Never add HTML to these messages: a
+picture carries a design with no code in it. Server Edition: the bridge answers `[]` (it does not read the feed). Mobile:
+N/A for v1 (follow-up in the iOS repo). The call no-ops under
+`DO_NOT_TRACK`/`NODETERM_TELEMETRY_DISABLED` or in unpackaged builds (unless `NODETERM_API_BASE`
+targets a local server). Schema example:
 `docs/announcements.example.json`. **The request also states `plan=pro|free`** (offline
 `isPremium()`), because the admin console can aim a message at paid or free users and the feed is
 anonymous — the backend cannot look a device's plan up, and matches only on what we send (a build
@@ -10980,7 +11153,9 @@ with: the 5-min cache is keyed by plan, a failed read after a plan change keeps 
 NOT the other plan's messages, and the banner re-asks when `useEntitlement.isPremium` flips — else a
 "try Pro" message stays up for six hours after the user pays. **Telemetry** (`src/main/telemetry.ts`) is a separate opt-out
 ping to `api.nodeterm.dev/v1/ping` (version/OS on launch + daily), gated on
-`settings.telemetryEnabled` + the same build/DNT guards; toggle in Settings → Privacy.
+`settings.telemetryEnabled` + the same build/DNT guards; toggle in Settings → Privacy. **That toggle
+gates the ping AND the check's `openProjects` count — never the check itself**, which runs whatever
+it says (only DNT / `NODETERM_TELEMETRY_DISABLED` / an unpackaged build stop it).
 
 ## Atomic writes (never a bare `fs.rename`)
 
