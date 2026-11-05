@@ -357,6 +357,7 @@ export async function initServerCanvasControl(
   await restoreDeliveryQueue(queue, queueFile)
 
   const actions: ServerEditionControlActions = {
+    groups: (nodeId, args, verified) => factory.groups(nodeId, args, verified),
     write: nodeWrites ? (nodeId, args, verified) => nodeWrites.run(nodeId, args, verified) : undefined,
     branch: nodeBranches ? (nodeId, args, verified) => nodeBranches.run(nodeId, args, verified) : undefined,
     orchestrate: (verb, nodeId, args, verified) => factory.orchestrate(verb, nodeId, args, verified),

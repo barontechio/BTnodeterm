@@ -5,6 +5,7 @@ import { installBrowserNotificationRouter } from '../bridge/browser-notification
 import { captureNotificationTarget } from './browserNotificationTarget'
 import { notificationMembership } from './notificationMembership'
 import { planGeometryCommand } from '@shared/geometry-command'
+import { retireFramesIfAvailable } from '../lib/groupRetirement'
 import { runHostQueuedLaunch } from '../lib/hostQueuedLaunch'
 import { planBoardAssignment } from '@shared/board-assignment'
 import { controlOpenAgent } from '@shared/control-open-agent'
@@ -412,18 +413,16 @@ import {
 } from '../lib/controlRouting'
 import {
   coldGroupCwd,
-  coldGroupChildCount,
   coldOpenMessage,
   offCanvasNoticeText,
   offCanvasReplyClause,
   coldResolveAfter,
   coldResolveGroup,
-  groupSizeFor,
-  groupSlot,
   storedAgentIdOf,
   type ColdNode
 } from '../lib/coldOpen'
 import { geometryMutations } from '../lib/storedGeometry'
+import { placeDynamicGroupMember, reconcileDynamicGroups } from '@shared/dynamic-groups'
 import { stampOpenedBy, withOpenedBy } from '../lib/stationOpener'
 import { installStationNoticeWiring } from '../lib/stationNoticeWiring'
 import { installBoardDispatchReportWiring } from '../lib/boardDispatchReportWiring'
@@ -838,6 +837,7 @@ import { snapNodeToGrid } from '../lib/nodeSizing'
 import { snapResizeChanges } from '../lib/resizeSnap'
 import { canClearDirty, canCommitCanvas, canCreateOnCanvas, liveCanvasHolds } from '../state/persistGuards'
 import { mirrorLatest, rebaseOnLatest, useNodesEpoch } from './nodesEpoch'
+import { subscribeCanvasBatches, reduceLiveCanvasBatch, applyStoredCanvasBatch, applyBatchMutationToFlow } from './received-batch'
 import { useFlowStoreOwner } from './flowStoreOwner'
 import { useFlowLanding } from './flowLanding'
 import { OwningProjectContext } from '../session/owning-project'
@@ -934,6 +934,9 @@ import {
 import {
   applyCanvasMutation,
   applyMutationToFlow,
+  appendGroupedFlowNodes,
+  reconcileDynamicFlowNodes,
+  applyDynamicLayoutToFlow,
   agentLaunchOverride,
   claudeLaunchCommand,
   toggleCollapsed,
@@ -4821,6 +4824,55 @@ export function Canvas() {
     })
   }, [activeSession.api, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater, applyToStored, activeSession.source])
 
+  // The host's structural batch is a receive-only channel: reduce all children before any
+  // observable state write. Keep the same per-key ordering, relay stripping and undo baseline.
+  useEffect(() => {
+    return subscribeCanvasBatches(activeSession.api.canvas, {
+      order: () => orderRef.current,
+      relay: activeSession.source === 'relay',
+      apply: (projectId, accepted) => {
+        if (accepted.received.some((m) => provesPeer(m, canvasSrcRef.current))) hasPeersRef.current = true
+        if (accepted.released) queueMicrotask(() => {
+          const pub = publisherRef.current
+          if (pub?.hasOwed() && !loadingRef.current) pub.publish(publishableLater(nodesRef.current))
+        })
+        if (!accepted.mutations.length) return
+        const mutations = accepted.mutations
+        const layoutOnly = accepted.layoutOnly
+        const live = liveCanvasHolds(nodesProjectIdRef.current, useProjects.getState().activeProjectId, projectId)
+        let changed = false
+        if (live) {
+          const base = { nodes: nodesRef.current, bridges: linkEdgesRef.current, ropes: controlEdgesRef.current }
+          const next = reduceLiveCanvasBatch(base, mutations, layoutOnly)
+          if (next !== base) {
+            // Install every ref before any subscriber can render, then one set per React state.
+            nodesRef.current = next.nodes
+            linkEdgesRef.current = next.bridges
+            controlEdgesRef.current = next.ropes
+            publisherRef.current?.adopt(publishableLater(next.nodes))
+            committedRef.current = mutations.reduce((nodes, m) => applyBatchMutationToFlow(nodes, m, layoutOnly.has(m)), committedRef.current)
+            if (next.nodes !== base.nodes) setNodes(rebaseOnLatest(base.nodes, next.nodes,
+              (ns) => mutations.reduce((nodes, m) => applyBatchMutationToFlow(nodes, m, layoutOnly.has(m)), ns as CanvasNode[])))
+            if (next.bridges !== base.bridges) setLinkEdges((edges) => edges === base.bridges ? next.bridges :
+              reduceLiveCanvasBatch({ ...base, bridges: edges }, mutations, layoutOnly).bridges)
+            if (next.ropes !== base.ropes) setControlEdges((edges) => edges === base.ropes ? next.ropes :
+              reduceLiveCanvasBatch({ ...base, ropes: edges }, mutations, layoutOnly).ropes)
+            changed = true
+          }
+        }
+        // One zustand write for the complete batch, also for parked/background projects. This
+        // receive reducer never calls an own-write publish hook or changes camera/project/focus.
+        changed = applyStoredCanvasBatch(projectId, mutations, layoutOnly) || changed
+        const finalNodes = live ? nodesRef.current : useProjects.getState().getProject(projectId)?.nodes ?? []
+        for (const m of mutations) if (m.op === 'remove' && !finalNodes.some((n) => n.id === m.id)) {
+          disposeTerminalOnUnmount(sessionForProject(projectId).id, m.id)
+          useWebviewKeepAlive.getState().drop(m.id)
+        }
+        if (changed) markDirty()
+      }
+    })
+  }, [activeSession.api, activeSession.source, setNodes, setLinkEdges, setControlEdges, markDirty, publishableLater])
+
   // Record an undo snapshot when the canvas settles (debounced; skips drag frames/loads).
   useEffect(() => {
     if (loadingRef.current) {
@@ -4900,6 +4952,7 @@ export function Canvas() {
 
   // Ids mid-resize (a `resizing: true` change seen, its end not yet): see movedGestureEnds.
   const resizingIdsRef = useRef(new Set<string>())
+  const gestureBaselineRef = useRef<CanvasNode[] | null>(null)
   const handleNodesChange: typeof onNodesChange = useCallback(
     (changes) => {
       // Ephemeral nodes (subagent / loop) live outside the managed state. Persist their drag
@@ -4958,10 +5011,31 @@ export function Canvas() {
       const snapped = snapSettings.snapToGrid
         ? snapResizeChanges(managed, nodesRef.current, snapSettings.gridSize || GRID)
         : managed
+      if (!gestureBaselineRef.current && managed.some((c) =>
+        (c.type === 'position' && c.dragging) || (c.type === 'dimensions' && c.resizing))) {
+        gestureBaselineRef.current = nodesRef.current
+      }
       onNodesChange(snapped)
-      // A user drag/resize of a maximized node ends maximize mode where it now stands.
+      // Final gesture geometry shares group growth/collision rules with normal grouped opens.
       const ended = movedGestureEnds(managed, resizingIdsRef.current)
-      if (ended.size) setNodes((ns) => endMaximizeOnUserGeometry(ns, ended))
+      if (ended.size) {
+        const baseline = gestureBaselineRef.current
+        gestureBaselineRef.current = null
+        setNodes((ns) => {
+          const finished = endMaximizeOnUserGeometry(ns, ended)
+          const result = reconcileDynamicFlowNodes(finished, [...ended], snapGridNow())
+          if (result.ok) return result.nodes
+          queueMicrotask(() => setNotice({ kind: 'error', text: result.error }))
+          if (!baseline) return finished
+          const original = new Map(flowToNodeStates(baseline).map((n) => [n.id, n]))
+          // A bounded layout refusal restores gesture geometry, retaining concurrent local data,
+          // newly appended nodes and a parent changed by an incoming transaction during the drag.
+          return applyDynamicLayoutToFlow(finished, flowToNodeStates(finished).map((n) => {
+            const prev = original.get(n.id)
+            return prev && ended.has(n.id) && prev.parentId === n.parentId ? { ...n, position: prev.position, size: prev.size } : n
+          }))
+        })
+      }
       if (snapped.some((c) => c.type !== 'select')) markDirty()
     },
     [onNodesChange, setNodes, markDirty, ephParentPosition]
@@ -5575,6 +5649,39 @@ export function Canvas() {
     }
   }, [])
 
+  const appendUiNodes = useCallback((added: readonly CanvasNode[], groupId?: string, deselect = false): CanvasNode[] | undefined => {
+    const settings = useSettings.getState().settings
+    const grid = settings.snapToGrid ? settings.gridSize || GRID : 0
+    const base = nodesRef.current
+    const epoch = nodesProjectIdRef.current
+    const planned = appendGroupedFlowNodes(base, added, groupId, grid)
+    if (!planned.ok) { setNotice({ kind: 'error', text: planned.error }); return undefined }
+    const select = (ns: CanvasNode[]): CanvasNode[] => deselect
+      ? ns.map((n) => !added.some((a) => a.id === n.id) && n.selected ? { ...n, selected: false } : n) : ns
+    const next = select(planned.nodes)
+    nodesRef.current = next
+    setNodes((latest) => {
+      if (nodesProjectIdRef.current !== epoch) return latest
+      if (latest === base) return next
+      // A frame created this tick may exist only in the captured ref, while React renders an
+      // older lane first. Carry only required frame ancestors, then allocate against latest nodes.
+      const missing = added.filter((n) => !latest.some((held) => held.id === n.id))
+      if (!missing.length) return latest
+      const currentFrames = new Set(nodesRef.current.filter((n) => n.type === 'group').map((n) => n.id))
+      const captured = base.filter((n) => currentFrames.has(n.id))
+      const rebased = appendGroupedFlowNodes(latest as CanvasNode[], missing, groupId, grid, captured)
+      if (!rebased.ok) {
+        nodesRef.current = latest
+        queueMicrotask(() => setNotice({ kind: 'error', text: rebased.error }))
+        return latest
+      }
+      const final = select(rebased.nodes)
+      nodesRef.current = final
+      return final
+    })
+    return added.map((n) => next.find((held) => held.id === n.id)!)
+  }, [setNodes])
+
   /** The group frame under an absolute canvas point, or undefined. Later entries win, so the
    *  frame drawn on top of another is the one that takes the node. */
   const groupAtPoint = useCallback((pt: { x: number; y: number }): string | undefined => {
@@ -5651,14 +5758,12 @@ export function Canvas() {
       // a path from this machine into `remoteCwd`. With no override this is byte-identical to
       // passing `project?.ssh` straight through.
       const ssh = nodeSshFor(project?.ssh, cwdOverride)
-      setNodes((ns) => {
-        const made = createTerminalNode(ns.length, cwd, center ?? emptyNodePos(), initialCommand, ssh)
-        const node = title ? { ...made, data: { ...made.data, title } } : made
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const made = createTerminalNode(nodesRef.current.length, cwd, center ?? emptyNodePos(), initialCommand, ssh)
+      const node = title ? { ...made, data: { ...made.data, title } } : made
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, emptyNodePos, cwdForNewNodeIn, parentInto]
+    [appendUiNodes, markDirty, emptyNodePos, cwdForNewNodeIn]
   )
 
   /** Open a new terminal that runs a command on start (e.g. gh auth login). `cwd` lets a caller
@@ -6457,13 +6562,11 @@ export function Canvas() {
         setCopyError('This canvas has no folder yet — open one from the project tab first.')
         return
       }
-      setNodes((ns) => {
-        const node = createFilesNode(ns.length, cwd, center ?? emptyNodePos(), !!project?.ssh)
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const node = createFilesNode(nodesRef.current.length, cwd, center ?? emptyNodePos(), !!project?.ssh)
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn, parentInto]
+    [appendUiNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn]
   )
 
   /**
@@ -6483,13 +6586,11 @@ export function Canvas() {
       }
       const dir = cwdForNewNodeIn(groupId) ?? project?.cwd ?? (await window.nodeTerminal.dialog.selectFolder())
       if (!dir) return
-      setNodes((ns) => {
-        const node = createRunNode(ns.length, { projectDir: dir, reloadOnSave: true }, center ?? emptyNodePos())
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const node = createRunNode(nodesRef.current.length, { projectDir: dir, reloadOnSave: true }, center ?? emptyNodePos())
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn, parentInto]
+    [appendUiNodes, markDirty, activeProjectId, emptyNodePos, cwdForNewNodeIn]
   )
 
   // A compound's other members (RunBar's Run on a compound): one run node each, placed to the
@@ -6506,12 +6607,12 @@ export function Canvas() {
         node.position = { x: src.position.x + (w + 40) * (i + 1), y: src.position.y }
         return src.parentId ? { ...node, parentId: src.parentId, extent: 'parent' as const } : node
       })
-      setNodes((ns) => [...ns, ...added])
+      if (!appendUiNodes(added)) return
       markDirty()
     }
     window.addEventListener('nodeterm:open-run-config', onOpenRun)
     return () => window.removeEventListener('nodeterm:open-run-config', onOpenRun)
-  }, [setNodes, markDirty])
+  }, [appendUiNodes, markDirty])
 
   /** A Simulator node (see nodes/SimulatorNode): a live iOS simulator or Android emulator screen.
    *  Desktop app only — the menus disable the row elsewhere and this refuses with the same reason. */
@@ -6526,35 +6627,29 @@ export function Canvas() {
         setCopyError(refusal)
         return
       }
-      setNodes((ns) => {
-        const node = createSimulatorNode(ns.length, config, center ?? emptyNodePos())
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const node = createSimulatorNode(nodesRef.current.length, config, center ?? emptyNodePos())
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, emptyNodePos, parentInto]
+    [appendUiNodes, markDirty, emptyNodePos]
   )
 
   const addSticky = useCallback(
     (center?: { x: number; y: number }, groupId?: string) => {
-      setNodes((ns) => {
-        const node = createStickyNode(ns.length, center ?? emptyNodePos())
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const node = createStickyNode(nodesRef.current.length, center ?? emptyNodePos())
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, emptyNodePos, parentInto]
+    [appendUiNodes, markDirty, emptyNodePos]
   )
 
   const addWhiteboard = useCallback(
     (center?: { x: number; y: number }, groupId?: string) => {
-      setNodes((ns) => {
-        const node = createWhiteboardNode(ns.length, center ?? emptyNodePos())
-        return [...ns, groupId ? parentInto(node, groupId) : node]
-      })
+      const node = createWhiteboardNode(nodesRef.current.length, center ?? emptyNodePos())
+      if (!appendUiNodes([node], groupId)) return
       markDirty()
     },
-    [setNodes, markDirty, emptyNodePos, parentInto]
+    [appendUiNodes, markDirty, emptyNodePos]
   )
 
   const addDino = useCallback(
@@ -6880,11 +6975,10 @@ export function Canvas() {
         : created
       const bound = issueRef ? { ...titled, data: { ...titled.data, issueRef } } : titled
       const node = extra?.awaitSetupGroup ? queueControlLaunch(bound, [], extra.awaitSetupGroup) : bound
-      // Parented HERE, not inside the updater: the updater runs at render time, and a render that
-      // a zustand write flushes first (SyncLane, skipping this DefaultLane update) mirrors
-      // `nodesRef` back to state — which does not hold a frame `attachWorktree` created this tick.
-      const placed = groupId ? parentInto(node, groupId) : node
-      setNodes((ns) => [...ns, placed])
+      // Plan against synchronous refs, including a frame attachWorktree created this tick;
+      // appendUiNodes rebases allocation on the eventual functional-setter scene as well.
+      const placed = appendUiNodes([node], groupId)?.[0]
+      if (!placed) return
       markDirty()
       // The project this node was charged to — the caller files anything else about the node (a
       // board card, its run history) against THIS id, never a second live read of the store.
@@ -6897,7 +6991,7 @@ export function Canvas() {
       markDirty,
       emptyNodePos,
       cwdForNewNodeIn,
-      parentInto,
+      appendUiNodes,
       connectedProjectIdForHost
     ]
   )
@@ -7372,6 +7466,8 @@ export function Canvas() {
 
   const deleteNodes = useCallback(
     (ids: string[], opts?: { record?: boolean }) => {
+      if (!retireFramesIfAvailable(nodesRef.current, ids, () => {}, () =>
+        setNotice({ kind: 'info', text: 'This group has reserved space. Release its reservations before removing the frame.' }))) return false
       const set = new Set(ids)
       // A pending "pause after this turn" has nothing left to pause.
       usePendingPause.getState().remove(ids)
@@ -7499,6 +7595,7 @@ export function Canvas() {
           refreshWorktreeStore({ unbound: boundGone })
         )
       }
+      return true
     },
     [setNodes, markDirty, refreshWorktreeStore, releaseWorktreeBinding, logIssueRunEnded]
   )
@@ -7721,6 +7818,9 @@ export function Canvas() {
 
   const ungroup = useCallback(
     (groupId: string) => {
+      // The menu/palette must refuse before releasing the worktree binding, just like GroupNode.
+      if (!retireFramesIfAvailable(nodesRef.current, [groupId], () => {}, () =>
+        setNotice({ kind: 'info', text: 'This group has reserved space. Release its reservations before removing the frame.' }))) return
       // Dissolving the frame destroys its worktree binding (the frame IS the binding) while the
       // children — and their `data.cwd` — stay. That makes Ungroup (and the group menu's "Delete
       // (keeps nodes)", which is the same call) a binding-dropping path, so it goes through
@@ -8231,7 +8331,7 @@ export function Canvas() {
    * were classified (`lib/controlRouting`); a background agent's `close` on a project the human
    * was not looking at switched their tab and applied that project's saved viewport.
    */
-  const closeStoredNodesRef = useRef<(projectId: string, ids: readonly string[]) => void>(() => {})
+  const closeStoredNodesRef = useRef<(projectId: string, ids: readonly string[]) => boolean>(() => false)
   /** Latest `travelToNode`, for the agent-control handler's off-canvas notice. Travel to a NODE is
    *  the user's own click on the notice's "Go there" button, not something a verb does. */
   const travelToNodeRef = useRef<(nodeId: string) => void>(() => {})
@@ -8407,21 +8507,18 @@ export function Canvas() {
   const duplicateNodes = useCallback(
     (ids: string[], at?: { x: number; y: number }) => {
       const set = new Set(ids)
-      setNodes((ns) => {
-        const sources = ns.filter((n) => set.has(n.id))
-        if (!sources.length) return ns
-        const all = ns as FocusableNode[]
-        const abs = sources.map((n) => absolutePosition(n as FocusableNode, all))
-        const dx = at ? at.x - Math.min(...abs.map((p) => p.x)) : DUPLICATE_NUDGE
-        const dy = at ? at.y - Math.min(...abs.map((p) => p.y)) : DUPLICATE_NUDGE
-        const copies = sources.map((n, i) =>
-          placeSpawned(duplicateNode(n), { x: abs[i].x + dx, y: abs[i].y + dy })
-        )
-        return [...ns.map((n) => ({ ...n, selected: false })), ...copies]
-      })
+      const sources = nodesRef.current.filter((n) => set.has(n.id))
+      if (!sources.length) return
+      const all = nodesRef.current as FocusableNode[]
+      const abs = sources.map((n) => absolutePosition(n as FocusableNode, all))
+      const dx = at ? at.x - Math.min(...abs.map((p) => p.x)) : DUPLICATE_NUDGE
+      const dy = at ? at.y - Math.min(...abs.map((p) => p.y)) : DUPLICATE_NUDGE
+      const copies = sources.map((n, i) =>
+        placeSpawned(duplicateNode(n), { x: abs[i].x + dx, y: abs[i].y + dy }))
+      if (!appendUiNodes(copies, undefined, true)) return
       markDirty()
     },
-    [setNodes, markDirty, placeSpawned]
+    [appendUiNodes, markDirty, placeSpawned]
   )
 
   // Reload a terminal in place: bump `respawnNonce`, which re-runs TerminalNode's lifecycle
@@ -9483,10 +9580,10 @@ export function Canvas() {
       )
       node.selected = true
       const placed = placeSpawned(node, at ?? besideNode(source))
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
+      if (!appendUiNodes([placed], undefined, true)) return
       markDirty()
     },
-    [setNodes, markDirty, placeSpawned, besideNode]
+    [appendUiNodes, markDirty, placeSpawned, besideNode]
   )
 
   const setNodesColor = useCallback(
@@ -10242,32 +10339,36 @@ export function Canvas() {
           void reopenProject(plan.projectId)
           return true
         case 'insertActive':
-          setNodes((ns) => [...ns, ...plan.nodes])
+          if (!appendUiNodes(plan.nodes)) return false
           markDirty()
           return true
-        case 'insertStored':
-          // Not on screen: write straight into the project's SERIALIZED nodes (the store, not
-          // React Flow) — the same mechanism canvas-control uses to create a node in a
-          // non-active project (Canvas.tsx:6499, :6540). armForColdOpen is required here: a bare
-          // `flowToNodeStates` drops `initialCommand` (never serialized on purpose), so an agent
-          // node restored this way would never launch its command on the eventual cold open.
+        case 'insertStored': {
+          const store = useProjects.getState()
+          const before = store.getProject(plan.projectId)?.nodes
+          if (!before) return false
+          let next = before
           for (const node of plan.nodes) {
-            useProjects
-              .getState()
-              .applyOwnNodeMutation(plan.projectId, {
-                op: 'upsert',
-                node: flowToNodeStates([armForColdOpen(node)])[0]
-              })
+            const state = flowToNodeStates([armForColdOpen(node)])[0]
+            const placed = node.parentId ? state.kind === 'group'
+              ? reconcileDynamicGroups([...next, state], [state.id], { grid: snapGridNow() })
+              : placeDynamicGroupMember(next, node.parentId, state, undefined, { grid: snapGridNow() })
+              : { ok: true as const, nodes: [...next, state] }
+            if (!placed.ok) { setNotice({ kind: 'error', text: placed.error }); return false }
+            next = placed.nodes
           }
+          const original = new Map(before.map((n) => [n.id, n]))
+          store.applyOwnNodeMutations(plan.projectId, next.filter((n) =>
+            JSON.stringify(original.get(n.id)) !== JSON.stringify(n)).map((node) => ({ op: 'upsert', node })))
           void writeDisk()
           // A closed project goes through the guarded reopen, which asks first when it was handed
           // to a hosted team. Declining leaves it closed; the restored nodes stay in its store copy.
           if (plan.reopenProjectAfter) void reopenProject(plan.projectId)
           else switchProject(plan.projectId)
           return true
+        }
       }
     },
-    [switchProject, reopenProject, setNodes, markDirty, writeDisk]
+    [switchProject, reopenProject, appendUiNodes, markDirty, writeDisk]
   )
 
   /** `app.reopenLastClosed` (Cmd+Shift+T): pops the shared close-history stack and reopens a
@@ -13027,8 +13128,8 @@ export function Canvas() {
         x: src.position.x + (srcGroup?.position.x ?? 0) + srcW / 2 + 40,
         y: src.position.y + (srcGroup?.position.y ?? 0) + srcH + 80 + 280
       })
-      const placed = src.parentId ? parentInto(node, src.parentId) : node
-      setNodes((ns) => [...ns, placed])
+      const placed = appendUiNodes([node], src.parentId)?.[0]
+      if (!placed) return
       setControlEdges((es) => [...es, ropeEdge(`ctrl-${sourceNodeId}-${placed.id}`, sourceNodeId, placed.id)])
       markDirty()
     }
@@ -14296,9 +14397,10 @@ export function Canvas() {
                   useSettings.getState().settings.claudeAccounts
                 )
             const coldMode = coldTerminal ? undefined : projectPermissionMode(owner, coldAgentId)
-            const coldExistingInGroup = coldGroup.groupId
-              ? coldGroupChildCount(coldNodes, coldGroup.groupId)
-              : 0
+            // Prompt validation may have awaited IO. Allocate from the latest project, retaining
+            // a concurrent UI edit or an earlier open completed while that IO was pending.
+            const coldBase = coldStore.getProject(owner.id)?.nodes
+            if (!coldBase) { reply({ ok: false, error: 'owning project disappeared' }); return }
             const coldMade: CanvasNode[] = []
             for (let i = 0; i < coldCount; i++) {
               const built = coldTerminal
@@ -14344,45 +14446,22 @@ export function Canvas() {
                 ),
                 sourceNodeId
               )
-              if (coldGroup.groupId) {
-                const w = (node.width as number) ?? 600
-                const h = (node.height as number) ?? 400
-                node.position = groupSlot(coldExistingInGroup + i, w, h)
-                node.parentId = coldGroup.groupId
-                node.extent = 'parent'
-                coldMade.push(node)
-              } else {
-                // The live path's cell rule, off the serialized nodes (the factory's position was
-                // only a seed). The claim is what lets the 2nd node of this batch see the 1st.
-                coldMade.push(settleBelowSource(coldNodes as PlaceableNode[], owner.id, node))
-              }
+              coldMade.push(coldGroup.groupId ? node :
+                settleBelowSource(coldBase as PlaceableNode[], owner.id, node))
             }
-            // Grow the frame BEFORE the children land, exactly as `addGrouped` does — `extent:
-            // 'parent'` clamps a child that falls outside it.
+            let coldNext = coldBase
             if (coldGroup.groupId) {
-              const frame = owner.nodes.find((n) => n.id === coldGroup.groupId)
-              if (frame) {
-                const w = (coldMade[0]?.width as number) ?? 600
-                const h = (coldMade[0]?.height as number) ?? 400
-                const need = groupSizeFor(coldExistingInGroup + coldCount, w, h)
-                coldStore.applyOwnNodeMutation(owner.id, {
-                  op: 'upsert',
-                  node: {
-                    ...frame,
-                    size: {
-                      width: Math.max(frame.size?.width ?? 0, need.width),
-                      height: Math.max(frame.size?.height ?? 0, need.height)
-                    }
-                  }
-                })
+              for (const node of coldMade) {
+                const planned = placeDynamicGroupMember(coldNext, coldGroup.groupId,
+                  flowToNodeStates([node])[0], undefined, { grid: snapGridNow() })
+                if (!planned.ok) { reply({ ok: false, error: planned.error }); return }
+                coldNext = planned.nodes
               }
-            }
-            for (const node of coldMade) {
-              coldStore.applyOwnNodeMutation(owner.id, {
-                op: 'upsert',
-                node: flowToNodeStates([node])[0]
-              })
-            }
+            } else coldNext = [...coldBase, ...flowToNodeStates(coldMade)]
+            // Publish the whole detached allocation with one stored-project write.
+            const coldBefore = new Map(coldBase.map((n) => [n.id, n]))
+            coldStore.applyOwnNodeMutations(owner.id, coldNext.filter((n) =>
+              JSON.stringify(coldBefore.get(n.id)) !== JSON.stringify(n)).map((node) => ({ op: 'upsert', node })))
             const coldIds = coldMade.map((n) => n.id)
             // The lineage rope and the fan-in bridge are what an orchestrator LOSES if a cold open
             // only writes nodes — a spawned team it cannot read back is the write-only fan-out the
@@ -14703,30 +14782,29 @@ export function Canvas() {
         const settled = node.parentId
           ? node
           : settleBelowSource(ctlNodes() as PlaceableNode[], ctlProject?.id ?? '', node)
-        const placed = settled.parentId
-          ? settled
-          : src.parentId
-            ? parentInto(settled, src.parentId)
-            : settled
+        const target = settled.parentId ?? src.parentId
+        const authored = withOpenedBy(settled, sourceNodeId)
         if (offCanvas) {
-          // The staged twin of the three lines below, and the whole of the off-canvas write. The
-          // live setters all address the ACTIVE canvas, which is some other project's here — they
-          // would put the node in front of the wrong person and dirty the wrong file.
-          // `applyNodeMutation` + `appendCanvasLinks` are the store paths a peer mutation and the
-          // cold open already take, and `writeDisk` is what persists them.
           const ocStore = useProjects.getState()
-          ocStore.applyOwnNodeMutation(offCanvas.project.id, {
-            op: 'upsert',
-            node: flowToNodeStates([withOpenedBy(placed, sourceNodeId)])[0]
-          })
+          const before = ocStore.getProject(offCanvas.project.id)?.nodes
+          if (!before) throw new Error('group append: owning project disappeared')
+          const state = flowToNodeStates([authored])[0]
+          const result = target ? placeDynamicGroupMember(before, target, state, undefined, { grid: snapGridNow() }) :
+            { ok: true as const, nodes: [...before, state] }
+          if (!result.ok) throw new Error(result.error)
+          const original = new Map(before.map((n) => [n.id, n]))
+          ocStore.applyOwnNodeMutations(offCanvas.project.id, result.nodes.filter((n) =>
+            JSON.stringify(original.get(n.id)) !== JSON.stringify(n)).map((node) => ({ op: 'upsert', node })))
+          offCanvas.nodes = nodeStatesToFlow(result.nodes)
           ocStore.appendCanvasLinks(offCanvas.project.id, {
-            ropes: [ropeEdge(`ctrl-${sourceNodeId}-${placed.id}`, sourceNodeId, placed.id)]
+            ropes: [ropeEdge(`ctrl-${sourceNodeId}-${authored.id}`, sourceNodeId, authored.id)]
           })
           void writeDisk()
-          offCanvas.created.push(placed.id)
-          return placed.id
+          offCanvas.created.push(authored.id)
+          return authored.id
         }
-        setNodes((ns) => [...ns, placed])
+        const placed = appendUiNodes([authored], target)?.[0]
+        if (!placed) throw new Error('group append: no free position available')
         connect(placed.id)
         markDirty()
         return placed.id
@@ -14735,11 +14813,6 @@ export function Canvas() {
       // nodes, so counting it would colour by a number that has nothing to do with where the node
       // lands. One name for the two sources, so no verb body has to ask which it is on.
       const nodeCount = () => (offCanvas ? offCanvas.project.nodes.length : nodesRef.current.length)
-      // Grid slots INSIDE a group frame (open-agent --group): 2 columns of terminal-sized
-      // cells under the header. Pure geometry — the frame is grown to fit before children land.
-      // `groupSlot`/`groupSizeFor` live in lib/coldOpen so the COLD path (an open answered out of a
-      // non-active project's serialized nodes) lands children on the identical grid; two copies of
-      // this arithmetic would be two layouts.
       // Validate `--group` (open-terminal / open-claude / open-agent): must name an existing
       // group frame. Returns its id, or null with the error already replied.
       const resolveIntoGroup = (): string | null | undefined => {
@@ -14818,40 +14891,15 @@ export function Canvas() {
           successHoldPre
         )
       }
-      // Open `count` nodes INTO a group frame: grow the frame FIRST (extent:'parent' would
-      // clamp children landing outside it), then drop each node into the next grid slot
-      // after the existing children. Shared by the terminal and agent open verbs.
+      // Allocate the complete group append around actual children and reservations. The
+      // shared planner grows all ancestor frames before React Flow installs any new member.
       const addGrouped = (groupId: string, count: number, make: (i: number) => CanvasNode): string[] => {
-        const existing = nodesRef.current.filter((nd) => nd.parentId === groupId).length
-        const ids: string[] = []
-        for (let i = 0; i < count; i++) {
-          const node = make(i)
-          const w = (node.width as number) ?? 600
-          const h = (node.height as number) ?? 400
-          if (i === 0) {
-            const need = groupSizeFor(existing + count, w, h)
-            setNodes((ns) =>
-              ns.map((nd) =>
-                nd.id === groupId
-                  ? {
-                      ...nd,
-                      width: Math.max((nd.width as number) ?? 0, need.width),
-                      height: Math.max((nd.height as number) ?? 0, need.height),
-                      style: {
-                        ...nd.style,
-                        width: Math.max((nd.width as number) ?? 0, need.width),
-                        height: Math.max((nd.height as number) ?? 0, need.height)
-                      }
-                    }
-                  : nd
-              )
-            )
-          }
-          node.position = groupSlot(existing + i, w, h)
-          node.parentId = groupId
-          node.extent = 'parent'
-          ids.push(addAndConnect(node))
-        }
+        const made = Array.from({ length: count }, (_, i) => withOpenedBy(make(i), sourceNodeId))
+        const placed = appendUiNodes(made, groupId)
+        if (!placed) throw new Error('group append: no free position available')
+        const ids = placed.map((n) => n.id)
+        setControlEdges((edges) => [...edges, ...ids.map((id) => ropeEdge(`ctrl-${sourceNodeId}-${id}`, sourceNodeId, id))])
+        markDirty()
         return ids
       }
 
@@ -16153,7 +16201,10 @@ export function Canvas() {
                 // tmux session (remote included, resolved from the persisted index) and still
                 // frees a closed frame's children. The control ropes are left alone for the same
                 // reason: `setControlEdges` addresses the wrong project's edges.
-                closeStoredNodesRef.current(offCanvas.project.id, closeIds)
+                if (!closeStoredNodesRef.current(offCanvas.project.id, closeIds)) {
+                  reply({ ok: false, error: 'close-group-reservations: release active reservations before retiring the frame' })
+                  return
+                }
                 reply({
                   ok: true,
                   message:
@@ -16167,7 +16218,10 @@ export function Canvas() {
               // drops persisted agentStatus, and reparents any group children. Don't hand-roll it.
               // ONE call for the whole list — its own paths are batched, and N calls would give N
               // undo entries and N writeDisk passes for one decision.
-              deleteNodes(closeIds)
+              if (!deleteNodes(closeIds)) {
+                reply({ ok: false, error: 'close-group-reservations: release active reservations before retiring the frame' })
+                return
+              }
               const dead = new Set(closeIds)
               setControlEdges((es) => es.filter((e) => !dead.has(e.source) && !dead.has(e.target)))
               reply({
@@ -16348,6 +16402,8 @@ export function Canvas() {
     (projectId: string, ids: readonly string[]) => {
       const store = useProjects.getState()
       const nodes = store.getProject(projectId)?.nodes ?? []
+      if (!retireFramesIfAvailable(nodes, ids, () => {}, () =>
+        setNotice({ kind: 'info', text: 'This group has reserved space. Release its reservations before removing the frame.' }))) return false
       usePendingPause.getState().remove([...ids])
       for (const id of ids) {
         // A deleted frame's children SURVIVE it (deleteNodes frees them to absolute positions).
@@ -16372,6 +16428,7 @@ export function Canvas() {
         store.removeNode(projectId, id)
       }
       void writeDisk()
+      return true
     },
     [writeDisk, logIssueRunEnded]
   )
@@ -16392,9 +16449,9 @@ export function Canvas() {
         danger: true,
         onConfirm: () => {
           if (projectId === activeProjectId) {
-            deleteNodes([id])
+            if (!deleteNodes([id])) { setConfirm(null); return }
           } else {
-            closeStoredNodes(projectId, [id])
+            if (!closeStoredNodes(projectId, [id])) { setConfirm(null); return }
           }
           // The session-memory panel's remote leg (see `killSessionById`): the local destroy above
           // cannot reach a HOST's tmux session unless a live client carries `sshRemote`. Runs only
@@ -18110,16 +18167,13 @@ export function Canvas() {
       if (conv.titleSource === 'name' && conv.title) node.data = { ...node.data, title: conv.title }
       node.selected = true
       // Inside the worktree-bound frame that owns the folder, when there is one (its branch's work).
-      const placed =
-        plan.groupId && nodesRef.current.some((n) => n.id === plan.groupId)
-          ? parentInto(node, plan.groupId)
-          : node
-      setNodes((ns) => [...ns.map((n) => ({ ...n, selected: false })), placed])
+      const placed = appendUiNodes([node], plan.groupId, true)?.[0]
+      if (!placed) return
       markDirty()
       goToNode(placed)
       setWelcomeOpen(false)
     },
-    [resumeContext, travelToNode, emptyNodePos, parentInto, setNodes, markDirty, goToNode]
+    [resumeContext, travelToNode, emptyNodePos, appendUiNodes, markDirty, goToNode]
   )
   useEffect(() => {
     resumeCreateRef.current = createRecentResumeNode
@@ -19724,14 +19778,20 @@ export function Canvas() {
           onMove={onMove}
           onMoveStart={onCanvasMoveStart}
           onMoveEnd={onCanvasMoveEnd}
-          onNodeDragStart={() => (draggingRef.current = true)}
+          onNodeDragStart={() => {
+            draggingRef.current = true
+            gestureBaselineRef.current = nodesRef.current
+          }}
           onNodeDragStop={() => {
             draggingRef.current = false
             // Send the final position now instead of waiting for the throttle's trailing timer.
             publisherRef.current?.flush()
             markDirty()
           }}
-          onSelectionDragStart={() => (draggingRef.current = true)}
+          onSelectionDragStart={() => {
+            draggingRef.current = true
+            gestureBaselineRef.current = nodesRef.current
+          }}
           onSelectionDragStop={() => {
             draggingRef.current = false
             publisherRef.current?.flush()

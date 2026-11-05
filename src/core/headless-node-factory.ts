@@ -1,4 +1,5 @@
 import { mediaMime, VIDEO_NODE_SIZE, videoNodeData } from '../shared/media'
+import { parseDynamicGroupsSpec, planDynamicGroups, placeDynamicGroupMember, normalizeDynamicGroupState, reconcileDynamicGroups } from '../shared/dynamic-groups'
 import { matchesMediaSignature } from './media-references'
 import { externalPreviewUrl, webNodeData, WEB_NODE_SIZE } from '../shared/web-preview'
 import type { WebPreviews } from './web-previews'
@@ -14,7 +15,8 @@ import { editorNodeData, EDITOR_NODE_SIZE } from '../shared/editor-node'
 import { isImagePath } from '../shared/image-preview'
 import { NODE_MIN_SIZES } from '../shared/node-sizing'
 
-import { CanvasContentWriter, type NodePatch, type PatchSave } from './canvas-content-writer'
+import { CanvasContentWriter, CanvasBatchWriteError, type CanvasContentWriterDeps, type NodePatch, type PatchSave } from './canvas-content-writer'
+import { setDynamicGroupMetadataResolver, setCanvasStructureResolver } from './canvas-sync'
 import { platform } from './platform'
 import { saveUpload } from './uploads'
 import { claudeConfigDirFor } from './claude-config-dir'
@@ -26,8 +28,8 @@ import { flattenPrompt, launchPromptFor } from '../shared/prompt-spill'
 import { LAUNCH_PROMPT_FILE_PREFIX } from '../shared/launch-prompt'
 import { shellSingleQuote } from '../shared/shell-quote'
 import { readPromptFileBounded } from './launch-intent-execute'
-import { arrangeNodes, fitAncestorChain as fitGeometryAncestors } from '../shared/canvas-geometry'
-import { coldGroupCwd, coldResolveGroup, groupSlot, groupSizeFor } from '../shared/cold-open'
+import { arrangeNodes } from '../shared/canvas-geometry'
+import { coldGroupCwd, coldResolveGroup } from '../shared/cold-open'
 import { placeBelowSource } from '../shared/placement'
 import { dryRunRequested } from '../shared/control-verbs'
 import { waitRopeId } from '../shared/canvas-lineage'
@@ -127,6 +129,8 @@ export interface ServerControlReply {
   message?: string
   result?: unknown
   error?: string
+  /** An effect may have been published or persisted; the request ledger must not permit replay. */
+  indeterminate?: boolean
 }
 
 /** The PtyManager surface the headless factory uses, kept narrow for deterministic tests. */
@@ -152,7 +156,7 @@ export interface HeadlessPty {
 
 /** WorkspaceStore's mutation surface, also narrow so tests can use the real store or a fake. */
 export type HeadlessWorkspace = Pick<WorkspaceStore, 'load' | 'save'> &
-  Partial<Pick<WorkspaceStore, 'getNodeForHostAction' | 'projectIdsForNode' | 'projectTargetInfo'>>
+  Partial<Pick<WorkspaceStore, 'getNodeForHostAction' | 'projectIdsForNode' | 'projectTargetInfo' | 'dynamicGroupForClient' | 'canvasStructureForClient'>>
 
 export interface HeadlessNodeFactoryDeps {
   /** Which nodes a caller may read and act on (control-scope.ts). Absent = `creator`. */
@@ -212,6 +216,8 @@ export interface HeadlessNodeFactoryDeps {
    * authority's content, which holds only what it heard as ops.
    */
   publishMutation?: (projectId: string, m: CanvasMutation) => void
+  publishBatch?: CanvasContentWriterDeps['publishBatch']
+  preflightBatch?: CanvasContentWriterDeps['preflightBatch']
   /** The whole project, to browsers, on `workspace:server-change` (merged, never a conflict bar). */
   publishProject?: (project: Project) => void
   /** Injectable only so tests can seed creator facts; production uses a fresh process-local ledger. */
@@ -634,6 +640,14 @@ export class HeadlessNodeFactory {
   constructor(private readonly deps: HeadlessNodeFactoryDeps) {
     this.ownership = deps.ownership ?? createHeadlessNodeOwnership()
     this.contentWriter = new CanvasContentWriter({ ...deps, isStopped: () => this.stopped })
+    setDynamicGroupMetadataResolver((projectId, nodeId) => {
+      if (deps.workspaceStore.dynamicGroupForClient) return deps.workspaceStore.dynamicGroupForClient(projectId, nodeId)
+      if (deps.workspaceStore.projectIdsForNode?.(nodeId)?.includes(projectId) !== true) return undefined
+      return deps.workspaceStore.getNodeForHostAction?.(nodeId)?.dynamicGroup
+    })
+    if (deps.workspaceStore.canvasStructureForClient) {
+      setCanvasStructureResolver((projectId) => deps.workspaceStore.canvasStructureForClient!(projectId))
+    }
   }
 
   private runExclusive<T>(work: () => Promise<T>): Promise<T> {
@@ -806,6 +820,42 @@ export class HeadlessNodeFactory {
       const home = node.agentId === 'claude' ? claudeConfigDirFor(node.accountId) : codexHomeForAccount(platform().userDataDir, node.accountId)
       return (await fs.stat(home)).isDirectory()
     } catch { return false }
+  }
+
+  private groupOpenSourceIdentity(project: Project, node: CanvasNodeState): string {
+    return stableStringify([project.id, project.cwd, project.ssh, node.agentId, node.accountId, node.cwd, node.ssh, node.sshRemoteTmux])
+  }
+
+  private planGroupedOpen(workspace: Workspace, sourceNodeId: string, projectId: string, groupId: string,
+    members: readonly CanvasNodeState[], expectedSource: string, expectedCwd: string | undefined, reservation?: string):
+    { ok: true; project: Project; nodes: CanvasNodeState[]; members: CanvasNodeState[] } | { ok: false; error: string } {
+    const source = sourceProject(workspace, sourceNodeId)
+    const target = workspace.projects.find((project) => project.id === projectId)
+    if (!source || source.project.ssh || source.project.unavailable || isRemoteSessionNode(source.node) ||
+      !target || target.ssh || target.unavailable || !sourceCanControl(source.node, this.deps.agentIdOf) ||
+      this.groupOpenSourceIdentity(source.project, source.node) !== expectedSource) return { ok: false, error: 'open-group-source-changed: inspect the source project before retrying' }
+    const allowedTarget = this.resolveTarget(workspace, source, 'open-terminal', { project: projectId }, true)
+    if ('ok' in allowedTarget) return { ok: false, error: allowedTarget.error || 'open-group-project-refused' }
+    if (!target.nodes.some((node) => node.id === groupId && node.kind === 'group') ||
+      coldGroupCwd(target.nodes, groupId, false) !== expectedCwd) return { ok: false, error: 'open-group-routing-changed: inspect the group checkout before retrying' }
+    const createdIds = new Set(members.map((node) => node.id))
+    let nodes = target.nodes
+    const required = new Set<string>([groupId])
+    const settings = this.deps.settings()
+    for (const member of members) {
+      if (nodeProjects(workspace, member.id).length) return { ok: false, error: `open-group-id-conflict: ${member.id}` }
+      const placed = placeDynamicGroupMember(nodes, groupId, member, reservation, { grid: settings.snapToGrid ? settings.gridSize : 0 })
+      if (!placed.ok) return placed
+      nodes = placed.nodes
+      for (const id of placed.required) required.add(id)
+    }
+    for (const id of required) {
+      if (createdIds.has(id)) continue
+      if (!this.inCallerProject(sourceNodeId, id, workspace, target) || !this.ownsMutation(sourceNodeId, id, workspace, target)) {
+        return { ok: false, error: this.ownershipRefusal('open-group', sourceNodeId, id).error! }
+      }
+    }
+    return { ok: true, project: target, nodes, members: members.map((node) => nodes.find((next) => next.id === node.id)!) }
   }
 
   private resolveTarget(
@@ -1178,6 +1228,9 @@ export class HeadlessNodeFactory {
           }
         }
         if (target?.kind === 'group') {
+          if (target.dynamicGroup?.reservations.some((slot) => slot.state === 'reserved')) {
+            return { ok: false, error: `close-group-reservations: release active reservations before retiring ${id}` }
+          }
           const unownedChild = this.unownedMutation(
             sourceNodeId,
             project!.nodes.filter((node) => node.parentId === id).map((node) => node.id),
@@ -1186,6 +1239,71 @@ export class HeadlessNodeFactory {
           )
           if (unownedChild) return this.ownershipRefusal('close', sourceNodeId, unownedChild)
           frameIds.add(id)
+        }
+      }
+
+      if (frameIds.size === ids.length) {
+        // Frames have no PTY. Revalidate their retirement on the canonical FIFO so a reservation
+        // created by another factory after the preliminary read cannot be erased by this close.
+        const projects = new Set(ownerProject.values())
+        if (projects.size !== 1) return { ok: false, error: 'close-frames-project-local: retire frames one project at a time' }
+        const projectId = [...projects][0]
+        const batched = workspace.projects.find((project) => project.id === projectId)?.nodes.some((node) => node.dynamicGroup !== undefined) === true
+        let committedEffect = false, editAttempted = false
+        try {
+          const edit = (fresh: Workspace): ServerControlReply => {
+            const caller = sourceProject(fresh, sourceNodeId)
+            const project = fresh.projects.find((candidate) => candidate.id === projectId)
+            if (!caller || !sourceCanControl(caller.node, this.deps.agentIdOf) || !project || project.ssh || project.unavailable) {
+              return { ok: false, error: 'close-frames-source-changed: inspect the project before retrying' }
+            }
+            if (!batched && project.nodes.some((node) => node.dynamicGroup !== undefined)) {
+              return { ok: false, error: 'close-frames-groups-changed: inspect current reservations before retrying the frame close' }
+            }
+            const requested = new Set(ids)
+            const remove = ids.map((id) => {
+              let parent = project.nodes.find((node) => node.id === id)?.parentId
+              const visited = new Set<string>()
+              while (parent && requested.has(parent) && !visited.has(parent)) {
+                visited.add(parent); parent = project.nodes.find((node) => node.id === parent)?.parentId
+              }
+              return { id, promoteTo: parent ?? null }
+            })
+            for (const id of ids) if (project.nodes.some((node) => node.id === id && node.kind !== 'group')) {
+              return { ok: false, error: `close-frame-kind-changed: ${id}` }
+            }
+            const legacy = (): { ok: true; nodes: CanvasNodeState[]; required: string[]; removed: string[] } => {
+              let nodes = project.nodes
+              for (const id of ids) nodes = ungroupPersistedNodes(nodes, id).nodes
+              const byId = new Map(nodes.map((node) => [node.id, node]))
+              return { ok: true, nodes, removed: ids, required: project.nodes.filter((node) =>
+                stableStringify(node) !== stableStringify(byId.get(node.id))).map((node) => node.id) }
+            }
+            const plan = batched ? planDynamicGroups(project.nodes, { version: 1, groups: [], members: [], reserve: [], release: [], remove }, {
+              grid: this.deps.settings().snapToGrid ? this.deps.settings().gridSize : 0 }) : legacy()
+            if (!plan.ok) return { ok: false, error: plan.error }
+            for (const id of plan.required) if (nodeProjects(fresh, id).length &&
+              (!this.inCallerProject(sourceNodeId, id, fresh, project) || !this.ownsMutation(sourceNodeId, id, fresh, project))) {
+              return this.ownershipRefusal('close', sourceNodeId, id)
+            }
+            editAttempted = plan.removed.length > 0
+            project.nodes = plan.nodes
+            const removed = new Set(plan.removed)
+            project.bridges = project.bridges?.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target))
+            project.ropes = project.ropes?.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target))
+            return { ok: true, message: `closed ${ids.length} owned frame(s): ${ids.join(', ')}; sessions preserved`, result: { ids, id: ids[0] } }
+          }
+          const committed = batched ? await this.contentWriter.editBatch(edit) : await this.contentWriter.edit(edit)
+          if (committed.saved && committed.value.ok) {
+            committedEffect = true
+            for (const id of ids) this.ownership.forget(id)
+            await this.publishPersisted([projectId])
+          }
+          return committed.value
+        } catch (error) {
+          const uncertain = committedEffect || (error instanceof CanvasBatchWriteError ? error.indeterminate : editAttempted)
+          return { ok: false, ...(uncertain ? { indeterminate: true } : {}), result: { ids, id: ids[0] },
+            error: `close-frames-${uncertain ? 'save-uncertain' : 'refused'}: ${String(error)}` }
         }
       }
 
@@ -1223,6 +1341,9 @@ export class HeadlessNodeFactory {
         const target = project?.nodes.find((node) => node.id === id)
         if (!project || !target) continue
         if (target.kind === 'group') {
+          if (target.dynamicGroup?.reservations.some((slot) => slot.state === 'reserved')) {
+            return { ok: false, indeterminate: true, error: `close-partial: requested terminal sessions ended, but ${id} gained active reservations; its frame and canvas remain. Inspect before retrying.` }
+          }
           project.nodes = ungroupPersistedNodes(project.nodes, id).nodes
         } else {
           project.nodes = project.nodes.filter((node) => node.id !== id)
@@ -1539,6 +1660,93 @@ export class HeadlessNodeFactory {
     })
   }
 
+  /** Declarative project-local visual changes. Planning and every permission check use the same
+   * fresh FIFO snapshot; no PTY or launch metadata is changed by this operation. */
+  groups(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply> {
+    return this.runExclusive(async () => {
+      const rejected = (error: string): ServerControlReply => ({ ok: false, error, result: { status: 'rejected' } })
+      if (!verified) return rejected('groups-identity-refused: verified node identity is required')
+      const flags = unsupportedFlags(args, new Set(['get', 'spec', 'dry-run']))
+      if (flags) return rejected(`groups: ${flags}`)
+      const get = args.get !== undefined
+      if (get === (args.spec !== undefined) || (get && dryRunRequested(args))) return rejected('groups: pass either --get or --spec <json> [--dry-run]')
+      const parsed = get ? undefined : parseDynamicGroupsSpec(args.spec ?? '')
+      if (parsed && !parsed.ok) return rejected(parsed.error)
+      let changedProject: string | undefined
+      let created: string[] = []
+      let removed: string[] = []
+      let effectStarted = false
+      const projectView = (project: Project, workspace: Workspace) => project.nodes
+        .filter((node) => node.kind === 'group' && this.ownsMutation(sourceNodeId, node.id, workspace, project))
+        .map((node) => ({ id: node.id, title: node.title, parent: node.parentId ?? null,
+          position: { ...node.position }, size: { ...node.size },
+          reservations: normalizeDynamicGroupState(node.dynamicGroup)?.reservations ?? [] }))
+      const edit = (workspace: Workspace): ServerControlReply => {
+        const source = sourceProject(workspace, sourceNodeId)
+        if (!source || !sourceCanControl(source.node, this.deps.agentIdOf)) return rejected('groups-source-refused: requires one control-capable source project')
+        if (source.project.ssh || source.project.unavailable || isRemoteSessionNode(source.node)) return rejected('groups-host-refused: requires an available local project')
+        if (get) return { ok: true, result: { status: 'current', groups: projectView(source.project, workspace) },
+          message: JSON.stringify(projectView(source.project, workspace)) }
+        if (!parsed?.ok) return rejected('groups: invalid spec')
+        const settings = this.deps.settings()
+        const plan = planDynamicGroups(source.project.nodes, parsed.spec, {
+          grid: settings.snapToGrid ? settings.gridSize : 0
+        })
+        if (!plan.ok) return rejected(plan.error)
+        const newIds = new Set(plan.created)
+        for (const id of plan.created) {
+          if (nodeProjects(workspace, id).length) return rejected(`groups-id-conflict: ${id} already exists in the workspace`)
+        }
+        for (const id of plan.required) {
+          if (newIds.has(id) || !nodeProjects(workspace, id).length) continue
+          if (!this.inCallerProject(sourceNodeId, id, workspace, source.project)) return rejected(`groups-project-refused: ${id} is not exclusively in the caller's project`)
+          if (!this.ownsMutation(sourceNodeId, id, workspace, source.project)) return this.ownershipRefusal('groups', sourceNodeId, id)
+        }
+        const previous = new Map(source.project.nodes.map((node) => [node.id, node]))
+        const movements = plan.nodes.filter((node) => {
+          const before = previous.get(node.id)
+          return !before || stableStringify([before.position, before.size, before.parentId]) !== stableStringify([node.position, node.size, node.parentId])
+        }).map((node) => ({ id: node.id, parent: node.parentId ?? null, position: node.position, size: node.size }))
+        const changed = stableStringify(source.project.nodes) !== stableStringify(plan.nodes)
+        const dryRun = dryRunRequested(args)
+        if (!dryRun && changed) {
+          changedProject = source.project.id; created = plan.created; removed = plan.removed
+          effectStarted = true
+          source.project.nodes = plan.nodes
+          const deleted = new Set(plan.removed)
+          source.project.bridges = source.project.bridges?.filter((edge) => !deleted.has(edge.source) && !deleted.has(edge.target))
+          source.project.ropes = source.project.ropes?.filter((edge) => !deleted.has(edge.source) && !deleted.has(edge.target))
+        }
+        const view = { ...source.project, nodes: plan.nodes }
+        // Include newly-created frames in the response before creator proof is recorded.
+        const groups = view.nodes.filter((node) => node.kind === 'group' &&
+          (newIds.has(node.id) || this.ownsMutation(sourceNodeId, node.id, workspace, source.project)))
+          .map((node) => ({ id: node.id, parent: node.parentId ?? null, position: node.position, size: node.size,
+            reservations: normalizeDynamicGroupState(node.dynamicGroup)?.reservations ?? [] }))
+        const status = dryRun ? 'planned' : changed ? 'applied' : 'unchanged'
+        return { ok: true, message: `groups ${status}: ${groups.length} frame(s); ${JSON.stringify({ created: plan.created, removed: plan.removed })}`,
+          result: { status, dryRun, created: plan.created, removed: plan.removed, affected: plan.required, movements, groups } }
+      }
+      try {
+        const answer = get || dryRunRequested(args) ? await this.contentWriter.edit(edit) : await this.contentWriter.editBatch(edit)
+        if (answer.saved && changedProject) {
+          for (const id of created) this.ownership.record(id, { sourceNodeId, projectId: changedProject })
+          for (const id of removed) this.ownership.forget(id)
+          await this.publishPersisted([changedProject])
+        }
+        if (!answer.saved && answer.value.ok && !get && !dryRunRequested(args)) {
+          return { ...answer.value, message: 'groups unchanged', result: { ...(answer.value.result as Record<string, unknown>), status: 'unchanged' } }
+        }
+        return answer.value
+      } catch (error) {
+        const uncertain = error instanceof CanvasBatchWriteError ? error.indeterminate : effectStarted
+        return uncertain ? { ok: false, indeterminate: true,
+          error: `groups-save-uncertain: inspect groups --get and retry only with the same request-id; ${String(error)}`,
+          result: { status: 'indeterminate' } } : rejected(String(error instanceof Error ? error.message : error))
+      }
+    })
+  }
+
   geometry(verb: GeometryControlVerb, sourceNodeId: string, args: Record<string, string>): Promise<ServerControlReply> {
     return this.runExclusive(async () => {
       const flags: Record<GeometryControlVerb, readonly string[]> = {
@@ -1551,7 +1759,9 @@ export class HeadlessNodeFactory {
       let projectId: string | undefined
       let editStarted = false
       try {
-        const result = await this.contentWriter.edit((workspace): ServerControlReply => {
+        const initial = await this.readWorkspace()
+        const batched = sourceProject(initial, sourceNodeId)?.project.nodes.some((node) => node.dynamicGroup !== undefined) === true
+        const edit = (workspace: Workspace): ServerControlReply => {
           const source = sourceProject(workspace, sourceNodeId)
           if (!source) return { ok: false, error: 'source node is not in exactly one saved project' }
           if (!sourceCanControl(source.node, this.deps.agentIdOf)) {
@@ -1559,6 +1769,9 @@ export class HeadlessNodeFactory {
           }
           if (source.project.ssh || source.project.unavailable) {
             return { ok: false, error: `${verb}-project-refused: geometry requires an available local project` }
+          }
+          if (!batched && source.project.nodes.some((node) => node.dynamicGroup !== undefined)) {
+            return { ok: false, error: `${verb}-groups-changed: retry this geometry request against the current managed layout` }
           }
           // Explicit ids are checked even for a no-op; a cloned id never borrows creator proof.
           const explicit = (args.nodes ?? '').split(',').map((s) => s.trim()).filter(Boolean)
@@ -1585,6 +1798,7 @@ export class HeadlessNodeFactory {
           const nextById = new Map(next.map((n) => [n.id, n]))
           const affected = new Set(source.project.nodes.filter((n) =>
             stableStringify(n) !== stableStringify(nextById.get(n.id))).map((n) => n.id))
+          for (const id of plan.required ?? []) affected.add(id)
           // Moving/resizing a frame also changes its descendants' canvas footprint, even when
           // their parent-relative coordinates stay equal. Include every nested descendant.
           for (const node of source.project.nodes) {
@@ -1607,11 +1821,13 @@ export class HeadlessNodeFactory {
             source.project.ropes = source.project.ropes?.filter((e) => !removed.has(e.source) && !removed.has(e.target))
           }
           return plan.reply
-        })
+        }
+        const result = batched ? await this.contentWriter.editBatch(edit) : await this.contentWriter.edit(edit)
         if (result.saved && projectId) await this.publishPersisted([projectId])
         return result.value
       } catch (error) {
-        if (editStarted) return { ok: false, error: `${verb}-save-uncertain: inspect list --geometry on before repeating this command; ${String(error)}` }
+        const uncertain = error instanceof CanvasBatchWriteError ? error.indeterminate : editStarted
+        if (uncertain) return { ok: false, indeterminate: true, error: `${verb}-save-uncertain: inspect list --geometry on before repeating this command; ${String(error)}` }
         return { ok: false, error: String(error instanceof Error ? error.message : error) }
       }
     })
@@ -1657,19 +1873,85 @@ export class HeadlessNodeFactory {
         }
       }
 
-      source.project.nodes = grouped.nodes
-      await this.castAndSave(workspace)
-      this.ownership.record(grouped.groupId, {
-        sourceNodeId,
-        projectId: source.project.id
-      })
-      await this.publishPersisted([source.project.id])
+      if (source.project.nodes.some((node) => node.dynamicGroup !== undefined)) {
+        let committedEffect = false
+        try {
+          const committed = await this.contentWriter.editBatch((fresh): ServerControlReply => {
+            const current = sourceProject(fresh, sourceNodeId)
+            if (!current || current.project.id !== source.project.id || current.project.ssh || current.project.unavailable ||
+              !sourceCanControl(current.node, this.deps.agentIdOf)) return { ok: false, error: 'group-source-changed: inspect the project before retrying' }
+            if (nodeProjects(fresh, grouped.groupId).length) return { ok: false, error: 'group-id-conflict' }
+            if (resolvable.some((id) => !current.project.nodes.some((node) => node.id === id))) return { ok: false, error: 'group-members-changed: inspect the project before retrying' }
+            const wrapped = groupPersistedNodes(current.project.nodes, resolvable,
+              current.project.nodes.filter((node) => node.kind === 'group').length,
+              args.label ? oneLine(args.label) : undefined, color)
+            if (!wrapped) return { ok: false, error: 'group-members-changed: members must still be siblings' }
+            const frame = wrapped.nodes.find((node) => node.id === wrapped.groupId)!
+            frame.id = grouped.groupId; frame.dynamicGroup = { version: 1, reservations: [] }
+            for (const node of wrapped.nodes) if (node.parentId === wrapped.groupId) node.parentId = grouped.groupId
+            const previous = new Map(current.project.nodes.map((node) => [node.id, node]))
+            for (const node of wrapped.nodes) if (node.kind === 'group' && previous.has(node.id)) {
+              const old = previous.get(node.id)!
+              node.size = { width: Math.max(node.size.width, old.size.width), height: Math.max(node.size.height, old.size.height) }
+            }
+            const settings = this.deps.settings()
+            const plan = reconcileDynamicGroups(wrapped.nodes, [grouped.groupId, ...resolvable], {
+              grid: settings.snapToGrid ? settings.gridSize : 0 })
+            if (!plan.ok) return { ok: false, error: plan.error }
+            for (const id of plan.required) if (id !== grouped.groupId &&
+              (!this.inCallerProject(sourceNodeId, id, fresh, current.project) || !this.ownsMutation(sourceNodeId, id, fresh, current.project))) {
+              return this.ownershipRefusal('group', sourceNodeId, id)
+            }
+            current.project.nodes = plan.nodes
+            return { ok: true, message: `grouped ${resolvable.length} node(s) into ${grouped.groupId}`,
+              result: { groupId: grouped.groupId, grouped: resolvable, skipped: ids.length - resolvable.length } }
+          })
+          if (committed.saved && committed.value.ok) {
+            committedEffect = true
+            this.ownership.record(grouped.groupId, { sourceNodeId, projectId: source.project.id })
+            await this.publishPersisted([source.project.id])
+          }
+          return committed.value
+        } catch (error) {
+          const uncertain = committedEffect || error instanceof CanvasBatchWriteError && error.indeterminate
+          return { ok: false, ...(uncertain ? { indeterminate: true } : {}), result: { groupId: grouped.groupId },
+            error: `group-${uncertain ? 'save-uncertain' : 'refused'}: ${String(error)}` }
+        }
+      }
+
       const skipped = ids.length - resolvable.length
       const note = skipped ? ` (${skipped} unknown id(s) skipped)` : ''
-      return {
-        ok: true,
-        message: `grouped ${resolvable.length} node(s) into ${grouped.groupId}${note}`,
-        result: { groupId: grouped.groupId, grouped: resolvable, skipped }
+      let changed = false
+      try {
+        const committed = await this.contentWriter.edit((fresh): ServerControlReply => {
+          const current = sourceProject(fresh, sourceNodeId)
+          if (!current || current.project.id !== source.project.id || !sourceCanControl(current.node, this.deps.agentIdOf)) {
+            return { ok: false, error: 'group-source-changed' }
+          }
+          if (current.project.nodes.some((node) => node.dynamicGroup !== undefined)) {
+            return { ok: false, error: 'group-layout-changed: inspect current managed groups before retrying' }
+          }
+          if (nodeProjects(fresh, grouped.groupId).length || resolvable.some((id) =>
+            !this.inCallerProject(sourceNodeId, id, fresh, current.project) || !this.ownsMutation(sourceNodeId, id, fresh, current.project))) {
+            return { ok: false, error: 'group-members-changed' }
+          }
+          const wrapped = groupPersistedNodes(current.project.nodes, resolvable,
+            current.project.nodes.filter((node) => node.kind === 'group').length,
+            args.label ? oneLine(args.label) : undefined, color)
+          if (!wrapped) return { ok: false, error: 'group-members-changed: members must still be siblings' }
+          wrapped.nodes.find((node) => node.id === wrapped.groupId)!.id = grouped.groupId
+          for (const node of wrapped.nodes) if (node.parentId === wrapped.groupId) node.parentId = grouped.groupId
+          current.project.nodes = wrapped.nodes; changed = true
+          return { ok: true, message: `grouped ${resolvable.length} node(s) into ${grouped.groupId}${note}`,
+            result: { groupId: grouped.groupId, grouped: resolvable, skipped } }
+        })
+        if (committed.saved && committed.value.ok) {
+          this.ownership.record(grouped.groupId, { sourceNodeId, projectId: source.project.id })
+          await this.publishPersisted([source.project.id])
+        }
+        return committed.value
+      } catch (error) {
+        return { ok: false, ...(changed ? { indeterminate: true } : {}), error: `group-${changed ? 'save-uncertain' : 'refused'}: ${String(error)}` }
       }
     })
   }
@@ -2196,7 +2478,7 @@ export class HeadlessNodeFactory {
         // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
         // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now', 'group', 'dry-run'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now', 'group', 'dry-run', 'reservation'])
           : new Set([
               'agent',
               'count',
@@ -2211,6 +2493,7 @@ export class HeadlessNodeFactory {
               'model',
               'issue',
               'group',
+              'reservation',
               'run-now'
             ])
       )
@@ -2271,7 +2554,6 @@ export class HeadlessNodeFactory {
           }
         } catch { return { ok: false, error: `${verb}-group-cwd-unavailable: inspect and recover the frame checkout before opening work` } }
       }
-      const originalNodes = group.groupId ? structuredClone(target.nodes) : undefined
       const after = this.resolveAfter(target, afterArg, verb)
       if (!Array.isArray(after)) return after
       const unownedAfter = this.unownedMutation(sourceNodeId, after, workspace, target)
@@ -2339,16 +2621,30 @@ export class HeadlessNodeFactory {
           : UNKNOWN_CODEX_CLI_CAPS
 
       const count = parseCount(args.count, verb === 'open-terminal' ? TERMINAL_LIMIT : AGENT_LIMIT)
+      const reservation = args.reservation?.trim()
+      if (args.reservation !== undefined && (!reservation || !group.groupId || count !== 1 ||
+        (args.count !== undefined && Number(args.count) !== 1))) {
+        return { ok: false, error: `${verb}: --reservation requires a nonempty slot id, --group and count=1` }
+      }
+      const sourceIdentity = this.groupOpenSourceIdentity(source.project, source.node)
       const created: CanvasNodeState[] = []
       const commands = new Map<string, string>()
       const ropes = [...(target.ropes ?? [])]
       const bridges = [...(target.bridges ?? [])]
       const startIndex = target.nodes.length
       const cwd = args.cwd || groupCwd || (target.id === source.project.id ? source.node.cwd : undefined) || target.cwd
-      if (dryRunRequested(args)) return {
-        ok: true,
-        message: `Dry run: would open ${count} ${verb === 'open-agent' ? `${agentId} session` : 'terminal'}(s). Nothing was opened.`,
-        result: { dryRun: true, count, cwd, after, ...(promptFile ? { promptFile } : {}) }
+      if (dryRunRequested(args)) {
+        if (group.groupId) {
+          const preview = await this.contentWriter.edit((fresh) => {
+            const members: CanvasNodeState[] = Array.from({ length: count }, () => ({ id: nextId('term'), kind: 'terminal',
+              position: { x: 0, y: 0 }, size: { ...nodeSize }, title: 'Preview', color: '#0a84ff', group: null, cwd }))
+            return this.planGroupedOpen(fresh, sourceNodeId, target.id, group.groupId!, members, sourceIdentity, groupCwd, reservation)
+          })
+          if (!preview.value.ok) return preview.value
+        }
+        return { ok: true,
+          message: `Dry run: would open ${count} ${verb === 'open-agent' ? `${agentId} session` : 'terminal'}(s). Nothing was opened.`,
+          result: { dryRun: true, count, cwd, after, ...(promptFile ? { promptFile } : {}), ...(reservation ? { reservation } : {}) } }
       }
       // Snapshot dependency state at the arm boundary. A `working` state is already positive
       // evidence that this fresh process made it through its boot composer; a later `done` may
@@ -2428,7 +2724,7 @@ export class HeadlessNodeFactory {
         const node: CanvasNodeState = {
           id,
           kind: 'terminal',
-          position: group.groupId ? groupSlot(target.nodes.filter((n) => n.parentId === group.groupId).length + i, nodeSize.width, nodeSize.height) :
+          position: group.groupId ? { x: 0, y: 0 } :
             placeRight(target, source.node, nodeSize, created),
           size: { ...nodeSize },
           title,
@@ -2466,27 +2762,47 @@ export class HeadlessNodeFactory {
         }
       }
 
-      target.nodes.push(...created)
       if (group.groupId) {
-        const frame = target.nodes.find((n) => n.id === group.groupId)!
-        const size = groupSizeFor(target.nodes.filter((n) => n.parentId === group.groupId).length, nodeSize.width, nodeSize.height)
-        frame.size = { width: Math.max(frame.size.width, size.width), height: Math.max(frame.size.height, size.height) }
-        target.nodes = applyStoredGeometry(target.nodes, fitGeometryAncestors(storedGeometryNodes(target.nodes), group.groupId,
-          settings.snapToGrid ? settings.gridSize : 0))
-        const changed = originalNodes!.filter((before) => stableStringify(before) !== stableStringify(target.nodes.find((n) => n.id === before.id))).map((n) => n.id)
-        const denied = this.unownedMutation(sourceNodeId, changed, workspace, target)
-        if (denied) return this.ownershipRefusal(verb, sourceNodeId, denied)
-      }
-      target.ropes = ropes
-      target.bridges = bridges
-      // Creation is written BEFORE anything is launched, and a refused save (canvas control is
-      // stopping) is a failure here: a launch into a node that is not on the canvas is an orphan
-      // agent session nobody can see.
-      if (!(await this.castAndSave(workspace))) {
-        return {
-          ok: false,
-          error: `${verb}-not-saved: nothing was opened: the canvas could not be written (canvas control is stopping)`
+        let effectStarted = false
+        try {
+          const committed = await this.contentWriter.editBatch((fresh) => {
+            const allocation = this.planGroupedOpen(fresh, sourceNodeId, target.id, group.groupId!, created,
+              sourceIdentity, groupCwd, reservation)
+            if (!allocation.ok) return allocation
+            for (const dependency of after) {
+              if (!allocation.project.nodes.some((node) => node.id === dependency) ||
+                !this.ownsMutation(sourceNodeId, dependency, fresh, allocation.project)) {
+                return { ok: false as const, error: `${verb}-dependency-changed: ${dependency}` }
+              }
+            }
+            const ids = new Set(created.map((node) => node.id))
+            const append = (existing: BridgeLink[] | undefined, planned: BridgeLink[]) => {
+              const result = new Map((existing ?? []).map((edge) => [edge.id, edge]))
+              for (const edge of planned) if (ids.has(edge.source) || ids.has(edge.target)) result.set(edge.id, edge)
+              return [...result.values()]
+            }
+            effectStarted = true
+            allocation.project.nodes = allocation.nodes
+            allocation.project.ropes = append(allocation.project.ropes, ropes)
+            allocation.project.bridges = append(allocation.project.bridges, bridges)
+            created.splice(0, created.length, ...allocation.members)
+            return { ok: true as const, project: allocation.project }
+          })
+          if (!committed.value.ok) return committed.value
+          if (!committed.saved) return { ok: false, error: `${verb}-not-saved: grouped open was not committed` }
+          Object.assign(target, committed.value.project)
+        } catch (error) {
+          const uncertain = error instanceof CanvasBatchWriteError ? error.indeterminate : effectStarted
+          return { ok: false, ...(uncertain ? { indeterminate: true } : {}),
+            error: `${verb}-${uncertain ? 'save-uncertain' : 'refused'}: ${String(error)}`,
+            result: { ids: created.map((node) => node.id), ...(reservation ? { reservation } : {}) } }
         }
+      } else {
+        target.nodes.push(...created)
+        target.ropes = ropes; target.bridges = bridges
+        // Persist before any delivery; an unsaved node must never launch a session.
+        if (!(await this.castAndSave(workspace))) return { ok: false,
+          error: `${verb}-not-saved: nothing was opened: the canvas could not be written (canvas control is stopping)` }
       }
       for (const node of created) {
         this.ownership.record(node.id, { sourceNodeId, projectId: target.id })

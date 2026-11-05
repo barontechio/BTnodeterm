@@ -57,6 +57,17 @@ function subscribe<A extends unknown[] = []>(channel: string) {
 // Fan-out subscriber for the host's inbound apply-mutation events (a single ipcRenderer
 // listener shared by all renderer subscribers, like the other event channels).
 const subscribeMutation = subscribe<[CanvasMutation]>(IPC.remoteHostApplyMutation)
+// A new document starts unsupported even if its webContents id survived a reload.
+ipcRenderer.send(IPC.canvasBatchSubscribe, false)
+let canvasBatchListeners = 0
+const subscribeCanvasBatch = subscribe<[string, import('../shared/types').CanvasMutationBatch]>(IPC.canvasMutationBatch)
+if (typeof window !== 'undefined') {
+  // beforeunload can be cancelled; only actual document departure withdraws a mounted sink.
+  window.addEventListener('pagehide', () => ipcRenderer.send(IPC.canvasBatchSubscribe, false))
+  window.addEventListener('pageshow', () => {
+    if (canvasBatchListeners > 0) ipcRenderer.send(IPC.canvasBatchSubscribe, true)
+  })
+}
 // Fan-out subscriber for the connection-approval prompt (main → host renderer when a client
 // finishes the handshake; carries the SAS to show in the approval dialog).
 const subscribePeerPending = subscribe<[{ sas: string | null; id: string; pub?: string | null; standing?: boolean }]>(
@@ -688,6 +699,17 @@ const api: NodeTerminalApi = {
   // Our own mutation coming back is the ACK that tells us where it landed in that order; the renderer
   // recognizes it by `src` and does not re-apply it (src/shared/canvas-order.ts).
   canvas: {
+    onMutationBatch: (listener) => {
+      const off = subscribeCanvasBatch((...args) => listener(...args))
+      if (++canvasBatchListeners === 1) ipcRenderer.send(IPC.canvasBatchSubscribe, true)
+      let active = true
+      return () => {
+        if (!active) return
+        active = false
+        off()
+        if (--canvasBatchListeners === 0) ipcRenderer.send(IPC.canvasBatchSubscribe, false)
+      }
+    },
     onMutationRejected: subscribe<[string, string]>(IPC.canvasMutationRejected),
     mutate: (projectId, mutation) => ipcRenderer.send(IPC.canvasMut, projectId, mutation),
     onMutation: (listener) => {

@@ -1020,8 +1020,20 @@ export function buildAgentApi(
  * the Server Edition (two browsers on one workspace) is the surface that needs canvas sync most.
  */
 export function buildCanvasApi(client: RpcClient): Pick<NodeTerminalApi, 'canvas'> {
+  let batchListeners = 0
   return {
     canvas: {
+      onMutationBatch: (listener) => {
+        const off = client.subscribe(IPC.canvasMutationBatch, ((...args: Parameters<typeof listener>) => listener(...args)) as Listener)
+        if (++batchListeners === 1) client.cast(IPC.canvasBatchSubscribe, true)
+        let active = true
+        return () => {
+          if (!active) return
+          active = false
+          off()
+          if (--batchListeners === 0) client.cast(IPC.canvasBatchSubscribe, false)
+        }
+      },
       mutate: (projectId, mutation) => client.cast(IPC.canvasMut, projectId, mutation),
       onMutationRejected: (listener) => client.subscribe(IPC.canvasMutationRejected, listener as Listener),
       onMutation: (listener) => client.subscribe(IPC.canvasMut, listener as Listener)

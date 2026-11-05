@@ -120,6 +120,12 @@ projections between Desktop and Server. Host commands authorize every affected n
 serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
 lazy defaults; assignment changes never launch or type into a session.
 
+Agent-managed groups use `shared/dynamic-groups.ts` for declarative layout and reservations, and
+`CanvasContentWriter.editBatch` for one validated host publication in the workspace FIFO. Keep the
+host and UI on the same allocator. Reservation facts are host-owned visual metadata; client saves
+must preserve current facts, and restored metadata grants no creator or launch authority. See
+`docs/dynamic-agent-groups.md` for schema, retry semantics and compatibility limits.
+
 Host operations that need stable canvas execution metadata can use `CanvasExecutionReservations`
 with a real node batch claim. Acquire the metadata reservation inside the workspace writer FIFO,
 retain it until dispatched work settles, and release explicitly. Store admission runs before Core

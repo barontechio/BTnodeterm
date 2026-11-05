@@ -63,6 +63,19 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       await expect(cli('open-agent', '--agent', 'codex', '--prompt-file', `${brief}-missing`, '--dry-run'))
         .rejects.toMatchObject({ stderr: expect.stringContaining('readable regular file') })
       expect((await store.load()).projects.find((p) => p.id === 'p')!.nodes).toEqual(nodesBefore)
+      const groupSpec = JSON.stringify({ version: 1, groups: [{ id: 'batch-frame', title: 'Managed frame' }],
+        reserve: [{ id: 'slot', group: 'batch-frame', width: 640, height: 440 }] })
+      expect(await cli('groups', '--spec', groupSpec, '--dry-run')).toContain('planned')
+      expect((await store.load()).projects.find((p) => p.id === 'p')!.nodes).toEqual(nodesBefore)
+      expect(await cli('groups', '--spec', groupSpec, '--request-id', 'fixture-groups')).toContain('applied')
+      expect(await cli('groups', '--spec', groupSpec, '--request-id', 'fixture-groups')).toContain('replayed:')
+      expect(await cli('groups', '--get', '--request-id', 'fresh-groups-read')).toContain('reserved')
+      expect(await cli('groups', '--spec', JSON.stringify({ version: 1, release: [{ id: 'slot', group: 'batch-frame' }] })))
+        .toContain('applied')
+      // A read is not replayed from the creation ledger, even with the same explicit id.
+      expect(await cli('groups', '--get', '--request-id', 'fresh-groups-read')).toContain('released')
+      expect(await cli('groups', '--spec', JSON.stringify({ version: 1, remove: [{ id: 'batch-frame', promoteTo: null }] })))
+        .toContain('applied')
       expect(await cli('place', '--nodes', 'source', '--x', '48', '--y', '96')).toContain('placed')
       const saved = (await store.load()).projects.find((p) => p.id === 'p')!
       expect(saved.nodes[0].position).toEqual({ x: 48, y: 96 })

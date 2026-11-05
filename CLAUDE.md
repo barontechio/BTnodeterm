@@ -201,6 +201,14 @@ testing habits). This file is what you reach for when you need to know *why* a r
 is, or you are changing a subsystem it describes. A change that other developers must know about
 belongs in BOTH (see Conventions).
 
+Dynamic agent groups share `shared/dynamic-groups.ts` across host and renderer. Declarative
+`groups --spec` and reservation-consuming opens use `CanvasContentWriter.editBatch` inside the
+canonical workspace FIFO, validating every affected identity before one bounded publication.
+Clients advertise support only while an atomic receiver is mounted; incompatible live recipients
+refuse before effects. Preserve host reservation facts on client saves and ingress, including the
+publication-to-disk interval. Restored facts grant no creator/launch authority. The schema, limits
+and indeterminate retry semantics live in `docs/dynamic-agent-groups.md`.
+
 **PR text (title, description, comments, review responses) follows the `pr-writing` skill**: what
 changed and why it matters, then how it was checked and what was not, then risks or follow-up when
 there are any. Structure proportional to the change. `CONTRIBUTING.md` § Pull requests is the

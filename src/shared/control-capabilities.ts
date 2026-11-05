@@ -16,6 +16,7 @@ export const CONTROL_SUPPORT = {
   'show-web': 'partial',
   'open-browser': 'unsupported',
   group: 'supported',
+  groups: 'partial',
   ungroup: 'supported',
   move: 'supported',
   arrange: 'supported',
@@ -53,6 +54,7 @@ export type ServerControlVerb = {
 }[ControlVerb]
 
 const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
+  groups: 'Atomic local visual batches and durable slots; all affected nodes require authorization and connected canvases must support batches. Reservations grant no execution authority.',
   branch: 'Verified idle local POSIX tmux Claude panes within operator scope; cannot branch the caller. Requires individual owner approval, a readable original transcript and a proven new session. Uncertain input must never be repeated.',
   write: 'Local verified idle Claude panes with an empty composer, within operator scope. Requires an attached owner and individual confirmation; uncertain input must never be resent.',
   'show-web': 'External HTTP(S) URLs use a sandboxed iframe; static local HTML requires a distinct configured HTTPS preview hostname. Local scripts and network resource loads are disabled.',
@@ -98,8 +100,8 @@ export function controlCapabilities(edition: ControlEdition, enabled: boolean): 
     enabled,
     verbs: (Object.keys(CONTROL_SUPPORT) as ControlVerb[]).map((verb) => ({
       verb,
-      support: edition === 'desktop' && verb !== 'branch' ? 'supported' : CONTROL_SUPPORT[verb],
-      ...((edition === 'server' || verb === 'branch') && serverSupportsControl(verb) && SERVER_LIMITATIONS[verb]
+      support: edition === 'desktop' && verb !== 'branch' && verb !== 'groups' ? 'supported' : CONTROL_SUPPORT[verb],
+      ...((edition === 'server' || verb === 'branch' || verb === 'groups') && serverSupportsControl(verb) && SERVER_LIMITATIONS[verb]
         ? { limitation: SERVER_LIMITATIONS[verb] } : {})
     }))
   }

@@ -22,7 +22,7 @@ import { flowToNodeStates, type CanvasNode } from '../state/workspace'
  * stored rect behind kept the node "maximized" on disk — the next panel pin re-claimed the viewport
  * for it, and its Restore button teleported it back to where it was before the layout.
  */
-const GEOMETRY = ['position', 'size', 'parentId', 'group', 'premaxRect'] as const
+const GEOMETRY = ['position', 'size', 'parentId', 'group', 'premaxRect', 'dynamicGroup'] as const
 
 // null and absent are the same fact here (`group: null` vs no `group`), or an untouched node would
 // be rewritten just for its spelling.
