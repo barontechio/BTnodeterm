@@ -38,6 +38,7 @@ import {
   type HeadlessWorkspace
 } from './headless-node-factory'
 import { STICKY_NODE_MIN_SIZE, STICKY_NODE_SIZE } from '../shared/default-node-size'
+import { buildBackgroundLinkMaps } from '../shared/context-link-map'
 
 
 const terminal = (
@@ -853,22 +854,265 @@ describe('HeadlessNodeFactory', () => {
     expect(after.nodes.find((node) => node.id === 'term-foreign-child')?.parentId).toBe(groupId)
   })
 
-  it('refuses a default link endpoint because the caller did not spawn its own node', async () => {
-    const reply = await factory.link('term-source', { to: 'term-upstream' }, true)
+  describe('link: the caller may name its own node', () => {
+    const projectFile = () =>
+      JSON.parse(fs.readFileSync(path.join(projectDir, '.nodeterm', 'project.json'), 'utf8')) as {
+        bridges?: Array<{ source: string; target: string; reader?: string }>
+      }
 
-    expect(reply).toMatchObject({
-      ok: false,
-      error: expect.stringContaining('link-not-owner')
+    const addForeign = async () => {
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].nodes.push(terminal('term-foreign', 'Foreign', 'claude', 1200))
+      await store.save(workspace)
+    }
+
+    /** Nothing was written, cast or typed: the refusal came before any effect. */
+    const expectNoEffect = async () => {
+      expect((await new WorkspaceStore().load({ sideline: false })).projects[0].bridges).toEqual([])
+      expect(projectFile().bridges).toEqual([])
+      expect(publishedProjects).toEqual([])
+      expect(pty.sends).toEqual([])
+    }
+
+    it('links the default --from (the caller) to a node it opened, and the link is readable', async () => {
+      const reply = await factory.link('term-source', { to: 'term-upstream' }, true)
+
+      expect(reply).toMatchObject({ ok: true, result: { from: 'term-source', linked: ['term-upstream'] } })
+      // Persisted on disk, not only answered: this file is what the context-link map derives from.
+      expect(projectFile().bridges).toEqual([
+        expect.objectContaining({ source: 'term-source', target: 'term-upstream' })
+      ])
+      const map = buildBackgroundLinkMaps(store.persistedCanvases(), null, () => undefined)
+      expect(map['term-source'].map((link) => link.id)).toEqual(['term-upstream'])
+      expect(map['term-upstream'].map((link) => link.id)).toEqual(['term-source'])
+      expect(publishedProjects.map((project) => project.id)).toEqual(['project-1'])
+      expect(pty.sends).toEqual([])
     })
-    expect(pty.sends).toEqual([])
-    const workspace = await new WorkspaceStore().load({ sideline: false })
-    expect(workspace.projects[0].bridges).toEqual([])
-    const projectFile = JSON.parse(
-      fs.readFileSync(path.join(projectDir, '.nodeterm', 'project.json'), 'utf8')
-    ) as { bridges?: Array<{ source: string; target: string }> }
-    expect(projectFile.bridges).toEqual([])
-    expect(published).toEqual([])
-    expect(publishedProjects).toEqual([])
+
+    it('links several owned nodes in one call, and an explicit --from of the caller is the same', async () => {
+      await expect(
+        factory.link('term-source', { from: 'term-source', to: 'term-upstream,term-owned' }, true)
+      ).resolves.toMatchObject({
+        ok: true,
+        result: { from: 'term-source', linked: ['term-upstream', 'term-owned'] }
+      })
+      expect(projectFile().bridges?.map((edge) => edge.target)).toEqual(['term-upstream', 'term-owned'])
+    })
+
+    it('accepts the caller on the --to side of an owned --from', async () => {
+      await expect(
+        factory.link('term-source', { from: 'term-upstream', to: 'term-source' }, true)
+      ).resolves.toMatchObject({ ok: true, result: { from: 'term-upstream', linked: ['term-source'] } })
+      expect(projectFile().bridges).toEqual([
+        expect.objectContaining({ source: 'term-upstream', target: 'term-source' })
+      ])
+    })
+
+    it('--one-way from the default caller makes the caller the only reader', async () => {
+      await expect(
+        factory.link('term-source', { to: 'term-upstream', 'one-way': '' }, true)
+      ).resolves.toMatchObject({ ok: true })
+      expect(projectFile().bridges).toEqual([
+        expect.objectContaining({ source: 'term-source', target: 'term-upstream', reader: 'term-source' })
+      ])
+    })
+
+    it('restores a link missing from an agent the caller really opened in this run', async () => {
+      const opened = await factory.openAgent('term-source', { agent: 'codex', prompt: 'work' }, true)
+      const id = (opened.result as { id: string }).id
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].bridges = []
+      await store.save(workspace)
+
+      await expect(factory.link('term-source', { to: id }, true)).resolves.toMatchObject({
+        ok: true,
+        result: { from: 'term-source', linked: [id] }
+      })
+      expect(projectFile().bridges).toEqual([expect.objectContaining({ source: 'term-source', target: id })])
+    })
+
+    it.each([
+      ['a foreign --to, --from defaulted', { to: 'term-foreign' }],
+      ['a foreign --to, explicit caller --from', { from: 'term-source', to: 'term-foreign' }],
+      ['one foreign member of a --to list', { to: 'term-upstream,term-foreign' }],
+      ['a foreign --from to the caller', { from: 'term-foreign', to: 'term-source' }],
+      ['a foreign --from to an owned node', { from: 'term-foreign', to: 'term-upstream' }],
+      ['an owned --from to a foreign node', { from: 'term-upstream', to: 'term-foreign' }]
+    ])('refuses %s whole, before any effect', async (_name, args) => {
+      await addForeign()
+
+      await expect(factory.link('term-source', args, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringMatching(/^link-not-owner: term-source may modify only .*term-foreign is neither$/)
+      })
+      await expectNoEffect()
+    })
+
+    it('does not let a created node claim the node that opened it, or a sibling', async () => {
+      await expect(factory.link('term-upstream', { to: 'term-source' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-owner: term-upstream may modify only')
+      })
+      await expect(factory.link('term-upstream', { to: 'term-owned' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-owner: term-upstream may modify only')
+      })
+      await expect(
+        factory.link('term-upstream', { from: 'term-source', to: 'term-owned' }, true)
+      ).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-owner: term-upstream may modify only')
+      })
+      await expectNoEffect()
+    })
+
+    it.each([
+      ['--from defaulted', { to: 'term-upstream' }],
+      ['an explicit caller --from', { from: 'term-source', to: 'term-upstream' }]
+    ])('refuses an unverified caller with %s', async (_name, args) => {
+      await expect(factory.link('term-source', args, false)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-identity-refused')
+      })
+      await expectNoEffect()
+    })
+
+    it('refuses a caller that is not a control-capable agent, even for its own node', async () => {
+      const workspace = await store.load({ sideline: false })
+      const plain = terminal('term-plain', 'Plain')
+      delete plain.agentId
+      workspace.projects[0].nodes.push(plain)
+      await store.save(workspace)
+      ownership.record('term-owned-by-plain', { sourceNodeId: 'term-plain', projectId: 'project-1' })
+
+      await expect(factory.link('term-plain', { to: 'term-owned-by-plain' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: 'source node is not a control-capable agent'
+      })
+      await expectNoEffect()
+    })
+
+    describe('across projects', () => {
+      const addOtherProject = async (nodes: CanvasNodeState[]) => {
+        const workspace = await store.load({ sideline: false })
+        const otherDir = path.join(dataDir, 'other-project')
+        fs.mkdirSync(otherDir, { recursive: true })
+        workspace.projects.push({
+          id: 'project-2',
+          name: 'Other',
+          color: '#32d74b',
+          cwd: otherDir,
+          viewport: { x: 0, y: 0, zoom: 1 },
+          nodes,
+          bridges: [],
+          ropes: []
+        })
+        await store.save(workspace)
+      }
+
+      it.each([
+        ['a target the caller opened there', { to: 'term-there' }],
+        ['that node as --from', { from: 'term-there', to: 'term-source' }],
+        ['that node in a --to list', { to: 'term-upstream,term-there' }]
+      ])('refuses %s, whatever the ledger says', async (_name, args) => {
+        await addOtherProject([terminal('term-there', 'There', 'claude')])
+        ownership.record('term-there', { sourceNodeId: 'term-source', projectId: 'project-2' })
+
+        await expect(factory.link('term-source', args, true)).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining('link-project-refused: term-there')
+        })
+        await expectNoEffect()
+      })
+
+      it('refuses an owned target whose id is held by two projects', async () => {
+        await addOtherProject([terminal('term-upstream', 'Same id', 'codex')])
+
+        await expect(factory.link('term-source', { to: 'term-upstream' }, true)).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringContaining('link-project-refused: term-upstream')
+        })
+        await expectNoEffect()
+      })
+
+      it('refuses a caller whose own id is held by two projects', async () => {
+        await addOtherProject([terminal('term-source', 'Same id', 'claude')])
+
+        await expect(factory.link('term-source', { to: 'term-upstream' }, true)).resolves.toMatchObject({
+          ok: false,
+          error: 'source node is not in exactly one saved project'
+        })
+        await expectNoEffect()
+      })
+    })
+
+    it('after a restart links nothing: the creator ledger is empty and self is not a target', async () => {
+      factory.stop() // the ledger is process memory, so a stop is what a restart leaves behind
+      expect(ownership.ownerOf('term-upstream')).toBeUndefined()
+      factory = new HeadlessNodeFactory(factoryDeps)
+
+      await expect(factory.link('term-source', { to: 'term-upstream' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-not-owner')
+      })
+      await expect(factory.link('term-source', { to: 'term-source' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: 'link: nothing linked — term-source: same node'
+      })
+      await expectNoEffect()
+    })
+
+    it('adopts nothing and widens no other verb: the caller still owns no node of its own', async () => {
+      await expect(factory.link('term-source', { to: 'term-upstream' }, true)).resolves.toMatchObject({ ok: true })
+      expect(ownership.ownerOf('term-source')).toBeUndefined()
+      expect(factory.ownsSpawn('term-source', 'term-source')).toBe(false)
+      const before = structuredClone((await store.load({ sideline: false })).projects[0])
+
+      const replies = await Promise.all([
+        factory.rename('term-source', { node: 'term-source', title: 'Mine now' }),
+        factory.color('term-source', { node: 'term-source', color: '#32d74b' }),
+        factory.group('term-source', { nodes: 'term-source' }),
+        factory.close('term-source', { node: 'term-source' }, true)
+      ])
+
+      expect(replies.map((reply) => reply.error)).toEqual([
+        expect.stringContaining('rename-not-owner'),
+        expect.stringContaining('color-not-owner'),
+        expect.stringContaining('group-not-owner'),
+        expect.stringContaining('close-not-owner')
+      ])
+      expect((await store.load({ sideline: false })).projects[0]).toEqual(before)
+      expect(pty.destroys).toEqual([])
+    })
+
+    it('project scope keeps its own reach, and still stops at the project boundary', async () => {
+      factory.stop()
+      factory = new HeadlessNodeFactory({ ...factoryDeps, controlScope: 'project' })
+      await addForeign()
+
+      await expect(factory.link('term-source', { to: 'term-foreign' }, true)).resolves.toMatchObject({
+        ok: true,
+        result: { from: 'term-source', linked: ['term-foreign'] }
+      })
+      const workspace = await store.load({ sideline: false })
+      workspace.projects.push({
+        id: 'project-2',
+        name: 'Other',
+        color: '#32d74b',
+        cwd: path.join(dataDir, 'project-2-dir'),
+        viewport: { x: 0, y: 0, zoom: 1 },
+        nodes: [terminal('term-there', 'There', 'claude')],
+        bridges: [],
+        ropes: []
+      })
+      fs.mkdirSync(path.join(dataDir, 'project-2-dir'), { recursive: true })
+      await store.save(workspace)
+
+      await expect(factory.link('term-source', { to: 'term-there' }, true)).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('link-project-refused: term-there')
+      })
+    })
   })
 
   it('links two arbitrary existing nodes in the caller project', async () => {

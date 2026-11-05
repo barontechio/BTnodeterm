@@ -1265,7 +1265,16 @@ export class HeadlessNodeFactory {
           }
         }
       }
-      const unowned = this.unownedMutation(sourceNodeId, [from, ...targets], workspace, source.project)
+      // A caller did not open its own node, so the ledger cannot vouch for it, yet a link only records
+      // who may read whom and the caller is consenting for its own side. Verified identity and
+      // `sourceProject` above already prove which node this is. The exception names the caller's id
+      // and nothing else: every other endpoint still needs ownership, and no other verb gets it.
+      const unowned = this.unownedMutation(
+        sourceNodeId,
+        [from, ...targets].filter((id) => id !== sourceNodeId),
+        workspace,
+        source.project
+      )
       if (unowned) return this.ownershipRefusal('link', sourceNodeId, unowned)
 
       const byId = new Map(source.project.nodes.map((node) => [node.id, node]))

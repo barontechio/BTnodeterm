@@ -5087,7 +5087,10 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **Server creator ownership (2026-08 incident hardening):** enabled Server control accepts only
   verified node identity. `HeadlessNodeFactory` records which source node opened each new node in a
   process-local ledger; link/group/rename/color/sticky-update, message delivery, and close validate
-  the whole target set as current-run creations before writing or killing anything. Queued messages
+  the whole target set as current-run creations before writing or killing anything. `link` alone also
+  accepts the verified caller's own id as an endpoint: a caller never opened itself, so without this
+  it could not restore a link to its own station. That spares no other endpoint and no other verb, and
+  it records nothing in the ledger. Queued messages
   revalidate creator ownership before flush. The ledger is intentionally empty after restart —
   project JSON, titles, hook history and tmux names are not creator proof — so
   boot neither attaches/creates backends nor sends persisted queued commands. A live backend with a
