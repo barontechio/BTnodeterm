@@ -252,6 +252,5 @@
         "nanoid": "5.1.16"
       }
     }
-  },
-  "nodeTermUpdates": "disabled"
+  }
 }

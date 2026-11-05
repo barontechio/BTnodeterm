@@ -29,7 +29,7 @@ function fixture(): string {
   put(root, 'out/renderer/excalidraw-assets/font.woff2')
   put(root, 'scripts/patch-node-pty.mjs')
   put(root, 'scripts/patch-smart-whisper.mjs')
-  put(root, 'package.json', JSON.stringify({ name: 'node-terminal', version: '0.5.0-bt.1', license: 'BUSL-1.1', nodeTermUpdates: 'disabled', build: { publish: { url: 'upstream' } } }))
+  put(root, 'package.json', JSON.stringify({ name: 'node-terminal', version: '0.5.0-bt.1', license: 'BUSL-1.1', build: { publish: { url: 'upstream' } } }))
   put(root, 'package-lock.json', JSON.stringify({ version: '0.5.0-bt.1', lockfileVersion: 3, packages: {
     '': { version: '0.5.0-bt.1' },
     'node_modules/node-pty': { version: '1.1.0', integrity: 'sha512-fixture', license: 'MIT' },
@@ -160,6 +160,8 @@ describe('Server packaging boundaries', () => {
   it('packages the recipe with an honest platform/ABI, verifies checksums, launches from another cwd and refuses overwrite', () => {
     mockRecipe()
     const root = fixture()
+    const sourcePackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
+    put(root, 'package.json', JSON.stringify({ ...sourcePackage, nodeTermUpdates: 'manual' }))
     put(root, '.env', 'do not package')
     put(root, 'node_modules/shared-do-not-touch', 'untouched')
     put(root, 'out/server/main.cjs', 'console.log(JSON.stringify({cwd:process.cwd(),argv:process.argv.slice(2)}))')
@@ -176,6 +178,7 @@ describe('Server packaging boundaries', () => {
     expect(manifest.dependencies).toEqual([expect.objectContaining({ name: 'node-pty', version: '1.1.0', integrity: 'sha512-fixture' }), expect.objectContaining({ name: 'smart-whisper', version: '0.8.1', integrity: 'sha512-whisper-fixture' })])
     const packaged = JSON.parse(fs.readFileSync(path.join(payload, 'package.json'), 'utf8'))
     expect(packaged.nodeTermUpdates).toBe('disabled')
+    expect(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).nodeTermUpdates).toBe('manual')
     expect(realExec(process.execPath, ['-p', 'require.resolve(process.argv[1])', payload], { encoding: 'utf8' }).trim()).toBe(path.join(payload, 'out/server/main.cjs'))
     expect(fs.existsSync(path.join(payload, 'docs/web-push.md'))).toBe(true)
     expect(packaged.build).toBeUndefined()
@@ -193,17 +196,14 @@ describe('Server packaging boundaries', () => {
     expect(repeat.sha256).toBe(result.sha256)
   })
 
-  it('fails closed on missing assets or updater policy without leaving artifacts', () => {
+  it('fails closed on missing assets without leaving artifacts', () => {
     mockRecipe()
     const root = fixture()
     const output = testTmpDir('server-package-fail-')
     fs.unlinkSync(path.join(root, 'out/renderer/web-push-sw.js'))
     expect(() => packageServer({ root, output })).toThrow('ENOENT')
     expect(fs.readdirSync(output)).toEqual([])
-    put(root, 'out/renderer/web-push-sw.js')
-    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-    put(root, 'package.json', JSON.stringify({ ...pkg, nodeTermUpdates: 'manual' }))
-    expect(() => packageServer({ root, output })).toThrow('nodeTermUpdates=disabled')
+
   })
 
   it('cleans its own staging on install failure and preserves unrelated output data', () => {

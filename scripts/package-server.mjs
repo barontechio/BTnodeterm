@@ -222,7 +222,6 @@ export function packageServer({ output, root = path.resolve(path.dirname(fileURL
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'))
   if (!/^\d+\.\d+\.\d+(?:-[a-zA-Z0-9.-]+)?$/.test(pkg.version)) throw new Error('Invalid package version')
-  if (pkg.nodeTermUpdates !== 'disabled') throw new Error('Fork package requires nodeTermUpdates=disabled')
   if (!lock.packages || lock.version !== pkg.version || lock.packages[''].version !== pkg.version) throw new Error('Package/lock versions disagree')
   for (const relative of [...RUNTIME_INPUTS, ...PATCHES]) fs.accessSync(path.join(root, relative), fs.constants.R_OK)
   for (const relative of ['out/renderer/index.html', 'out/renderer/web-push-sw.js']) fs.accessSync(path.join(root, relative), fs.constants.R_OK)
@@ -244,7 +243,7 @@ export function packageServer({ output, root = path.resolve(path.dirname(fileURL
     const dependencies = dependencyInventory(staging, lock)
     // Keep the original lock for the recipe; runtime package.json carries no Desktop updater feed.
     const { build, devDependencies, scripts, ...runtimePkg } = pkg
-    fs.writeFileSync(path.join(staging, 'package.json'), json({ ...runtimePkg, main: './out/server/main.cjs', scripts: { start: 'node out/server/main.cjs' } }))
+    fs.writeFileSync(path.join(staging, 'package.json'), json({ ...runtimePkg, main: './out/server/main.cjs', nodeTermUpdates: 'disabled', scripts: { start: 'node out/server/main.cjs' } }))
     writeLauncher(staging)
     fs.writeFileSync(path.join(staging, 'RUNTIME.txt'), `Server ${pkg.version}; source commit ${commit}.
 Requires exact Node ${process.version}, ABI ${process.versions.modules}, Linux ${process.arch}, glibc compatible with build host ${glibc}.
