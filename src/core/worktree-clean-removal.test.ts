@@ -90,7 +90,7 @@ async function fixture(realBackend?: 'plain' | 'tmux') {
     if (realBackend === 'plain') {
       const ready = path.join(root, 'plain-shell-ready')
       manager.write(null, created.sessionId, `printf ready > '${ready}'\r`)
-      await vi.waitFor(() => expect(fs.readFileSync(ready, 'utf8')).toBe('ready'), { timeout: 10000 })
+      await vi.waitFor(() => expect(fs.readFileSync(ready, 'utf8')).toBe('ready'), { timeout: 5000 })
     }
   }
   const git = new GitService()
