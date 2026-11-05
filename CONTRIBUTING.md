@@ -150,6 +150,8 @@ no Git mutation, session input/teardown or canvas edit. `WorktreeRecoveryHost` u
 owner API; relay APIs omit administration. Uncertain replies never replay the action. Recorded missing-checkout repair supports plain local terminals and inert file notices through the
 owner broker. Agent recovery and confirmed deletion remain pending; observed-missing recovery is described below.
 
+Local transcript tail readers must open once, measure with that handle's `stat`, read through the same handle, and close in `finally`. A pathname may be replaced between measurement and reading; never reopen it after checking its size. Decode only the bytes actually read when a transcript can shrink.
+
 Global transcript search is owner-only and local to the host's configured Claude account roots.
 Index refresh identity is the transcript path, since session ids can repeat across accounts.
 Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.

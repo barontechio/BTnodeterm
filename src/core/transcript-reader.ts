@@ -515,10 +515,11 @@ function linesFrom(raw: string, opts?: ChatParseOptions): TranscriptLine[] {
 export async function readCappedTail(filePath: string, cap: number = READ_CAP_BYTES): Promise<string | undefined> {
   const limit = Math.min(READ_CAP_BYTES, Math.max(1, Math.floor(cap)))
   try {
-    const stat = await fs.promises.stat(filePath)
-    if (stat.size > limit) {
-      const fd = await fs.promises.open(filePath, 'r')
-      try {
+    const fd = await fs.promises.open(filePath, 'r')
+    try {
+      // Measure and read the same open file even if its pathname is replaced meanwhile.
+      const stat = await fd.stat()
+      if (stat.size > limit) {
         // One LOOKBEHIND byte before the window: when it is a `\n`, the window's first line is
         // whole and survives the drop below (the remote page reader's rule).
         const start = stat.size - limit - 1
@@ -530,11 +531,11 @@ export async function readCappedTail(filePath: string, cap: number = READ_CAP_BY
         const data = buffer.subarray(0, bytesRead)
         const nl = data.indexOf(0x0a) // drop the first (partial) line
         return nl >= 0 ? data.subarray(nl + 1).toString('utf8') : ''
-      } finally {
-        await fd.close()
       }
+      return await fd.readFile('utf8')
+    } finally {
+      await fd.close()
     }
-    return await fs.promises.readFile(filePath, 'utf8')
   } catch {
     return undefined
   }
@@ -993,16 +994,16 @@ export async function transcriptPresence(
 // knows nothing about claude's layout — the storage-specific parsing stays in each agent's module.
 export async function readSmallTail(filePath: string, cap: number): Promise<string | undefined> {
   try {
-    const stat = await fs.promises.stat(filePath)
-    if (stat.size <= cap) return await fs.promises.readFile(filePath, 'utf8')
     const fd = await fs.promises.open(filePath, 'r')
     try {
-      const { buffer } = await fd.read({
+      const stat = await fd.stat()
+      if (stat.size <= cap) return await fd.readFile('utf8')
+      const { buffer, bytesRead } = await fd.read({
         position: stat.size - cap,
         length: cap,
         buffer: Buffer.alloc(cap)
       })
-      const s = buffer.toString('utf8')
+      const s = buffer.subarray(0, bytesRead).toString('utf8')
       const nl = s.indexOf('\n')
       return nl >= 0 ? s.slice(nl + 1) : s
     } finally {
