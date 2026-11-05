@@ -491,6 +491,7 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
 
   // Canvas + presence.
   [IPC.canvasMut]: canvasMut,
+  [IPC.canvasBatchSubscribe]: (a) => a.length === 1 && typeof a[0] === 'boolean' ? OK : no('Invalid canvas subscription.'),
   [IPC.presenceHello]: pass,
   [IPC.presenceCursor]: pass,
   [IPC.presenceFocus]: pass,
@@ -508,6 +509,8 @@ export const SCOPED: Readonly<Record<string, Check>> = Object.freeze({
  */
 export const SCOPED_REFUSED: ReadonlySet<string> = new Set<string>([
   IPC.canvasMutationRejected,
+  // Host publications only. A guest may subscribe, never submit a batch.
+  IPC.canvasMutationBatch,
   // Recovery facts and approval belong to the physical host owner, never the shared project.
   IPC.worktreeRecoveryList,
   IPC.worktreeRecoveryInspect,

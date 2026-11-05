@@ -1,10 +1,11 @@
 import type { CanvasExecutionHold } from './canvas-execution-reservations'
 // Content writes shared by host-side canvas commands. The caller serializes its domain
 // transaction; WorkspaceStore owns disk serialization. Reflected ops precede authority overlays.
-import { publishCanvasMutation } from './canvas-sync'
+import { publishCanvasMutation, publishCanvasMutationBatch, canPublishCanvasBatch,
+  isCanvasMutationBatch, type CanvasBatchPreflight } from './canvas-sync'
 import { contentOf, diffContent, type CanvasContent } from '../shared/canvas-content'
 import { stableStringify } from '../shared/canvas-mutations'
-import type { CanvasMutation, CanvasNodeState, Project, Workspace } from '../shared/types'
+import type { CanvasMutation, CanvasMutationBatch, CanvasNodeState, Project, Workspace } from '../shared/types'
 import type { WorkspaceStore } from './workspace-store'
 
 /** One node edit a verb re-applies to a fresh read (`savePatches`). Idempotent. */
@@ -29,16 +30,33 @@ export interface CanvasContentWriterDeps {
     Partial<Pick<WorkspaceStore, 'saveChanges' | 'updateWorkspace' | 'updateWorkspaceForExecutionRepair'>>
   isStopped?(): boolean
   publishMutation?(projectId: string, mutation: CanvasMutation): void
+  publishBatch?(projectId: string, batch: CanvasMutationBatch): boolean
+  preflightBatch?(projectId: string, batch: CanvasMutationBatch): CanvasBatchPreflight
   publishProject?(project: Project): void
 }
 
 /** A project absent from a baseline: all of its content is new. */
 const EMPTY_CONTENT: CanvasContent = { nodes: [], bridges: [], ropes: [] }
 
+/** false means no batch was published; true requires ledger unknown/inspection, never blind retry. */
+export class CanvasBatchWriteError extends Error {
+  constructor(message: string, readonly indeterminate: boolean) {
+    super(message)
+    this.name = 'CanvasBatchWriteError'
+  }
+}
+
 /** Every project's content, deep-copied: a verb edits its workspace in place (`node.pendingLaunch =
  *  …`), so a baseline that shared those objects would diff as unchanged. */
 function snapshotContent(workspace: Workspace): Map<string, CanvasContent> {
   return new Map(workspace.projects.map((p) => [p.id, structuredClone(contentOf(p))]))
+}
+
+function withoutContent(ws: Workspace): unknown {
+  return { ...ws, projects: ws.projects.map((p) => {
+    const { nodes: _n, bridges: _b, ropes: _r, kanban: _k, ...metadata } = p
+    return metadata
+  }) }
 }
 
 export class CanvasContentWriter {
@@ -95,6 +113,55 @@ export class CanvasContentWriter {
     const fresh = await this.loadForEdit()
     const value = edit(fresh)
     return { value, saved: await this.castAndSave(fresh, { onlyIfChanged: true }) }
+  }
+
+  /** One project content batch on the real store FIFO; no load/save emulation or partial fanout. */
+  async editBatch<T>(edit: (workspace: Workspace) => T): Promise<{ value: T; saved: boolean }> {
+    let publicationStarted = false
+    try {
+      if (this.deps.isStopped?.()) throw this.stoppedWrite
+      const update = this.deps.workspaceStore.updateWorkspace
+      if (!update) throw new Error('canvas-batch-fifo-unavailable')
+      let value!: T
+      const result = await update.call(this.deps.workspaceStore, (fresh) => {
+        if (this.deps.isStopped?.()) throw this.stoppedWrite
+        const before = structuredClone(fresh)
+        value = edit(fresh)
+        if (stableStringify(withoutContent(before)) === stableStringify(withoutContent(fresh)) &&
+          fresh.projects.every((p) => {
+            const old = before.projects.find((candidate) => candidate.id === p.id)
+            return old && diffContent(contentOf(old), contentOf(p), p.id).length === 0
+          })) return before // semantic no-op, including a different node array ordering
+        return fresh
+      }, (current, next) => {
+        if (this.deps.isStopped?.()) throw this.stoppedWrite
+        const batches: Array<{ projectId: string; batch: CanvasMutationBatch }> = []
+        // This path changes content only, not projects, camera or machine-local metadata.
+        if (stableStringify(withoutContent(current)) !== stableStringify(withoutContent(next))) {
+          throw new Error('canvas-batch-content-only')
+        }
+        for (const p of next.projects) {
+          const old = current.projects.find((candidate) => candidate.id === p.id)
+          const mutations = diffContent(old ? contentOf(old) : EMPTY_CONTENT, contentOf(p), p.id)
+          if (mutations.length) batches.push({ projectId: p.id, batch: { mutations } })
+        }
+        if (batches.length > 1) throw new Error('canvas-batch-project-local-only')
+        if (!batches.length) return
+        const { projectId, batch } = batches[0]
+        if (!isCanvasMutationBatch(batch)) throw new Error('canvas-batch-invalid')
+        const check = (this.deps.preflightBatch ?? canPublishCanvasBatch)(projectId, batch)
+        if (!check.ok) throw new Error(check.error)
+        // A throw during publication may have reached the authority or a client already.
+        publicationStarted = true
+        if (!(this.deps.publishBatch ?? publishCanvasMutationBatch)(projectId, batch)) {
+          publicationStarted = false // publisher's false contract guarantees no effects
+          throw new Error('canvas-batch-publication-refused')
+        }
+      })
+      return { value, saved: result.saved }
+    } catch (error) {
+      throw new CanvasBatchWriteError(error instanceof Error ? error.message : String(error), publicationStarted)
+    }
   }
 
   /** Exact execution-metadata transition in the real store FIFO. No legacy load/save fallback. */

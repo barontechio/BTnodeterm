@@ -427,10 +427,10 @@ describe('quoting by construction — env values can never become shell syntax o
 describe('assembleLaunchCommand — promptFile (issue #520)', () => {
   // The whole point: the TYPED line stays single-line while the pane's shell expands the file at
   // execution, so a multi-line brief reaches the CLI with its structure intact.
-  it('claude composes the prompt as a "$(cat …)" substitution with the PATH single-quoted', () => {
+  it('claude gates launch on a successful read with the path single-quoted', () => {
     expect(
       assembleLaunchCommand({ agentId: 'claude', promptFile: '/tmp/brief.md' }, ENV).command
-    ).toBe('claude "$(cat \'/tmp/brief.md\')"')
+    ).toBe('( nt_launch_prompt=$(cat \'/tmp/brief.md\') && claude "$nt_launch_prompt" )')
   })
   it('flags still land after the prompt for claude', () => {
     expect(
@@ -438,7 +438,7 @@ describe('assembleLaunchCommand — promptFile (issue #520)', () => {
         { agentId: 'claude', promptFile: '/tmp/brief.md', permissionMode: 'auto' },
         ENV
       ).command
-    ).toBe('claude "$(cat \'/tmp/brief.md\')" --permission-mode auto')
+    ).toBe('( nt_launch_prompt=$(cat \'/tmp/brief.md\') && claude "$nt_launch_prompt" --permission-mode auto )')
   })
   it('grok keeps its flags BEFORE the -- separator, substitution after it', () => {
     expect(
@@ -446,11 +446,11 @@ describe('assembleLaunchCommand — promptFile (issue #520)', () => {
         { agentId: 'grok', promptFile: '/tmp/brief.md', permissionMode: 'plan' },
         ENV
       ).command
-    ).toBe('grok --permission-mode plan -- "$(cat \'/tmp/brief.md\')"')
+    ).toBe('( nt_launch_prompt=$(cat \'/tmp/brief.md\') && grok --permission-mode plan -- "$nt_launch_prompt" )')
   })
   it('a flag-prompt agent passes the substitution through its prompt flag', () => {
     expect(assembleLaunchCommand({ agentId: 'opencode', promptFile: '/tmp/b.md' }, ENV).command).toBe(
-      'opencode --prompt "$(cat \'/tmp/b.md\')"'
+      '( nt_launch_prompt=$(cat \'/tmp/b.md\') && opencode --prompt "$nt_launch_prompt" )'
     )
   })
   it('promptFile wins over initialPrompt', () => {
@@ -459,7 +459,7 @@ describe('assembleLaunchCommand — promptFile (issue #520)', () => {
         { agentId: 'claude', initialPrompt: 'ignored', promptFile: '/tmp/brief.md' },
         ENV
       ).command
-    ).toBe('claude "$(cat \'/tmp/brief.md\')"')
+    ).toBe('( nt_launch_prompt=$(cat \'/tmp/brief.md\') && claude "$nt_launch_prompt" )')
   })
   it('a path with a quote in it cannot break out of the quoting', () => {
     // shellSingleQuote's '\'' dance — the path stays ONE argument to cat and nothing in it
@@ -468,7 +468,7 @@ describe('assembleLaunchCommand — promptFile (issue #520)', () => {
       { agentId: 'claude', promptFile: "/tmp/my brief's.md" },
       ENV
     ).command
-    expect(cmd.startsWith('claude "$(cat ')).toBe(true)
+    expect(cmd.startsWith('( nt_launch_prompt=$(cat ')).toBe(true)
     expect(cmd).toContain("'/tmp/my brief'\\''s.md'")
   })
   it('the --prompt literal is still collapsed to one line (unchanged behavior)', () => {

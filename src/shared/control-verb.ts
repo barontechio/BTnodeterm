@@ -10,6 +10,7 @@ export type ControlVerb =
   | 'show-web'
   | 'open-browser'
   | 'group'
+  | 'groups'
   | 'ungroup'
   | 'move'
   | 'arrange'
