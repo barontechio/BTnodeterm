@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from 'vitest'
-import { sweepSessionNames, type SweepEntry } from './session-name-sweep'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { startSessionNameSweep, sweepSessionNames, type SweepEntry } from './session-name-sweep'
+
+afterEach(() => vi.useRealTimers())
 
 function deps(
   entries: SweepEntry[],
@@ -78,7 +80,7 @@ describe('sweepSessionNames', () => {
       nodes: { n1: { accountId: 'acct-2' } }
     })
     await sweepSessionNames(d)
-    expect(resolve).toHaveBeenCalledWith('s1', 'acct-2', 'claude')
+    expect(resolve).toHaveBeenCalledWith('s1', 'acct-2', 'claude', 'n1')
   })
 
   it('tells the resolver WHICH AGENT it is resolving', async () => {
@@ -183,5 +185,39 @@ describe('the default supports gate (TITLE_READ_CAPABLE)', () => {
     // The helper's `supports` is claude-only, and it wins over the default.
     expect(await sweepSessionNames(d)).toBe(0)
     expect(published).toEqual([])
+  })
+
+  it('drops an async name after a session, account, manual title or node replacement', async () => {
+    for (const replace of ['session', 'account', 'manual', 'node', 'entry'] as const) {
+      const entries: SweepEntry[] = [{ nodeId: 'n1', sessionId: 's1', agentId: 'claude' }]
+      const nodes: Record<string, { accountId?: string; titleAuto?: boolean }> = { n1: { accountId: 'account' } }
+      const { d, published } = deps(entries, { nodes })
+      let finish!: (name: string) => void
+      d.resolve.mockImplementation(() => new Promise<string>((resolve) => { finish = resolve }))
+      const pending = sweepSessionNames(d)
+      if (replace === 'session') entries[0].sessionId = 'replacement'
+      if (replace === 'account') nodes.n1.accountId = 'other'
+      if (replace === 'manual') nodes.n1.titleAuto = false
+      if (replace === 'node') delete nodes.n1
+      if (replace === 'entry') entries.length = 0
+      finish('stale name')
+      expect(await pending).toBe(0); expect(published).toEqual([])
+    }
+  })
+
+  it('does not overlap background passes or publish a result after disposal', async () => {
+    vi.useFakeTimers()
+    const { d, resolve, published } = deps([{ nodeId: 'n1', sessionId: 's1', agentId: 'claude' }])
+    let finish!: (name: string) => void
+    resolve.mockImplementation(() => new Promise<string>((done) => { finish = done }))
+    const stop = startSessionNameSweep({ ...d, intervalMs: 10_000 })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(resolve).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(resolve).toHaveBeenCalledTimes(1)
+    stop(); finish('too late'); await vi.advanceTimersByTimeAsync(0)
+    expect(published).toEqual([])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(resolve).toHaveBeenCalledTimes(1)
   })
 })

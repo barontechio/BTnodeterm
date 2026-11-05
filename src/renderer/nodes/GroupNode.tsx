@@ -12,6 +12,8 @@ import { useGitBranch } from '../state/gitBranches'
 import { useProjectSetup } from '../state/projectSetup'
 import { useSettings } from '../state/settings'
 import { backedFillStyle } from '@shared/canvas-backing'
+import { GroupReservations } from '../lib/groupReservations'
+import { normalizeDynamicGroupState } from '@shared/dynamic-groups'
 
 export type WorktreeAction = 'merge' | 'remove' | 'unbind' | 'rerun-setup'
 
@@ -42,6 +44,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // The frame element, observed for viewport visibility by the worktree-status tick below.
   const frameRef = useRef<HTMLDivElement | null>(null)
 
+  const hasReservations = normalizeDynamicGroupState(data.dynamicGroup)?.reservations.some((r) => r.state === 'reserved') ?? false
   const wt = data.worktree
   // The store is the ONLY caller of the worktree/status git IPC; it throttles
   // (WORKTREE_STATUS_THROTTLE_MS) and is epoch-guarded, so asking often is free.
@@ -139,6 +142,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
   // re-reconciles (the worktree is offered as an orphan again, and a stale registration is
   // pruned) instead of the binding silently vanishing until the next project switch.
   const ungroup = (): void => {
+    if (hasReservations) return
     if (wt) worktreeActionHandler?.(id, 'unbind')
     setNodes((ns) => ungroupNodes(ns as CanvasNode[], id))
   }
@@ -160,6 +164,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
       ref={frameRef}
       className={frameClass}
       style={{
+        position: 'relative',
         borderColor: bound && stale ? undefined : data.color,
         // A stale worktree frame keeps its CSS look; everything else gets the tint (+ backing).
         ...(bound && stale ? {} : backedFillStyle(data.color, bound ? '1c' : '0f', backing)),
@@ -167,6 +172,7 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
         boxShadow: selected ? `0 0 0 1.5px ${data.color}` : undefined
       }}
     >
+      <GroupReservations state={data.dynamicGroup} color={data.color} />
       <NodeResizer
         minWidth={NODE_MIN_SIZES.group.width}
         minHeight={NODE_MIN_SIZES.group.height}
@@ -194,14 +200,30 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
             }}
           />
         )}
-        <input
-          className="group-node__name nodrag"
-          value={data.title}
-          spellCheck={false}
-          onChange={(e) => updateNodeData(id, { title: e.target.value })}
-        />
+        <span className="group-node__name-size">
+          <span className="group-node__name-mirror" aria-hidden="true">
+            {data.title.replace(/[\r\n]/g, '') || '\u00a0'}
+          </span>
+          <input
+            className="group-node__name nodrag"
+            aria-label="Group name"
+            title={data.title}
+            value={data.title}
+            spellCheck={false}
+            onChange={(e) => updateNodeData(id, { title: e.target.value })}
+          />
+        </span>
         {wt && (
-          <div className="group-node__wt nodrag">
+          <div
+            className="group-node__wt nodrag nowheel"
+            role="group"
+            aria-label="Worktree details and actions"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              // Let the browser scroll this row instead of moving the selected frame.
+              if (e.key.startsWith('Arrow')) e.stopPropagation()
+            }}
+          >
             {stale ? (
               // The directory is gone from disk (deleted outside the app). Merge and Remove would
               // act on a path that no longer exists, so only Unbind is offered.
@@ -319,10 +341,11 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
       </div>
 
       <div className="group-node__actions nodrag">
-        <Tooltip label="Ungroup (keeps nodes)">
+        <Tooltip label={hasReservations ? 'Release reserved spaces before ungrouping' : 'Ungroup (keeps nodes)'}>
           <button
             className="group-node__ungroup"
             aria-label="Ungroup (keeps nodes)"
+            disabled={hasReservations}
             onClick={ungroup}
           >
             <IconUngroup />

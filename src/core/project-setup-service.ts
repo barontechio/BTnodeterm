@@ -181,6 +181,11 @@ interface TrustFlight {
   projectIds: Set<string>
 }
 
+interface SetupStart {
+  reply: ProjectSetupRunResult
+  completion?: Promise<boolean>
+}
+
 export class ProjectSetupService {
   private readonly active = new Map<string, ActiveRun>()
   private readonly pending = new Map<string, (answer: ProjectSetupConsentAnswer | undefined) => void>()
@@ -193,24 +198,35 @@ export class ProjectSetupService {
   constructor(private readonly deps: ProjectSetupDeps) {}
 
   async run(target: ProjectSetupTarget, kind: ProjectSetupKind): Promise<ProjectSetupRunResult> {
+    return (await this.start(target, kind)).reply
+  }
+
+  /** Host authoring waits before exposing a new worktree frame to launchers. */
+  async runAndWait(target: ProjectSetupTarget, kind: ProjectSetupKind): Promise<boolean> {
+    const started = await this.start(target, kind)
+    return started.completion ? await started.completion :
+      started.reply.status === 'skipped' && started.reply.reason === 'no-script'
+  }
+
+  private async start(target: ProjectSetupTarget, kind: ProjectSetupKind): Promise<SetupStart> {
     const snap = await this.deps.readSettings(target.projectId)
     const resolved = resolveProjectSettings(snap?.local, snap?.shared ?? undefined)
     const picked = kind === 'setup' ? resolved.setup.setupScript : resolved.setup.archiveScript
     const script = picked?.value ?? ''
-    if (!script.trim()) return { status: 'skipped', reason: 'no-script' }
+    if (!script.trim()) return { reply: { status: 'skipped', reason: 'no-script' } }
 
     const runKey = setupRunKey(target, kind)
-    if (this.active.has(runKey)) return { status: 'skipped', reason: 'busy' }
+    if (this.active.has(runKey)) return { reply: { status: 'skipped', reason: 'busy' } }
     const runner = target.ssh ? this.deps.runSsh : this.deps.runLocal
-    if (!runner) return { status: 'skipped', reason: 'unavailable' }
+    if (!runner) return { reply: { status: 'skipped', reason: 'unavailable' } }
 
     // Claimed BEFORE the consent await on purpose: while a dialog for this location is open, a
     // second launch must be `busy`, not a second dialog asking about the same script.
     const entry: ActiveRun = { runKey, runId: randomUUID(), projectId: target.projectId, kind, abort: new AbortController(), seq: 0, closed: false }
     this.active.set(runKey, entry)
-    const abandon = (reason: 'declined' | 'unanswered' | 'unavailable' | 'no-script'): ProjectSetupRunResult => {
+    const abandon = (reason: 'declined' | 'unanswered' | 'unavailable' | 'no-script'): SetupStart => {
       this.active.delete(runKey)
-      return { status: 'skipped', reason }
+      return { reply: { status: 'skipped', reason } }
     }
 
     if (picked!.source === 'shared') {
@@ -253,15 +269,15 @@ export class ProjectSetupService {
     // Covers a cancel raised during any of the awaits above (readSettings, the trust read/write).
     if (entry.abort.signal.aborted) return abandon('declined')
 
-    void this.execute(entry, runner, script, target)
+    const completion = this.execute(entry, runner, script, target)
     // `runId` travels back with the ack so the initiator can attach THIS run (not the previous run
     // of the same script, which shares `runKey`) to its own lane.
-    return {
+    return { completion, reply: {
       status: 'started',
       runKey,
       runId: entry.runId,
       waitForSetup: resolved.setup.waitForSetup?.value === true
-    }
+    } }
   }
 
   /**
@@ -473,7 +489,7 @@ export class ProjectSetupService {
     runner: ProjectSetupRunner,
     script: string,
     target: ProjectSetupTarget
-  ): Promise<void> {
+  ): Promise<boolean> {
     // For an ssh run every path the script sees is the REMOTE one — a local Mac path in these env
     // vars would name a directory that does not exist on the host.
     const cwd = target.ssh ? target.ssh.remoteCwd : target.worktreePath ?? target.rootPath
@@ -509,6 +525,7 @@ export class ProjectSetupService {
     else if (threw) this.emit(entry, { state: 'failed' })
     else this.emit(entry, { state: exitCode === 0 ? 'done' : 'failed', exitCode })
     entry.closed = true
+    return !entry.abort.signal.aborted && !threw && exitCode === 0
   }
 
   private emit(entry: ActiveRun, ev: Omit<ProjectSetupEvent, 'runKey' | 'runId' | 'kind' | 'seq'>): void {

@@ -171,9 +171,12 @@ describe('addAgentNode parents OUTSIDE the setNodes updater', () => {
     // `attachWorktree` created this tick — `parentInto` would then find no group and leave the
     // agent top-level, outside the worktree frame it was opened for.
     const add = between('const addAgentNode = useCallback(', 'return { node, placed, projectId: targetProjectId }')
-    const placed = add.indexOf('const placed = groupId ? parentInto(node, groupId) : node')
+    const placed = add.indexOf('const placed = appendUiNodes([node], groupId)?.[0]')
     expect(placed).toBeGreaterThan(-1)
-    expect(placed).toBeLessThan(add.indexOf('setNodes((ns) => [...ns, placed])'))
+    expect(placed).toBeLessThan(add.indexOf('if (!placed) return'))
+    const append = between('const appendUiNodes = useCallback(', '/** The group frame under an absolute canvas point')
+    expect(append.indexOf('const base = nodesRef.current')).toBeLessThan(append.indexOf('setNodes((latest) =>'))
+    expect(append).toContain('appendGroupedFlowNodes(latest as CanvasNode[], missing, groupId, grid,')
     expect(add).not.toMatch(/setNodes\(\(ns\) => \[[^\]]*parentInto\(/)
   })
 })

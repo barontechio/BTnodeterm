@@ -273,6 +273,20 @@ export class Auth {
     return sessions.has(token)
   }
 
+  /** Host-private durable identity: never persist the bearer cookie in feature stores. */
+  sessionId(token: string | undefined): string | undefined {
+    return this.validateSession(token) && token ? crypto.createHash('sha256').update(token).digest('hex') : undefined
+  }
+
+  /** Independent of open WebSockets/documents; expires/revokes with the real auth session. */
+  validateSessionId(id: string): boolean {
+    if (!/^[a-f0-9]{64}$/.test(id)) return false
+    for (const token of this.loadSessions().keys()) {
+      if (crypto.createHash('sha256').update(token).digest('hex') === id) return this.validateSession(token)
+    }
+    return false
+  }
+
   /** Sign out ONE session: the token the caller presented (S3). True when it existed. */
   revokeSession(token: string): boolean {
     if (!isSessionToken(token)) return false

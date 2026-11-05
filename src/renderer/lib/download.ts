@@ -19,9 +19,10 @@
 import type { DownloadResult, DownloadTicket } from '@shared/types'
 import type { SessionSource } from '../session/session'
 
-export type DownloadRoute = 'scp' | 'http' | 'none'
+export type DownloadRoute = 'scp' | 'http' | 'ssh-http' | 'none'
 
 export interface DownloadContext {
+  remoteTransfers?: boolean
   /** Renderer shell: a browser tab (Server Edition) vs Electron. */
   browser: boolean
   /** The Explorer's project is an SSH project (its tree is the remote host's fs). */
@@ -30,14 +31,11 @@ export interface DownloadContext {
   source: SessionSource
 }
 
-export function downloadRoute({ browser, ssh, source }: DownloadContext): DownloadRoute {
+export function downloadRoute({ browser, ssh, source, remoteTransfers }: DownloadContext): DownloadRoute {
   if (source === 'relay') return 'none'
   if (ssh) {
-    // An SSH project's tree is served by the desktop's ControlMaster; the Server Edition has no
-    // SSH projects at all (its sshFs members are unsupported stubs), so a browser + ssh pairing
-    // is not a thing we can serve — say so rather than minting a ticket for a path that is not on
-    // the server's own disk.
-    return browser ? 'none' : 'scp'
+    // Browser SSH bulk traffic requires the optional host-owned transfer API.
+    return browser ? remoteTransfers ? 'ssh-http' : 'none' : 'scp'
   }
   return browser ? 'http' : 'none'
 }
@@ -61,6 +59,7 @@ export type DownloadOutcome = { ok: true; localPath?: string } | { ok: false; er
 
 /** The two transports, injected so the decision below is testable without a preload. */
 export interface DownloadTransport {
+  remoteTicket?: (projectId: string, path: string) => Promise<Pick<DownloadTicket, 'url' | 'name'> | null>
   /** Desktop + SSH: `sshProject.downloadFile` — scp over the project's ControlMaster. */
   scp: (projectId: string, path: string, destDir?: string) => Promise<DownloadResult>
   /** Browser: `files.downloadTicket` — a one-shot ticket for `GET /download`. */
@@ -78,7 +77,7 @@ const NOT_AVAILABLE = 'Downloading is not available here.'
  */
 export async function performDownload(
   route: DownloadRoute,
-  req: { path: string; projectId?: string; destDir?: string },
+  req: { path: string; projectId?: string; destDir?: string; isDir?: boolean },
   t: DownloadTransport
 ): Promise<DownloadOutcome> {
   try {
@@ -88,6 +87,13 @@ export async function performDownload(
       if (!req.projectId) return { ok: false, error: 'Not connected.' }
       const res = await t.scp(req.projectId, req.path, req.destDir)
       return res.ok ? { ok: true, localPath: res.localPath } : { ok: false, error: res.error }
+    }
+    if (route === 'ssh-http') {
+      if (!req.projectId || req.isDir || !t.remoteTicket) return {ok: false, error: 'Remote file downloads are unavailable here.'}
+      const ticket = await t.remoteTicket(req.projectId, req.path)
+      if (!ticket) return {ok: false, error: NOT_AVAILABLE}
+      t.hand(ticket.url, ticket.name)
+      return {ok: true}
     }
     if (route === 'http') {
       const ticket = await t.ticket(req.path)

@@ -1,3 +1,5 @@
+import { isBrowserRuntime } from '../bridge/runtime'
+import { browserRemoteUpload } from '../lib/remote-transfers'
 // Shared terminal file-drop/paste logic — used by both the canvas TerminalNode and the kanban card
 // modal's co-attach terminal (ModalTerminal), so a file dropped onto or pasted into either becomes
 // a path the same way.
@@ -251,8 +253,18 @@ export async function localPathsForFiles(files: File[], sink: UploadSink): Promi
  */
 export async function droppedPaths(
   files: File[],
-  opts: { sshRemoteTmux: boolean; projectId: string; dialect?: DropDialect }
+  opts: { sshRemoteTmux: boolean; projectId: string; nodeId?: string; dialect?: DropDialect }
 ): Promise<string[]> {
+  if (opts.sshRemoteTmux && isBrowserRuntime()) {
+    const api = window.nodeTerminal.remoteTransfers
+    if (!api || !opts.nodeId) return []
+    const paths: string[] = []
+    for (const file of files) {
+      const uploaded = await browserRemoteUpload(api, opts.projectId, opts.nodeId, file)
+      if (uploaded) paths.push(escapeDroppedPath(uploaded))
+    }
+    return paths
+  }
   const pairs = await localFilesWithPaths(files, uploadsSink)
   if (!opts.sshRemoteTmux) return pairs.map((p) => quoteDroppedPath(p.path, opts.dialect))
   const uploaded = await Promise.all(

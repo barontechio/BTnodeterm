@@ -41,8 +41,7 @@ const LOGIN_POLL_MS = 2000
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 
 /**
- * Optional per-call SSH context. When `projectId` is present AND that project has a live
- * ControlMaster, the account is a REMOTE one: its config dir + login capture + removal happen on the
+ * Optional per-call SSH context. When `projectId` is present, the account is a REMOTE one: its config dir + login capture + removal happen on the
  * host over ssh instead of on the local filesystem. The renderer passes it only for accounts scoped
  * to an SSH project (`ClaudeAccount.host`); local accounts omit it entirely (unchanged behavior).
  */
@@ -74,11 +73,9 @@ export interface ClaudeAccountsRemote {
 
 export interface ClaudeAccountsDeps {
   /**
-   * Resolves the live remote legs, or undefined when SSH is not wired / not yet created. A THUNK
-   * rather than a plain object because that is the fact the local fallback turns on: desktop
-   * creates its SshProjectManager after this registration, and an `AccountCtx` carrying a
-   * projectId while no manager exists must degrade to the LOCAL path (pre-existing behavior).
-   * The Server Edition passes none, so every call takes that same local path.
+   * Resolves the live remote legs lazily because shells create their SSH manager after this
+   * registration. An explicit remote context always refuses if the transport is unavailable;
+   * it must never create, poll or remove an account on the local machine instead.
    */
   remote?: () => ClaudeAccountsRemote | undefined
   /** Login poll interval. Injectable so tests need not wait out the 2 s production cadence. */
@@ -104,11 +101,13 @@ async function checkClaudeVersion(): Promise<boolean> {
 /** Register the five `claude-accounts:*` channels on the core platform seam. */
 export function registerClaudeAccountsIpc(deps: ClaudeAccountsDeps = {}): void {
   const pollMs = deps.pollMs ?? LOGIN_POLL_MS
-  // Resolve the live remote legs for a context, or null when the context is local / not connected.
+  // An explicit context names another machine, even while it is disconnected.
   const remoteFor = (ctx?: AccountCtx): { r: ClaudeAccountsRemote; projectId: string } | null => {
-    const projectId = ctx?.projectId
+    if (ctx === undefined || ctx === null) return null
+    if (typeof ctx.projectId !== 'string' || !ctx.projectId.trim()) throw new Error('ssh-invalid-project')
     const r = deps.remote?.()
-    return projectId && r ? { r, projectId } : null
+    if (!r) throw new Error('ssh-unavailable: remote account transport is not connected')
+    return { r, projectId: ctx.projectId }
   }
 
   platform().handle(IPC.claudeAccountsAdd, async (ctx?: AccountCtx) => {
@@ -322,7 +321,8 @@ export function registerClaudeAccountsIpc(deps: ClaudeAccountsDeps = {}): void {
       // A projectId with no live remote leg (not connected, or the Server Edition, which has no SSH
       // manager) is refused rather than answered from THIS machine's disk.
       if (typeof ctx?.projectId === 'string' && ctx.projectId) {
-        const remote = remoteFor(ctx)
+        let remote: ReturnType<typeof remoteFor>
+        try { remote = remoteFor(ctx) } catch { return { ok: false, reason: 'failed' } }
         if (!remote?.r.copySession) return { ok: false, reason: 'failed' }
         const accounts = claudeAccountsSnapshot()
         const remoteAcct = (id: string | undefined, settled: boolean): { id?: string; host?: string } | null => {
@@ -337,6 +337,7 @@ export function registerClaudeAccountsIpc(deps: ClaudeAccountsDeps = {}): void {
           .copySession(remote.projectId, sessionId, src, tgt)
           .catch((): ClaudeSessionCopyOutcome => ({ ok: false, reason: 'failed' }))
       }
+      if (ctx !== undefined && ctx !== null) return { ok: false, reason: 'bad-request' }
       const localSettled = (id: string): boolean =>
         claudeAccountsSnapshot().some((a) => a.id === id && !a.host && !a.pending)
       if (target !== undefined && !localSettled(target)) return { ok: false, reason: 'unknown-account' }

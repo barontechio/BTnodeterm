@@ -3,6 +3,8 @@
 export const IPC = {
   ptyCreate: 'pty:create',
   ptyWrite: 'pty:write',
+  /** Addressed to the typing client when a host action currently owns this node. No input bytes. */
+  ptyInputBlocked: 'pty:input-blocked',
   ptyResize: 'pty:resize',
   ptyFlow: 'pty:flow',
   ptyKill: 'pty:kill',
@@ -123,6 +125,7 @@ export const IPC = {
   agentGatewayCredentialSave: 'agent:gateway-credential-save',
   agentGatewayCredentialClear: 'agent:gateway-credential-clear',
   transcriptSearch: 'transcript:search',
+  transcriptSearchScoped: 'transcript:search-scoped',
   appToggleMarkdown: 'app:toggle-markdown',
   appCloseNode: 'app:close-node',
   /** main → renderer: ⌘/Ctrl+0 ("actual size"). Intercepted in `before-input-event` because
@@ -182,6 +185,11 @@ export const IPC = {
   canvasTrackpadGesture: 'canvas:trackpad-gesture',
   agentStatus: 'agent:status',
   agentSubagentSnapshot: 'agent:subagent-snapshot',
+  /** Renderer → main/server: the host's current per-node agent states, read off the agent-status
+   *  mirror (`AgentStatusSnapshotEntry[]`, shared/agent-status-snapshot.ts). A relay tab asks right
+   *  after subscribing to `agent:status`, so a node that went working before it joined is not blank.
+   *  The response is view-filtered for non-editors like `agent:status` (access-policy.ts). */
+  agentStatusSnapshot: 'agent:status-snapshot',
   /** Renderer → main/server: answer a held Claude permission hook (deterministic approvals).
    *  Payload: `{ nodeId, pendingId, decision: 'allow'|'deny' }`; resolves boolean. See
    *  docs/hook-reply-approvals.md. */
@@ -313,6 +321,9 @@ export const IPC = {
    *  SAME channel to EVERY attached client — the sender included, whose copy is its ack (see
    *  src/shared/canvas-order.ts). Args (both directions): [projectId: string, CanvasMutation]. */
   canvasMut: 'canvas:mut',
+  canvasMutationBatch: 'canvas:mutation-batch',
+  canvasBatchSubscribe: 'canvas:batch-subscribe',
+  canvasMutationRejected: 'canvas:mutation-rejected',
   /** Which projects this core's canvas authority governs (request → `string[]`): a client publishes
    *  its canvas ops for them even when nobody else is attached, because the authority writes only
    *  what it hears as ops (docs/hosted-team-relay.md). Server Edition only; the desktop answers none. */
@@ -351,6 +362,19 @@ export const IPC = {
   appCheckForUpdates: 'app:check-for-updates',
   appGetVersion: 'app:get-version',
   appUserDataDir: 'app:user-data-dir',
+  controlCapabilities: 'control:capabilities',
+  controlRunLaunch: 'control:run-launch',
+  controlBranchClaude: 'control:branch-claude',
+  worktreeRecoveryList: 'worktree:recovery:list',
+  worktreeRecoveryInspect: 'worktree:recovery:inspect',
+  worktreeRecoveryKeep: 'worktree:recovery:keep',
+  worktreeRecoveryRepair: 'worktree:recovery:repair',
+  worktreeRecoveryDiscover: 'worktree:recovery:discover-missing',
+  worktreeRecoveryMissing: 'worktree:recovery:recover-missing',
+  worktreeRecoveryResume: 'worktree:recovery:resume',
+  worktreeRecoveryRebind: 'worktree:recovery:rebind',
+  worktreeRemovalDiscover: 'worktree:removal:discover',
+  worktreeRemovalClean: 'worktree:removal:clean',
   appUpdatePolicy: 'app:update-policy',
   // Prepare-for-update (Windows, issue #829). Raw ipcMain handlers, main-window senders only.
   appUpdatePrepInspect: 'app:update-prep-inspect',
@@ -365,14 +389,25 @@ export const IPC = {
   /** renderer → main: the flush for that request id settled. */
   appFlushDone: 'app:flush-done',
   licenseActivate: 'license:activate',
+  licenseCapabilities: 'license:capabilities',
   licenseDeactivate: 'license:deactivate',
   licenseStatus: 'license:status',
   licenseChanged: 'license:changed',
   licenseUpgrade: 'license:upgrade',
   licenseDetail: 'license:detail',
   licenseRelease: 'license:release',
+  // Free-tier open-project limit (src/shared/project-limit.ts). renderer → main (invoke): the
+  // current `ProjectLimitState`, and a lazy allowance claim → `ClaimResult`; a relay peer's request
+  // for either is refused (`projectLimit:` in HOST_ONLY_CHANNEL_PREFIXES). `projectLimitChanged` is
+  // main → renderer with the new state, sent to this machine's windows only — never broadcast,
+  // since a broadcast also reaches relay peers. The allowance is this machine's alone.
+  projectLimitState: 'projectLimit:state',
+  projectLimitClaim: 'projectLimit:claim',
+  projectLimitChanged: 'projectLimit:changed',
   appRestartToUpdate: 'app:restart-to-update',
   announcementsFetch: 'announcements:fetch',
+  announcementsPopups: 'announcements:popups',
+  announcementsPopupImage: 'announcements:popup-image',
   usageFetch: 'usage:fetch',
   usageRefresh: 'usage:refresh',
   usageUpdate: 'usage:update',
@@ -433,6 +468,10 @@ export const IPC = {
   triggersDisarm: 'triggers:disarm',
   triggersStatus: 'triggers:status',
   triggersRunNow: 'triggers:run-now',
+  contextRemoteStart: 'context:remote-start',
+  contextRemoteRenew: 'context:remote-renew',
+  contextRemoteRelease: 'context:remote-release',
+  contextRemoteUpdate: 'context:remote-update',
   contextUpdate: 'context:update',
   contextEnsure: 'context:ensure',
   // Team presence (docs/team-presence.md). `presence:hello` is a REQUEST: its response tells the
@@ -609,6 +648,10 @@ export const IPC = {
   sshListDir: 'ssh:list-dir',
   sshMkdir: 'ssh:mkdir',
   sshUploadFile: 'ssh:upload-file',
+  sshTransferPrepare: 'ssh:transfer-prepare',
+  sshTransferStatus: 'ssh:transfer-status',
+  sshTransferRenew: 'ssh:transfer-renew',
+  sshTransferRelease: 'ssh:transfer-release',
   sshDownloadFile: 'ssh:download-file',
   /** Cache a remote media file locally (scp over the ControlMaster) and allowlist it for
    *  nt-media:// playback — how a VideoNode plays a file that lives on an SSH project's host. */
@@ -621,6 +664,9 @@ export const IPC = {
   sshFsExists: 'sshFs:exists',
   sshFsQuickOpen: 'sshFs:quick-open',
   sshProjectStatus: 'ssh-project:status',
+  sshProjectCapabilities: 'ssh-project:capabilities',
+  sshPromptConnect: 'ssh-project:prompt-connect',
+  sshPromptDisconnect: 'ssh-project:prompt-disconnect',
   /** main → renderer: an SSH project's identity file is passphrase-protected and the ssh-agent
    *  does not hold the key (or the last answer was wrong), so show a prompt.
    *  Payload: SshPassphraseRequest. */
@@ -676,6 +722,23 @@ export const IPC = {
   shellOpenExternal: 'shell:open-external',
   commitGenerate: 'commit:generate',
   mediaAllow: 'media:allow',
+  mediaAllowScoped: 'media:allow-scoped',
+  mediaRenew: 'media:renew',
+  mediaRelease: 'media:release',
+  developmentPreviewStatus: 'development-preview:status',
+  developmentPreviewList: 'development-preview:list',
+  developmentPreviewOpen: 'development-preview:open',
+  developmentPreviewStop: 'development-preview:stop',
+  webPreviewAllow: 'web-preview:allow',
+  webPreviewRenew: 'web-preview:renew',
+  webPreviewRelease: 'web-preview:release',
+  ownerConfirmationConnect: 'owner-confirmation:connect',
+  ownerConfirmationDisconnect: 'owner-confirmation:disconnect',
+  ownerConfirmationDecide: 'owner-confirmation:decide',
+  ownerConfirmationRequest: 'owner-confirmation:request',
+  ownerConfirmationDismiss: 'owner-confirmation:dismiss',
+  settingsPatch: 'settings:patch',
+  settingsChanged: 'settings:changed',
   mediaWriteHtml: 'media:write-html',
   browserRegister: 'browser:register',
   browserUnregister: 'browser:unregister',

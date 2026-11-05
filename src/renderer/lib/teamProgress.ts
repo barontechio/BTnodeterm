@@ -47,8 +47,8 @@
  * the Omni board's stored copy, so it still accepts `unknown` and skips every entry it cannot read.
  */
 import { capabilityAgentId, hasHooks, type AgentId } from '@shared/agents/config'
-import { isWaitRope } from './edgeModel'
-import { isSafeNodeId } from '@shared/safe-id'
+import { recordedOpener, openerByTarget, recordedOpenerOf } from '@shared/canvas-lineage'
+export { openerByTarget, recordedOpenerOf } from '@shared/canvas-lineage'
 import type { AgentNodeStatus } from '../state/agentStatus'
 
 export type StationKind =
@@ -88,21 +88,9 @@ export interface StationNodeLike {
 /** Shared empty list, so a card with no stations keeps a stable prop. */
 export const NO_STATIONS: readonly TeamStation[] = Object.freeze([])
 
-/** The opener a node records, when it is an id we would address and not the node itself. */
-function recordedOpener(node: StationNodeLike | undefined): string | undefined {
-  const o = node?.openedBy
-  return typeof o === 'string' && isSafeNodeId(o) && o !== node?.id ? o : undefined
-}
 
-/** An OPENER rope, or null — for anything unreadable and for a wait rope (rule 1). */
-function readOpenerRope(r: unknown): { source: string; target: string } | null {
-  if (!r || typeof r !== 'object') return null
-  const { id, source, target } = r as { id?: unknown; source?: unknown; target?: unknown }
-  if (typeof source !== 'string' || typeof target !== 'string') return null
-  if (!source || !target || source === target) return null
-  if (isWaitRope({ id, source, target })) return null
-  return { source, target }
-}
+
+
 
 function sameStations(a: readonly TeamStation[], b: readonly TeamStation[]): boolean {
   return (
@@ -114,38 +102,9 @@ function sameStations(a: readonly TeamStation[], b: readonly TeamStation[]): boo
   )
 }
 
-/**
- * Rule 1 as a map: every node a rope says was OPENED, to the node that opened it, in rope order.
- * Wait ropes never name an opener; the first opener rope into a node claims it; a node that records
- * its opener (`recordedOf`) is claimed only by that opener's rope. A claim stands whether or not
- * its source is still on the canvas — a stored (unpruned) file can still hold the rope of an opener
- * that was deleted, and the caller decides what a dead source means.
- *
- * ONE definition, read by team progress (`stationsByOpener`) and by the canvas layout
- * (`tidyCanvas` / `lineageLayers` in state/workspace), so "who opened this node" cannot answer one
- * way on the ring and another way when the canvas is tidied.
- */
-export function openerByTarget(
-  ropes: unknown,
-  recordedOf: (target: string) => string | undefined
-): Map<string, string> {
-  const out = new Map<string, string>()
-  if (!Array.isArray(ropes)) return out
-  for (const raw of ropes) {
-    const rope = readOpenerRope(raw)
-    if (!rope || out.has(rope.target)) continue
-    const recorded = recordedOf(rope.target)
-    if (recorded && recorded !== rope.source) continue
-    out.set(rope.target, rope.source)
-  }
-  return out
-}
 
-/** The opener a node records, read off live node data (`data.openedBy`), checked like the
- *  serialized field: an id we would address, and not the node itself. */
-export function recordedOpenerOf(node: { id: string; data?: { openedBy?: unknown } } | undefined): string | undefined {
-  return node ? recordedOpener({ id: node.id, kind: undefined, openedBy: node.data?.openedBy }) : undefined
-}
+
+
 
 /**
  * Stations grouped by the node that opened them (rule 1 above), in rope order. Pass the previous

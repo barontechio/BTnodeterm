@@ -1,3 +1,7 @@
+import { createBrowserNotifications } from './browser-notifications'
+import { isBrowserRuntime } from './runtime'
+import { isBrowserTeamConnection } from './browser-team/connections'
+import { DEFAULT_SETTINGS } from '../../shared/types'
 // buildRelayApi — assemble a full `NodeTerminalApi` for a remote-desktop (relay) project tab.
 //
 // A relay tab is a client of ANOTHER desktop's core, exactly as the browser is a client of the
@@ -9,9 +13,16 @@
 //
 // ── The API split (binding, from docs/remote-sessions.md line 70–76) ──────────────────────────────
 // • CORE-BOUND namespaces (`pty`, `workspace`, `fs`, `git`, `files`, `context`, `canvas`, `presence`,
-//   the `onAgentStatus`/`onSubagentActivity` streams, `claude.cliCaps`, `userDataDir`) route over the
-//   relay RpcClient → they hit the REMOTE core. This is what makes the tab actually remote: its
-//   terminals, repos, files, canvas and presence all live on the host's machine.
+//   the agent members from `buildAgentApi` except `seedAgentIdentity` (below), `claude.cliCaps`,
+//   `userDataDir`) route over the relay RpcClient → they hit the REMOTE core. This is what makes the
+//   tab actually remote: its terminals, repos, files, canvas and presence all live on the host's
+//   machine.
+//   Routing an agent stream here subscribes nothing: Canvas's agent listeners run on the LOCAL api
+//   only. The relay session subscribes `onAgentStatus` itself, for its lifetime, into its own store,
+//   and then asks `agentStatusSnapshot` once (`session/relay-agent-status.ts`, wired in
+//   `relay-tab.ts`). `onSubagentActivity` and `onUnreadClear` are deliberately NOT subscribed on a
+//   relay tab: it renders no subagent cards, and its unread marks are this desktop's own, so a read
+//   recorded on the host (a phone read-ack) clears nothing here, as a read here acks nothing there.
 // • APP-GLOBAL namespaces (`updates`, `license`, `clipboard`, `shell`, `dialog`, `media`,
 //   `settings`, `pairing`, `announcements`, `usage`, `ssh*`, `remote*`, `relay*`, notifications, menu events)
 //   stay LOCAL (`window.nodeTerminal.*`). Your update banner shows YOUR version, a file picker
@@ -46,7 +57,7 @@ import {
   buildClaudeApi,
   buildGitHubApi
 } from './ws-bridge'
-import { buildStubApi } from './stubs'
+import { buildStubApi, unsupported } from './stubs'
 import { relayPtyDataKey } from '../../shared/relay-pty-channel'
 import { mountPickerRoot, openDirectoryPicker } from './dialog-picker'
 import { projectIdsBoundToApi } from '../session/session'
@@ -71,6 +82,8 @@ export interface RelayApiOptions {
   /** A relay tab joined by a hosted team's `nodeterm://join` code: it gets `api.hosted` and a role
    *  gate on everything it sends. Absent/false = a Team Access relay tab, built exactly as before. */
   hosted?: boolean
+  /** Disconnected sentinel: never install page-owned notification effects. */
+  offline?: boolean
 }
 
 /**
@@ -83,26 +96,36 @@ export function buildRelayApi(
   transport?: FrameTransport,
   opts?: RelayApiOptions
 ): RelayApiHandle {
-  // The LOCAL preload — this is a desktop-only path (relay hosting/joining is Electron), so
-  // `window.nodeTerminal` is the full real preload, not the browser stub surface.
+  // The owning app supplies only the namespaced relay carrier for browser team tabs.
   const local = (window as unknown as { nodeTerminal: NodeTerminalApi }).nodeTerminal
   const carrier = transport ?? new RelayFrameTransport(connectionId)
   // A hosted tab's role, once the host has said it. Unknown = the lowest role (hosted-gate.ts).
   let hostedRole: HostedRole | null = null
-  const hosted = opts?.hosted === true
+  const browser = isBrowserRuntime() || isBrowserTeamConnection(connectionId)
+  const hosted = browser || opts?.hosted === true
   const client = hosted ? new RoleGatedRpcClient(carrier, () => hostedRole) : new RpcClient(carrier)
 
   const real = buildRealApi(client) // { pty, workspace, settings, userDataDir }
   const files = buildFilesApi(client) // { fs, git, files, context }
   const github = buildGitHubApi(client)
   const stub = buildStubApi()
+  const refuse = () => unsupported('Joined browser local administration')
 
   const api: NodeTerminalApi = {
-    // ── Base: every APP-GLOBAL namespace stays LOCAL. Spreading the whole preload gives the real
-    //    desktop implementations (updates/license/clipboard/shell/dialog/media/settings/pairing/
-    //    announcements/usage/ssh*/remote*/relay*/notifications/menu events). The core-bound spreads
-    //    below override the handful that must hit the remote core.
-    ...local,
+    // Native tabs retain their app-global desktop services. Browser team tabs start from inert
+    // stubs so no administrative member can inherit the owning Server connection. Remote core
+    // builders below explicitly add the team surface.
+    ...(browser ? {
+      ...stub,
+      settings: { load: async () => structuredClone(DEFAULT_SETTINGS), save: refuse, patch: refuse, onChanged: () => () => {} },
+      integrations: { status: async () => ({ enabled: [], declined: [], retained: [], vetoed: true }) },
+      logs: { snapshot: async () => [], clear: () => {}, onBatch: () => () => {} },
+      speech: { transcribe: refuse, models: async () => [], downloadModel: refuse, deleteModel: refuse, onProgress: () => () => {}, micConsent: async () => false }
+    } : local),
+    // Host owner actions must never fall through to the viewer's local desktop under a remote id.
+    control: { capabilities: async () => null },
+    remoteTransfers: undefined,
+    worktree: { ...(browser ? stub.worktree : local.worktree), recovery: undefined },
 
     // ── CORE-BOUND: route to the REMOTE core over the relay RpcClient. ──
     workspace: real.workspace, // the host's canvas/project files
@@ -110,16 +133,18 @@ export function buildRelayApi(
     fs: files.fs,
     git: files.git,
     files: files.files,
-    context: files.context,
+    context: { ...files.context, watchRemote: undefined },
     githubIssues: github.githubIssues,
-    githubControl: local.githubControl,
-    ...buildAgentApi(client), // onAgentStatus / onSubagentActivity — the host's agent hooks
+    githubControl: browser ? { status: refuse, approve: refuse, revoke: refuse, selectProvider: refuse, saveToken: refuse, clearToken: refuse } : local.githubControl,
+    // The host's agent hooks. Only `onAgentStatus` (+ `agentStatusSnapshot`) is used on a relay tab,
+    // by session/relay-agent-status.ts; `onSubagentActivity` / `onUnreadClear` stay unsubscribed.
+    ...buildAgentApi(client),
     ...buildCanvasApi(client), // canvas sync against the host's reflector
     ...buildPresenceApi(client), // the host's presence hub
     // `cliCaps` is REAL over the relay so the --permission-mode auto version gate probes the HOST's
     // claude CLI (a remote node launches on the host); `readTranscript` stays LOCAL (v1 degrade —
     // transcripts aren't relayed, so it reads this machine's; the only consumer reads the global api).
-    claude: buildClaudeApi(client, local.claude),
+    claude: buildClaudeApi(client, browser ? stub.claude : local.claude),
 
     // pty is core-bound EXCEPT `onData` (gotcha 1): its output arrives on the LOCAL per-session
     // channel, so subscribe on the local preload, same shape as a local pty.
@@ -240,10 +265,18 @@ export function buildRelayApi(
     ...(hosted ? buildHostedApi(client) : {})
   } satisfies NodeTerminalApi
 
+  const notifications = browser && !opts?.offline ? createBrowserNotifications(() => api) : null
+  if (notifications) {
+    api.notify = notifications.notify
+    client.onClose(notifications.dispose)
+    if (client.isClosed) notifications.dispose()
+  }
+
   return {
     api,
     ready: () => client.ready(),
     close: () => {
+      notifications?.dispose()
       local.relayClient.disconnect(connectionId)
       // A hosted connection's own close is announced locally: main never reports it (see
       // relay-local-close.ts), and this tab's team is held until its connection ends.

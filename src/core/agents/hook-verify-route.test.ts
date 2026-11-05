@@ -106,7 +106,7 @@ describe('the tunnel probe', () => {
 
   it('is what the remote tunnel probe actually curls', () => {
     const src = readFileSync(
-      resolve(__dirname, '../../..', 'src/main/remote-ssh/remote-hooks.ts'),
+      resolve(__dirname, '../../..', 'src/core/remote-ssh/remote-hooks.ts'),
       'utf8'
     )
     expect(src).toContain('http://localhost/verify')

@@ -3,7 +3,7 @@ import type { DownloadTicket, Settings } from '../../shared/types'
 import type { ServerPlatform } from '../platform-server'
 import type { DownloadTickets } from '../../core/download-tickets'
 import { DOWNLOAD_PATH, downloadName } from '../download'
-import { GitService } from '../../core/git-service'
+import { GitService, type GitRequestScope } from '../../core/git-service'
 import { generateCommitMessage } from '../../core/commit-message'
 import { registerFsHandlers } from '../../core/fs-handlers'
 import type { WhiteboardLocation } from '../../core/whiteboards'
@@ -15,7 +15,7 @@ import { registerCodexCliIpc } from '../../core/codex-cli'
 import { registerWallpaperIpc } from '../../core/wallpaper'
 import { registerRunConfigIpc } from '../../core/run-service'
 import { startUsageService } from '../../core/usage/usage-service'
-import { registerClaudeAccountsIpc } from '../../core/claude-accounts-service'
+import { registerClaudeAccountsIpc, type ClaudeAccountsRemote } from '../../core/claude-accounts-service'
 import { codexUsageAccounts } from '../../core/codex-accounts-core'
 import { codexHomeFor } from '../../core/codex-config-dir'
 import {
@@ -32,6 +32,8 @@ export function registerCoreHandlers(
   platform: ServerPlatform,
   deps: {
     getSettings: () => Settings
+    gitRequestScope?: GitRequestScope
+    claudeAccountsRemote?: () => ClaudeAccountsRemote | undefined
     /** Lets the wallpaper cache prune what a changed choice left behind. */
     onSettingsChange?: (cb: (s: Settings) => void) => unknown
     downloadTickets?: DownloadTickets
@@ -64,13 +66,13 @@ export function registerCoreHandlers(
 
   const gitService = new GitService()
   // registers all git:* channels via the global core platform().handle
-  gitService.registerIpc()
+  gitService.registerIpc(deps.gitRequestScope)
 
   // Desktop: ipcMain.handle(IPC.commitGenerate, (_e, cwd) => generateCommitMessage(cwd, settingsStore.get()))
-  platform.handle(IPC.commitGenerate, (cwd: string) =>
-    generateCommitMessage(cwd, deps.getSettings())
-  )
-  // Local server has no SSH projects; keep git running against the local remote.
+  if (deps.gitRequestScope) platform.handleWithSender(IPC.commitGenerate, (sender, cwd: string) =>
+    deps.gitRequestScope!(sender, IPC.commitGenerate, [cwd], () => generateCommitMessage(cwd, deps.getSettings())))
+  else platform.handle(IPC.commitGenerate, (cwd: string) => generateCommitMessage(cwd, deps.getSettings()))
+  // The shell replaces this compatibility default when request-scoped SSH routing is wired.
   platform.handle(IPC.gitSetActiveRemote, () => null)
 
   // Desktop: ipcMain.handle(IPC.appUserDataDir, () => app.getPath('userData')).
@@ -108,11 +110,8 @@ export function registerCoreHandlers(
   // Managed CLAUDE accounts (issue #313). The lifecycle is core, so a browser-only deployment can
   // create, log into and remove them exactly as the desktop does — env injection, the transcript
   // readers, usage and the account pickers were already core and had nothing to bind to here.
-  // No `installSkill`: canvas control is not wired on this edition (its hook server answers
-  // `control unavailable` by name), so a per-account skill file would point at nothing.
-  // No `remote`: the Server Edition has no SSH-project manager, so an `AccountCtx` carrying a
-  // projectId takes the LOCAL path — the same degrade desktop takes before its manager exists.
-  registerClaudeAccountsIpc()
+  // Optional SSH legs are shell composition; core refuses unavailable remote contexts.
+  registerClaudeAccountsIpc({ remote: deps.claudeAccountsRemote })
 
   // Claude subscription usage. Previously desktop-only — the browser bridge answered `null`, so
   // the pill never rendered in the Server Edition. The poll runs UNGATED here (the default), not

@@ -109,6 +109,8 @@ interface Conn {
   client: Client
   ready: Promise<void>
   alive: boolean
+  /** Usability after the real handshake; alive also covers pending physical custody. */
+  authenticated: boolean
   closed: Promise<string>
   forwards: Map<string, ReverseForward>
   /** `-L` listeners this connection holds, by spec (see `localForwardKey`). They close with it,
@@ -225,9 +227,15 @@ export class NativeMux {
 
   constructor(private deps: NativeMuxDeps) {}
 
-  /** Is there a live shared connection on this path (`-O check`)? */
+  /** Is the current shared connection authenticated and usable (`-O check`)? */
   check(controlPath: string): boolean {
-    return this.conns.get(controlPath)?.alive === true
+    const conn = this.conns.get(controlPath)
+    return conn?.alive === true && conn.authenticated
+  }
+
+  /** Registry presence, including an authenticating connection; false confirms mux absence. */
+  hasMaster(controlPath: string): boolean {
+    return this.conns.has(controlPath)
   }
 
   /** End the shared connection (`-O exit`). Resolves once it is closed. */
@@ -279,13 +287,16 @@ export class NativeMux {
     open: (client: Client, cb: (err: Error | undefined, ch: T) => void) => void,
     /** Runs INSIDE ssh2's callback, before any await: a consumer attached later can miss the
      *  channel's exit and close, which may arrive in the same read as the open confirmation. */
-    onOpen?: (ch: T) => void
+    onOpen?: (ch: T) => void,
+    admission?: { current(): boolean; existingOnly: boolean }
   ): Promise<T> {
     for (let attempt = 0; attempt <= MAX_OVERFLOW_CONNECTIONS + 1; attempt++) {
+      if (admission && (!admission.current() || this.conns.get(controlPath) !== primary)) throw new Error('ssh-stream-stale')
       if (!primary.alive) throw new Error(noMasterMessage(controlPath))
       const group = [primary, ...(this.overflow.get(controlPath) ?? [])].filter((c) => c.alive)
       let conn = group.find((c) => !c.full)
       if (!conn) {
+        if (admission?.existingOnly) throw new Error('ssh-stream-capacity')
         const extra = this.overflow.get(controlPath) ?? []
         if (extra.length >= MAX_OVERFLOW_CONNECTIONS) {
           throw new Error('ssh: channel open failed: the server refused more sessions (MaxSessions)')
@@ -302,6 +313,7 @@ export class NativeMux {
         })
       }
       await conn.ready
+      if (admission && (!admission.current() || this.conns.get(controlPath) !== primary)) throw new Error('ssh-stream-stale')
       const c = conn
       try {
         return await new Promise<T>((resolve, reject) =>
@@ -406,11 +418,13 @@ export class NativeMux {
    */
   async channel(
     p: Extract<ParsedSsh, { kind: 'exec' }>,
-    pty?: { cols: number; rows: number; term?: string }
+    pty?: { cols: number; rows: number; term?: string },
+    admission?: { current(): boolean; existingOnly: boolean }
   ): Promise<ClientChannel> {
     const cp = p.options.controlPath
     if (!cp) throw new Error('ssh: a pty needs a ControlPath')
     if (!this.conns.get(cp)?.alive) {
+      if (admission?.existingOnly) throw new Error(noMasterMessage(cp))
       if (p.options.controlMaster === 'no') throw new Error(noMasterMessage(cp))
       await this.master(cp, p.target, p.options)
     }
@@ -443,7 +457,7 @@ export class NativeMux {
         else client.shell(ptyOpts, cb)
       }
       open(owner?.agentForward === true)
-    })
+    }, undefined, admission)
   }
 
   /** The connection (primary or overflow) of `controlPath` that owns `client`. */
@@ -661,6 +675,7 @@ export class NativeMux {
       client,
       ready: Promise.resolve(),
       alive: true,
+      authenticated: false,
       closed,
       forwards: new Map(),
       localForwards: new Map(),
@@ -702,7 +717,10 @@ export class NativeMux {
       ch.on('error', () => local.destroy())
       ch.pipe(local).pipe(ch)
     })
-    conn.ready = this.connect(conn, target, options, mode, via).catch((e: Error) => {
+    conn.ready = this.connect(conn, target, options, mode, via).then(() => {
+      // A late handshake belongs only to this captured connection, never its replacement.
+      if (conn.alive) conn.authenticated = true
+    }).catch((e: Error) => {
       conn.alive = false
       client.end()
       throw e

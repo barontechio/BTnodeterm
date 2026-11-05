@@ -18,3 +18,10 @@ describe('notificationsBlockedCopy', () => {
     expect(notificationsBlockedCopy('other').button).toBeNull()
   })
 })
+
+it('browser repair points to site permissions and never offers OS settings', () => {
+  const copy = notificationsBlockedCopy('browser')
+  expect(copy.button).toBeNull()
+  expect(copy.message).toContain('site’s notification permissions')
+  expect(copy.message).toContain('page to stay open')
+})

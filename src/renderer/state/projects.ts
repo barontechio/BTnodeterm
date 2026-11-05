@@ -17,7 +17,7 @@ import { CLOSED_SESSIONS_CAP } from '@shared/types'
 import { collisionSeed, derivedProjectId } from '@shared/project-id'
 import { capabilityHasMachineDefault, type ProjectCapability } from '@shared/project-capabilities'
 import type { ProjectIcon } from '@shared/project-icon'
-import { recordCapabilityAck, type CapabilityAnswer } from '@shared/project-capability-consent'
+import { recordCapabilityAck, setProjectCapability, type CapabilityAnswer } from '@shared/project-capability-consent'
 import {
   CANVAS_LAYOUTS_CAP,
   CANVAS_LAYOUT_NAME_MAX,
@@ -492,6 +492,13 @@ export function sameSshEndpoint(a: NonNullable<Project['ssh']>, b: NonNullable<P
   )
 }
 
+/** The cwd `registerProject` dedupes by: trailing slashes stripped, so `/a/b/` and `/a/b` cannot
+ *  mint two tabs for one directory. Root stays '/': stripping it to '' would match every cwd-less
+ *  project. Exported so anything predicting registerProject's match uses this rule, not a copy. */
+export function registeredCwd(resolvedCwd: string): string {
+  return resolvedCwd.length > 1 ? resolvedCwd.replace(/\/+$/, '') : resolvedCwd
+}
+
 export const useProjects = create<ProjectsState>((set, get) => ({
   projects: [],
   activeProjectId: '',
@@ -644,13 +651,7 @@ export const useProjects = create<ProjectsState>((set, get) => ({
     set((s) => ({
       projects: s.projects.map((p) => {
         if (p.id !== id) return p
-        if (on) return recordCapabilityAck({ ...p, [cap]: true }, cap, 'kept')
-        const next = { ...p }
-        if (capabilityHasMachineDefault(cap)) next[cap] = false
-        else delete next[cap]
-        // 'declined', not silence: the deletion lives only in this working copy, so a re-arriving
-        // `true` (teammate commit, git checkout) must re-notice instead of meeting a bare ack.
-        return recordCapabilityAck(next, cap, 'declined')
+        return setProjectCapability(p, cap, on)
       })
     }))
     // The setter owns the persist (issue #318): its call sites — the AgentsSection toggle, the
@@ -1107,9 +1108,8 @@ export const useProjects = create<ProjectsState>((set, get) => ({
 
   registerProject({ resolvedCwd, name, color, probed }) {
     // The same exact-match rule as `openFolderProject` (a folder maps to one project), with the
-    // trailing slash stripped so `/a/b/` and `/a/b` cannot mint two tabs for one directory.
-    // Root stays '/': stripping it to '' would match every cwd-less project.
-    const cwd = resolvedCwd.length > 1 ? resolvedCwd.replace(/\/+$/, '') : resolvedCwd
+    // trailing slash stripped (`registeredCwd`).
+    const cwd = registeredCwd(resolvedCwd)
     const existing = get().projects.find((p) => p.cwd === cwd)
     if (existing) {
       if (existing.closed) {

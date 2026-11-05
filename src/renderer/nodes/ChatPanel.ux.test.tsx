@@ -185,17 +185,53 @@ describe('ChatPanel rendering', () => {
     expect(card.querySelector('.term-chat__tool-result')).toBeNull()
   })
 
-  it('renders a thinking part as a collapsed "Thinking" disclosure, not as answer text', async () => {
+  it('renders a thinking summary in a closed fold, apart from the answer text', async () => {
     await render()
+
     await resolveAt(0, [{ role: 'assistant', parts: [{ kind: 'thinking', text: 'pondering' }, { kind: 'text', text: 'answer' }] }])
-    const d = host.querySelector('details.term-chat__thinking') as HTMLDetailsElement
-    expect(d).not.toBeNull()
-    expect(d.open).toBe(false)
-    expect(d.querySelector('summary')?.textContent).toBe('Thinking')
-    expect(d.textContent).toContain('pondering')
-    // The answer stays ordinary text, outside the disclosure.
+
+    const thinking = host.querySelector<HTMLDetailsElement>('details.term-chat__thinking')
+    expect(thinking?.open).toBe(false)
+    expect(thinking?.textContent).toContain('pondering')
+    // The answer stays ordinary text, outside the thinking block.
     const answers = [...host.querySelectorAll('.term-chat__msg > .term-chat__text')].map((e) => e.textContent?.trim())
     expect(answers).toEqual(['answer'])
+  })
+
+  it('folds a run of tool calls into one closed block that holds every call', async () => {
+    await render()
+    const call = (name: string, arg: string): ChatMessage => ({ role: 'assistant', parts: [{ kind: 'tool', name, arg }] })
+
+    await resolveAt(0, [
+      { role: 'user', parts: [{ kind: 'text', text: 'go' }] },
+      call('Bash', 'ls'),
+      call('Read', 'a.ts'),
+      call('Bash', 'pwd'),
+      { role: 'assistant', parts: [{ kind: 'thinking', text: 'now the fix' }] },
+      call('Edit', 'a.ts'),
+      { role: 'assistant', parts: [{ kind: 'text', text: 'done' }] }
+    ])
+
+    const groups = host.querySelectorAll('details.term-chat__tool-group')
+    expect(groups).toHaveLength(1)
+    const group = groups[0] as HTMLDetailsElement
+    expect(group.open).toBe(false)
+    expect(group.querySelector('summary')?.textContent).toBe('3 tool callsBash ×2, Read')
+    const inside = [...group.querySelectorAll('.term-chat__tool-arg')].map((e) => e.textContent)
+    expect(inside).toEqual(['ls', 'a.ts', 'pwd'])
+    // The lone Edit after the thinking line stays a plain chip, outside any block.
+    const loose = [...host.querySelectorAll('details.term-chat__tool')].filter((e) => !e.closest('.term-chat__tool-group'))
+    expect(loose.map((e) => e.querySelector('.term-chat__tool-name')?.textContent)).toEqual(['Edit'])
+    // The folded calls' own messages draw nothing of their own.
+    expect(host.querySelectorAll('.term-chat__msg')).toHaveLength(5)
+  })
+
+  it('asks for thinking summaries on the tail read', async () => {
+    await render()
+
+    const page = (readTranscript.mock.calls[0] as unknown[] | undefined)?.[5] as { thinking?: boolean } | undefined
+
+    expect(page?.thinking).toBe(true)
   })
 
   it('names the node agent in the composer, not Claude', async () => {
@@ -229,6 +265,20 @@ describe('ChatPanel loading', () => {
 })
 
 describe('ChatPanel empty states', () => {
+  it.each([
+    { reason: 'remote-runtime-unavailable', text: 'Python 3', detail: 'Install Python 3' },
+    { reason: 'remote-unsafe-transcript', text: 'could not be read safely', detail: 'linked or ambiguous' },
+    { reason: 'remote-reader-unavailable', text: 'does not provide SSH transcript reads', detail: 'supported agents' },
+    { reason: 'remote-reader-permission-required', text: 'host owner', detail: 'authenticated owner connection' }
+  ] as const)('explains $reason without offering a blind retry', async ({ reason, text, detail }) => {
+    await render()
+    await act(async () => {
+      pending[0].resolve({ messages: [], found: false, olderCursor: null, unmatchedResults: [], unreadable: true, unreadableReason: reason })
+    })
+    expect(msgs().textContent).toContain(text); expect(msgs().textContent).toContain(detail)
+    expect(host.querySelector('.term-chat__retry')).toBeNull()
+    expect(host.querySelector('[aria-label="Reload conversation"]')).not.toBeNull()
+  })
   // A read that FAILED (the host did not answer, a remote node with no reachable master) is not the
   // same sentence as "there is no transcript": one heals on retry, the other never will.
   it('an unreadable first read says it could not read the transcript', async () => {

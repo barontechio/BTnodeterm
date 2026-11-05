@@ -170,6 +170,20 @@ describe('AppSshAgent', () => {
     }
   })
 
+  it('an unused instance cannot remove another agent socket or environment publication', async () => {
+    const p = await sock(); const previous = process.env.NODETERM_APP_AGENT_SOCK
+    writeFileSync(p, 'owned elsewhere')
+    process.env.NODETERM_APP_AGENT_SOCK = p
+    try {
+      new AppSshAgent(vi.fn(), p).stop()
+      expect(existsSync(p)).toBe(true)
+      expect(process.env.NODETERM_APP_AGENT_SOCK).toBe(p)
+    } finally {
+      if (previous === undefined) delete process.env.NODETERM_APP_AGENT_SOCK
+      else process.env.NODETERM_APP_AGENT_SOCK = previous
+    }
+  })
+
   it('stop() kills the agent, removes the socket, and a later start brings a fresh one up', async () => {
     const p = await sock()
     const { spawnAgent, kills } = fakeAgent(p)

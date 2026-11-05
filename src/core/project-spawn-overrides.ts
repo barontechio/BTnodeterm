@@ -27,9 +27,10 @@ export interface ProjectSpawnOverrides {
   shell?: string
 }
 
-export type ProjectSpawnOverridesReader = (
-  projectId: string
-) => Promise<ProjectSpawnOverrides | null>
+export type ProjectSpawnOverridesReader = ((projectId: string) => Promise<ProjectSpawnOverrides | null>) & {
+  /** Original host source freshness, never supplied by a browser or project document. */
+  captureCurrent?(projectId: string): Promise<() => void>
+}
 
 export interface ProjectSpawnOverridesDeps {
   /** This shell's own settings resolution (e.g. `WorkspaceStore.readProjectSettings`). */
@@ -40,7 +41,8 @@ export interface ProjectSpawnOverridesDeps {
    * git-shared `project.json`. Required because trust is keyed by location, not project id.
    */
   targetInfo(projectId: string): ProjectSetupTargetInfo | null
-  trust: Pick<ProjectTrustStore, 'isTrusted'>
+  trust: Pick<ProjectTrustStore, 'isTrusted'> & Partial<Pick<ProjectTrustStore, 'captureCurrent'>>
+  captureSettings?(projectId: string): () => void
   /**
    * Raise the consent dialog for a family whose SHARED value was just refused
    * (`ProjectSetupService.ensureFamilyTrusted`, single-flight per family+location). FIRE AND
@@ -74,7 +76,7 @@ function isShared<T>(r: ResolvedProjectSetting<T> | undefined): boolean {
 export function makeProjectSpawnOverrides(
   deps: ProjectSpawnOverridesDeps
 ): ProjectSpawnOverridesReader {
-  return async (projectId: string): Promise<ProjectSpawnOverrides | null> => {
+  const reader: ProjectSpawnOverridesReader = async (projectId: string): Promise<ProjectSpawnOverrides | null> => {
     let snap: ProjectSettingsSnapshot | null
     try {
       snap = await deps.readSettings(projectId)
@@ -111,4 +113,11 @@ export function makeProjectSpawnOverrides(
     }
     return out.env || out.shell ? out : null
   }
+  if (deps.captureSettings && deps.trust.captureCurrent) reader.captureCurrent = async (projectId) => {
+    const settings = deps.captureSettings!(projectId)
+    const trust = await deps.trust.captureCurrent!()
+    settings(); trust()
+    return () => { settings(); trust() }
+  }
+  return reader
 }

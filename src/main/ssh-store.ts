@@ -1,79 +1,16 @@
-import { promises as fs, readFileSync } from 'fs'
-import os from 'os'
-import path from 'path'
 import { app, ipcMain } from 'electron'
-import { writeFileAtomic } from '../core/fs-atomic'
+import path from 'node:path'
+import { SshStore as CoreSshStore } from '../core/ssh-store'
 import { IPC } from '../shared/ipc'
-import { parseSshConfig, type ParsedSshHost, type SshServer } from '../shared/ssh'
+import type { SshServer } from '../shared/ssh'
 
-/**
- * Stores saved SSH servers in ssh-servers.json. Keeps a synchronous cache so reads are
- * immediate; writes are atomic (temp + rename). The file path is injectable for tests.
- */
-export class SshStore {
-  private cache: SshServer[] = []
-  private readonly path: string
-  /** Serializes flushes so concurrent un-awaited saves publish in order. */
-  private writeChain: Promise<void> = Promise.resolve()
-
-  constructor(filePath?: string) {
-    this.path = filePath ?? path.join(app.getPath('userData'), 'ssh-servers.json')
-    try {
-      const raw = readFileSync(this.path, 'utf-8')
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed)) this.cache = parsed as SshServer[]
-    } catch {
-      this.cache = []
-    }
-  }
-
-  list(): SshServer[] {
-    return this.cache
-  }
-
-  save(server: SshServer): SshServer[] {
-    const i = this.cache.findIndex((s) => s.id === server.id)
-    if (i >= 0) this.cache[i] = server
-    else this.cache.push(server)
-    void this.flush()
-    return this.cache
-  }
-
-  remove(id: string): SshServer[] {
-    this.cache = this.cache.filter((s) => s.id !== id)
-    void this.flush()
-    return this.cache
-  }
-
-  private flush(): Promise<void> {
-    // Snapshot the cache now; chain after any in-flight write so flushes from this
-    // instance publish in order, oldest first.
-    const snapshot = JSON.stringify(this.cache, null, 2)
-    this.writeChain = this.writeChain
-      .catch(() => {})
-      .then(async () => {
-        // 0o600: this holds the user's SSH host inventory (hosts/users/identity-file paths) —
-        // owner read/write only, not world-readable. writeFileAtomic gives each flush its own
-        // temp name and retries the rename over transient Windows sharing violations.
-        await writeFileAtomic(this.path, snapshot, { mode: 0o600 })
-      })
-    return this.writeChain
-  }
-
-  /** Parse the user's `~/.ssh/config` into importable hosts (empty if it doesn't exist). */
-  async importCandidates(): Promise<ParsedSshHost[]> {
-    try {
-      const text = await fs.readFile(path.join(os.homedir(), '.ssh', 'config'), 'utf-8')
-      return parseSshConfig(text)
-    } catch {
-      return []
-    }
-  }
-
+/** Native owner-only registration; storage semantics are shared with Server. */
+export class SshStore extends CoreSshStore {
+  constructor(filePath?: string) { super(filePath ?? path.join(app.getPath('userData'), 'ssh-servers.json')) }
   registerIpc(): void {
     ipcMain.handle(IPC.sshList, () => this.list())
-    ipcMain.handle(IPC.sshSave, (_e, server: SshServer) => this.save(server))
-    ipcMain.handle(IPC.sshDelete, (_e, id: string) => this.remove(id))
+    ipcMain.handle(IPC.sshSave, (_event, server: SshServer) => this.save(server))
+    ipcMain.handle(IPC.sshDelete, (_event, id: string) => this.remove(id))
     ipcMain.handle(IPC.sshImport, () => this.importCandidates())
   }
 }

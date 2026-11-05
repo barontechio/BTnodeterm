@@ -50,7 +50,8 @@ const onNavigate = vi.fn()
 async function mount(
   status: LicenseStatus,
   read: LicenseDetail = KEYGEN,
-  browser = false
+  browser = false,
+  serverEnabled?: boolean
 ): Promise<void> {
   vi.resetModules()
   if (browser) (await import('@renderer/bridge/runtime')).markBrowserRuntime()
@@ -63,6 +64,7 @@ async function mount(
   openExternal = vi.fn()
   ;(window as unknown as { nodeTerminal: unknown }).nodeTerminal = {
     license: {
+      ...(serverEnabled === undefined ? {} : { capabilities: async () => ({ enabled: serverEnabled, hostContext: 'server' }) }),
       getStatus: vi.fn(async () => status),
       onChange: vi.fn(() => () => undefined),
       // Indirected so a test can swap the resolved value AFTER mounting (the store captured the
@@ -74,7 +76,10 @@ async function mount(
       upgrade: vi.fn(async () => status)
     },
     clipboard: { writeText },
-    shell: { openExternal }
+    shell: { openExternal },
+    // ProCompare reads the open-project limit store, which subscribes at import time too. Its
+    // initial state is the inactive one, so the comparison renders the pre-limit copy here.
+    projectLimit: { state: vi.fn(), claim: vi.fn(), onChange: vi.fn(() => () => undefined) }
   }
   const { useEntitlement } = await import('../../../state/entitlement')
   const { LicenseSection } = await import('./LicenseSection')
@@ -340,7 +345,7 @@ describe('LicenseSection — existing App Store purchase (#787)', () => {
   it('offers pairing before checkout and beside the key input without promising recovery', async () => {
     await mount(FREE)
     const messages = [...host.querySelectorAll('p')].filter((p) =>
-      p.textContent?.includes('Already have Pro from the App Store?')
+      p.textContent?.includes('Already have Pro from the App Store or Google Play?')
     )
     expect(messages).toHaveLength(2)
     expect(messages[0].closest('details')).toBeNull()
@@ -353,6 +358,21 @@ describe('LicenseSection — existing App Store purchase (#787)', () => {
     await act(async () => click('Open Settings → Phone'))
     expect(onNavigate).toHaveBeenCalledWith('phone')
     expect(activate).not.toHaveBeenCalled()
+    expect(window.nodeTerminal.license.upgrade).not.toHaveBeenCalled()
+  })
+
+  it('offers checkout only when host licensing is enabled and identifies the owning installation', async () => {
+    await mount(FREE, KEYGEN, true, true)
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Upgrade to Pro'))!
+    expect(button.disabled).toBe(false)
+    expect(screenText()).toContain('This license belongs to the server installation.')
+  })
+  it('explains a disabled host and prevents an unsupported checkout', async () => {
+    await mount(FREE, KEYGEN, true, false)
+    const button = [...host.querySelectorAll('button')].find((b) => b.textContent?.includes('Upgrade to Pro'))!
+    expect(button.disabled).toBe(true)
+    expect(screenText()).toContain('NODETERM_SERVER_LICENSE')
+    await act(async () => button.click())
     expect(window.nodeTerminal.license.upgrade).not.toHaveBeenCalled()
   })
 

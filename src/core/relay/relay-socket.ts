@@ -1,3 +1,4 @@
+import { openBrowserRelayTransport } from './browser-transport'
 // Relay socket + E2EE handshake + RPC/frame state machine (main process).
 //
 // A single connection to the dumb relay server (a separate repo). The relay
@@ -147,7 +148,7 @@ type HandshakeControl =
   | { type: 'e2ee_ready'; nonceB64: string }
 
 function nonceToB64(n: Uint8Array): string {
-  return Buffer.from(n).toString('base64')
+  return publicKeyToB64(n)
 }
 // Canonical base64 only (e2ee.ts canonicalB64ToBytes): a nonce with junk around it is not a nonce.
 function nonceFromB64(b64: unknown): Uint8Array | null {
@@ -734,6 +735,7 @@ export function wrapWebSocket(ws: import('ws').WebSocket): RelayTransport {
 // the socket is open; messages before open are dropped (the handshake retries on
 // reconnect). Used as the production default when no transport is injected.
 function openWebSocketTransport(url: string): RelayTransport {
+  if (typeof window !== 'undefined') return openBrowserRelayTransport(url)
   // Lazy require so test/pure consumers don't pull in the native-ish dep.
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const WS = require('ws') as typeof import('ws')

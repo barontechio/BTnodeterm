@@ -41,6 +41,17 @@ export type CapabilityAnswer = 'kept' | 'declined'
  *  test with an ack-carrying project as input). */
 export type CapabilityAckMap = Partial<Record<ProjectCapability, CapabilityAnswer>>
 
+/** Apply an explicit human answer through the same setter on UI and host command paths. */
+export function setProjectCapability<P extends Partial<Record<ProjectCapability, boolean>> & { capabilityAck?: CapabilityAckMap }>(
+  project: P, cap: ProjectCapability, on: boolean
+): P {
+  if (on) return recordCapabilityAck({ ...project, [cap]: true }, cap, 'kept')
+  const next = { ...project }
+  if (capabilityHasMachineDefault(cap)) next[cap] = false
+  else delete next[cap]
+  return recordCapabilityAck(next, cap, 'declined')
+}
+
 export interface CapabilityConsentState {
   capability: ProjectCapability
   /** The strict read of the shared file's switch (`projectCapabilityFlagInFile` — literal true

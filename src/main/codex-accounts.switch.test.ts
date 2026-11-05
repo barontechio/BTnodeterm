@@ -123,6 +123,19 @@ describe('Codex same-machine switch — three-phase, owner-authorized (Propertie
     expect(readThread).toHaveBeenCalled()
   })
 
+  it('rollback releases only the reservation after acknowledged publication', async () => {
+    const owner = makeSender(1)
+    const res = await call(IPC.codexAccountsSwitchThread, owner, THREAD, '/work', SOURCE, TARGET) as { rollbackToken: string }
+    await call(IPC.codexAccountsCommitSwitch, owner, res.rollbackToken)
+    const targetPath = path.join(codexAccountHome(userDataDir, TARGET), 'sessions', '2026', '08', `rollout-${THREAD}.jsonl`)
+    const published = statSync(targetPath)
+    await call(IPC.codexAccountsRollbackSwitch, owner, res.rollbackToken)
+    expect(statSync(targetPath).ino).toBe(published.ino)
+    expect(statSync(targetPath).ino).toBe(statSync(sourceRollout).ino)
+    expect(() => call(IPC.codexAccountsCommitSwitch, owner, res.rollbackToken)).toThrow(/preparation expired/)
+    expect(() => call(IPC.codexAccountsFinishSwitch, owner, res.rollbackToken)).toThrow(/was not committed/)
+  })
+
   it('refuses to finish a switch that was never committed (committed-gate, Property 5)', async () => {
     // A reservation is planned but NOT committed (the atomic hardlink never ran). Finishing it would
     // release the reservation as if the copy had succeeded — the renderer then recycles the node

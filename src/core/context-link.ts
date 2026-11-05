@@ -36,6 +36,7 @@ import { codexThreadIdentityRoot } from './codex-identity-proxy'
 import {
   CONTEXT_LINK_VERBS,
   renderContextLink,
+  pickLinkNode,
   type ContextLinkFetch,
   type ContextLinkVerb
 } from './context-link-render'
@@ -86,17 +87,34 @@ let deps: ContextLinkDeps = {}
 
 /**
  * The shell-specific reach the reads need. Everything here is about ONE question — is this node
- * on a remote host, and if so how do I reach it — which `src/core` must not answer for itself
- * (SshProjectManager and the ControlMaster wiring are desktop-only). The Server Edition passes
- * nothing and gets the local-only behavior it had before.
+ * on a remote host, and if so how do I reach it and authorize the connection? The shell owns
+ * those answers. It may classify remote records while omitting
+ * their read adapters; those records must then refuse rather than search this machine.
  */
+export interface ContextLinkRequestScope {
+  signal?: AbortSignal
+  /** Host-only live identity proof; an absent proof grants no remote agent read. */
+  verified?(): boolean
+  /** Retain original authority through all formatting awaits until synchronous publication. */
+  retainAuthorization?(current: () => boolean): boolean
+}
+export interface RemoteContextReadScope extends ContextLinkRequestScope {
+  callerId: string
+  current(): boolean
+  retainAuthorization(current: () => boolean): boolean
+}
+
 export interface ContextLinkDeps {
-  /** True when the node is a live session on an SSH project's remote host. */
+  /** True for saved or live remote records, including disconnected/unmounted nodes. */
   isRemoteNode?: (nodeId: string) => boolean
+  /** Request-specific agent read. Independent of owner history and arbitrary hook paths. */
+  readRemoteTranscript?(node: ContextLinkInfo, scope: RemoteContextReadScope): Promise<string | null>
   /** Read (at most `maxBytes` of) a file on a remote node's host. null = unreadable. */
   readRemoteFile?: (nodeId: string, filePath: string, maxBytes: number) => Promise<string | null>
   /** Run one command on a remote node's host and return stdout. null = it failed. */
   runRemoteCommand?: (nodeId: string, command: string) => Promise<string | null>
+  /** Remote capture must prove its route independently of the local unmounted-pane fallback. */
+  captureRemoteTerminal?: (nodeId: string) => Promise<string>
 }
 
 // Remote transcripts are read from the END: a long-running session's file reaches tens of MB,
@@ -124,6 +142,7 @@ const TRANSCRIPT_TEXT_READERS: Record<string, (p: string) => Promise<string | nu
 // The link documents, by node id — the same objects written to disk, kept in memory because they
 // are what authorizes a read (a node may only ever name a link inside ITS OWN document).
 let linkDocs = new Map<string, LinkDoc>()
+let authorizedLinks: ContextLinkMap = {}
 let linkRevision = 0
 // Only paths resolved for this exact identity may survive an intermediate publication.
 // Include the hook path so a replaced/invalidated hook cannot reuse an older resolution.
@@ -240,9 +259,9 @@ function shellQuote(s: string): string {
 
 const fetchers: ContextLinkFetch = {
   transcript: fetchTranscript,
-  // captureSession already knows a remote node's tmux lives on the host, so this one call
-  // covers both surfaces.
-  terminal: async (node) => (pty ? await pty.captureSession(node.id) : ''),
+  terminal: async (node) => deps.isRemoteNode?.(node.id)
+    ? deps.captureRemoteTerminal ? await deps.captureRemoteTerminal(node.id) : ''
+    : pty ? await pty.captureSession(node.id) : '',
   opencodeExport: fetchOpencodeExport
 }
 
@@ -256,6 +275,7 @@ export async function handleContextLinkRequest(req: {
   verb: string
   nodeId: string
   args: Record<string, string>
+  scope?: ContextLinkRequestScope
 }): Promise<string> {
   if (!req.nodeId) return 'Not a nodeterm session — nothing to read.'
   if (!CONTEXT_LINK_VERBS.includes(req.verb as ContextLinkVerb)) {
@@ -266,7 +286,44 @@ export async function handleContextLinkRequest(req: {
     return 'No linked nodes. Draw a context-link edge from this node to another on the canvas.'
   }
   try {
-    return await renderContextLink(doc, req.verb as ContextLinkVerb, req.args, fetchers)
+    if (req.verb === 'list') return await renderContextLink(doc, 'list', req.args, fetchers)
+    const picked = pickLinkNode(doc, req.args.node)
+    if ('message' in picked) return picked.message
+    const targetId = picked.node.id
+    const identity = (node: ContextLinkInfo) => node.note != null
+      ? JSON.stringify([node.id, node.note]) : transcriptIdentity(node)
+    const metadata = (authorizedLinks[req.nodeId] ?? []).filter((node) => node.id === targetId)
+    const binding = metadata.length === 1 ? identity(metadata[0]) : undefined
+    const revision = linkRevision
+    const current = () => {
+      const matches = (authorizedLinks[req.nodeId] ?? []).filter((entry) => entry.id === targetId)
+      return !req.scope?.signal?.aborted && !!binding && matches.length === 1 && identity(matches[0]) === binding
+    }
+    const changed = 'Linked context changed during the read. Refresh the links and try again.'
+    const retained: Array<() => boolean> = []
+    let refused = false
+    const safe = (check: () => boolean) => { try { return check() === true } catch { return false } }
+    const retainAuthorization = (check: () => boolean) => {
+      if (refused || retained.length >= 128 || !safe(check) ||
+          (req.scope?.retainAuthorization && !req.scope.retainAuthorization(check))) {
+        refused = true; return false
+      }
+      retained.push(check); return true
+    }
+    if (!current()) return changed
+    const scopedFetchers: ContextLinkFetch = deps.readRemoteTranscript ? { ...fetchers,
+      transcript: (node) => {
+        if (!deps.isRemoteNode?.(node.id)) return fetchTranscript(node)
+        // Never resurrect an old remote request after link removal/recreation. Core retains
+        // its own edge fence even when an adapter contributes additional authority checks.
+        const edgeCurrent = () => revision === linkRevision && current()
+        if (!retainAuthorization(edgeCurrent)) return Promise.resolve(null)
+        return deps.readRemoteTranscript!(metadata[0], { ...req.scope, callerId: req.nodeId,
+          current: edgeCurrent, retainAuthorization })
+      }
+    } : fetchers
+    const answer = await renderContextLink(doc, req.verb as ContextLinkVerb, req.args, scopedFetchers)
+    return current() && !refused && retained.every(safe) ? answer : changed
   } catch (e) {
     console.warn('[context-link] read failed', e)
     return 'Could not read linked context.'
@@ -287,6 +344,7 @@ let writeChain: Promise<void> = Promise.resolve()
  */
 export function setContextLinks(map: ContextLinkMap): Promise<void> {
   const snapshot = structuredClone(map && typeof map === 'object' ? map : {})
+  authorizedLinks = snapshot
   const revision = ++linkRevision
   // Authorization changes immediately, before transcript discovery or debug-file I/O. A slow
   // locator must neither hide a new edge from list nor retain a removed read permission.
@@ -329,6 +387,7 @@ export function initContextLink(ptyManager: PtyManager, platformDeps: ContextLin
   dir = ''
   linkRevision++
   linkDocs.clear()
+  authorizedLinks = {}
   verifiedPaths.clear()
   hookServer.setContextLinkHandler(handleContextLinkRequest)
   try {

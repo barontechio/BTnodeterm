@@ -11,7 +11,7 @@ export { claudeConfigDirFor } from '../core/claude-config-dir'
 
 /**
  * @param getSshManager Lazily resolves the SSH project manager (created after this init in index.ts).
- * Returns undefined when SSH isn't wired — every remote path then falls back to local behavior.
+ * Returns undefined when SSH is unavailable; explicit remote contexts then refuse.
  */
 export function initClaudeAccounts(getSshManager?: () => SshProjectManager | undefined): void {
   registerClaudeAccountsIpc({

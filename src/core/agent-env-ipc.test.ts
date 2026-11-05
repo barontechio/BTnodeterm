@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import http from 'node:http'
 import { IPC } from '../shared/ipc'
 import {
   MODEL_GATEWAY_SECRET_REF,
@@ -76,6 +77,49 @@ describe('model gateway discovery API-key expansion', () => {
         }
       })
     )
+  })
+
+  it.each([302, 307])('does not forward a stored gateway key through an HTTP %i redirect', async (status) => {
+    vi.unstubAllGlobals()
+    const key = 'fixture-only-gateway-key'
+    let destination = ''
+    let redirectedRequests = 0
+    let gatewayAuthenticated = false
+    const sink = http.createServer((_req, res) => {
+      redirectedRequests++
+      res.setHeader('content-type', 'application/json')
+      res.end(JSON.stringify({ data: [{ id: 'redirected-model' }] }))
+    })
+    const gateway = http.createServer((req, res) => {
+      gatewayAuthenticated = req.headers.authorization === `Bearer ${key}` && req.headers['x-bf-vk'] === key
+      res.writeHead(status, { Location: `${destination}/v1/models` })
+      res.end()
+    })
+    const listen = (server: http.Server): Promise<string> => new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address()
+        if (!address || typeof address === 'string') return reject(new Error('missing fixture port'))
+        resolve(`http://127.0.0.1:${address.port}`)
+      })
+    })
+    const close = async (server: http.Server): Promise<void> => {
+      if (!server.listening) return
+      server.closeAllConnections()
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
+    }
+    try {
+      destination = await listen(sink)
+      const baseUrl = await listen(gateway)
+      await credentials.save(key)
+      savedGateway = { baseUrl, apiKey: MODEL_GATEWAY_SECRET_REF }
+      const result = await fake.handlers[IPC.agentDiscoverModels](savedGateway)
+      expect(gatewayAuthenticated).toBe(true)
+      expect(redirectedRequests).toBe(0)
+      expect(result).toMatchObject({ models: [], error: expect.any(String) })
+    } finally {
+      await Promise.all([close(gateway), close(sink)])
+    }
   })
 
   it('does not make a request when the referenced variable is unset', async () => {

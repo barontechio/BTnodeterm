@@ -15,6 +15,7 @@ import { directExecutableInvocation } from './exec-path'
 import { ghPath } from './gh-path'
 import { gitEnv } from './git-env'
 import { worktreeTargetRefusal } from './worktree-target'
+import { readRegularFileNoFollow } from './read-regular-file'
 import {
   isValidCloneUrl,
   expandCloneUrl,
@@ -101,16 +102,18 @@ interface Exec {
   err: string
 }
 
-async function git(cwd: string, args: string[]): Promise<Exec> {
+async function git(cwd: string, args: string[], beforeLocalDispatch?: () => void): Promise<Exec> {
   // SSH projects route every pure-git op over the project's ControlMaster. runRemoteGit returns
   // the same { ok, out, err } shape, so the rest of GitService is transport-agnostic. Local path
   // (and gh ops) are untouched when no remote owns this cwd.
   const ref = resolveGitRemote(cwd)
   if (ref) {
+    if (beforeLocalDispatch) return { ok: false, out: '', err: 'Guarded local Git cannot route remotely.' }
     const r = await runRemoteGit(ref, cwd, args, 20 * 1024 * 1024)
     return { ok: r.ok, out: r.out, err: r.err }
   }
   try {
+    beforeLocalDispatch?.()
     const { stdout } = await run('git', args, { cwd, env: GIT_ENV, maxBuffer: 20 * 1024 * 1024 })
     return { ok: true, out: stdout.replace(/\n$/, ''), err: '' }
   } catch (e) {
@@ -227,72 +230,77 @@ function githubTokenFromGitCredentials(cwd: string): Promise<string | null> {
  * Per-project git operations using the system `git` (and `gh` for publishing).
  * The repo root is the active project's working directory.
  */
+export type GitRequestScope = (senderId: number, channel: string, args: unknown[], operation: () => unknown) => unknown
 export class GitService {
-  registerIpc(): void {
-    platform().handle(IPC.gitStatus, (cwd: string) => this.status(cwd))
-    platform().handle(IPC.gitInit, (cwd: string) => this.init(cwd))
-    platform().handle(IPC.gitClone, (parentDir: string, url: string) => this.clone(parentDir, url))
-    platform().handle(IPC.gitCloneAbort, () => this.cloneAbort())
-    platform().handle(IPC.gitCloneDefaultParent, () => this.cloneDefaultParent())
-    platform().handle(IPC.gitCommit, (cwd: string, message: string) => this.commit(cwd, message))
-    platform().handle(IPC.gitPush, (cwd: string) => this.push(cwd))
-    platform().handle(IPC.gitPull, (cwd: string) => this.pull(cwd))
-    platform().handle(IPC.gitSync, (cwd: string) => this.sync(cwd))
-    platform().handle(IPC.gitPublish, (cwd: string, name: string, isPrivate: boolean) =>
+  registerIpc(scope?: GitRequestScope): void {
+    const handle = (channel: string, handler: (...args: any[]) => unknown) => {
+      if (scope) platform().handleWithSender(channel, (sender, ...args) => scope(sender, channel, args, () => handler(...args)))
+      else platform().handle(channel, handler)
+    }
+    handle(IPC.gitStatus, (cwd: string) => this.status(cwd))
+    handle(IPC.gitInit, (cwd: string) => this.init(cwd))
+    handle(IPC.gitClone, (parentDir: string, url: string) => this.clone(parentDir, url))
+    handle(IPC.gitCloneAbort, () => this.cloneAbort())
+    handle(IPC.gitCloneDefaultParent, () => this.cloneDefaultParent())
+    handle(IPC.gitCommit, (cwd: string, message: string) => this.commit(cwd, message))
+    handle(IPC.gitPush, (cwd: string) => this.push(cwd))
+    handle(IPC.gitPull, (cwd: string) => this.pull(cwd))
+    handle(IPC.gitSync, (cwd: string) => this.sync(cwd))
+    handle(IPC.gitPublish, (cwd: string, name: string, isPrivate: boolean) =>
       this.publish(cwd, name, isPrivate)
     )
-    platform().handle(IPC.gitStage, (cwd: string, paths: string[]) => this.stage(cwd, paths))
-    platform().handle(IPC.gitUnstage, (cwd: string, paths: string[]) => this.unstage(cwd, paths))
-    platform().handle(IPC.gitStageAll, (cwd: string) => this.stageAll(cwd))
-    platform().handle(IPC.gitUnstageAll, (cwd: string) => this.unstageAll(cwd))
-    platform().handle(IPC.gitDiff, (cwd: string, p: string, staged: boolean, untracked: boolean) =>
+    handle(IPC.gitStage, (cwd: string, paths: string[]) => this.stage(cwd, paths))
+    handle(IPC.gitUnstage, (cwd: string, paths: string[]) => this.unstage(cwd, paths))
+    handle(IPC.gitStageAll, (cwd: string) => this.stageAll(cwd))
+    handle(IPC.gitUnstageAll, (cwd: string) => this.unstageAll(cwd))
+    handle(IPC.gitDiff, (cwd: string, p: string, staged: boolean, untracked: boolean) =>
       this.diff(cwd, p, staged, untracked)
     )
-    platform().handle(IPC.gitDiscard, (cwd: string, p: string, untracked: boolean) =>
+    handle(IPC.gitDiscard, (cwd: string, p: string, untracked: boolean) =>
       this.discard(cwd, p, untracked)
     )
-    platform().handle(IPC.gitSwitchBranch, (cwd: string, name: string) =>
+    handle(IPC.gitSwitchBranch, (cwd: string, name: string) =>
       this.switchBranch(cwd, name)
     )
-    platform().handle(IPC.gitCreateBranch, (cwd: string, name: string) =>
+    handle(IPC.gitCreateBranch, (cwd: string, name: string) =>
       this.createBranch(cwd, name)
     )
-    platform().handle(IPC.gitShowFile, (cwd: string, ref: string, p: string) =>
+    handle(IPC.gitShowFile, (cwd: string, ref: string, p: string) =>
       this.showFile(cwd, ref, p)
     )
-    platform().handle(IPC.gitHistory, (cwd: string, options) => this.history(cwd, options))
-    platform().handle(IPC.gitCommitFiles, (cwd: string, oid: string) => this.commitFiles(cwd, oid))
-    platform().handle(IPC.gitRemoteCommitUrl, (cwd: string, sha: string) =>
+    handle(IPC.gitHistory, (cwd: string, options) => this.history(cwd, options))
+    handle(IPC.gitCommitFiles, (cwd: string, oid: string) => this.commitFiles(cwd, oid))
+    handle(IPC.gitRemoteCommitUrl, (cwd: string, sha: string) =>
       this.remoteCommitUrl(cwd, sha)
     )
-    platform().handle(IPC.gitMerge, (cwd: string, ref: string) => this.merge(cwd, ref))
-    platform().handle(IPC.gitRebase, (cwd: string, onto: string) => this.rebase(cwd, onto))
-    platform().handle(IPC.gitDeleteBranch, (cwd: string, name: string, force: boolean) =>
+    handle(IPC.gitMerge, (cwd: string, ref: string) => this.merge(cwd, ref))
+    handle(IPC.gitRebase, (cwd: string, onto: string) => this.rebase(cwd, onto))
+    handle(IPC.gitDeleteBranch, (cwd: string, name: string, force: boolean) =>
       this.deleteBranch(cwd, name, force)
     )
-    platform().handle(IPC.gitRenameBranch, (cwd: string, newName: string) =>
+    handle(IPC.gitRenameBranch, (cwd: string, newName: string) =>
       this.renameBranch(cwd, newName)
     )
-    platform().handle(IPC.gitFetch, (cwd: string) => this.fetch(cwd))
-    platform().handle(IPC.gitForcePush, (cwd: string) => this.forcePush(cwd))
-    platform().handle(IPC.gitStashPush, (cwd: string) => this.stashPush(cwd))
-    platform().handle(IPC.gitStashPop, (cwd: string) => this.stashPop(cwd))
-    platform().handle(IPC.gitRevert, (cwd: string, oid: string) => this.revert(cwd, oid))
-    platform().handle(IPC.gitBranchAt, (cwd: string, name: string, oid: string) =>
+    handle(IPC.gitFetch, (cwd: string) => this.fetch(cwd))
+    handle(IPC.gitForcePush, (cwd: string) => this.forcePush(cwd))
+    handle(IPC.gitStashPush, (cwd: string) => this.stashPush(cwd))
+    handle(IPC.gitStashPop, (cwd: string) => this.stashPop(cwd))
+    handle(IPC.gitRevert, (cwd: string, oid: string) => this.revert(cwd, oid))
+    handle(IPC.gitBranchAt, (cwd: string, name: string, oid: string) =>
       this.branchAt(cwd, name, oid)
     )
-    platform().handle(IPC.gitCheckoutCommit, (cwd: string, oid: string) =>
+    handle(IPC.gitCheckoutCommit, (cwd: string, oid: string) =>
       this.checkoutCommit(cwd, oid)
     )
-    platform().handle(IPC.gitRepoRoot, (cwd: string) => this.repoRoot(cwd))
-    platform().handle(IPC.gitWorktreeList, (repoPath: string) => this.worktreeList(repoPath))
-    platform().handle(IPC.gitWorktreeAdd, (repoPath: string, wtPath: string, branch: string, baseRef: string, isNew: boolean) =>
+    handle(IPC.gitRepoRoot, (cwd: string) => this.repoRoot(cwd))
+    handle(IPC.gitWorktreeList, (repoPath: string) => this.worktreeList(repoPath))
+    handle(IPC.gitWorktreeAdd, (repoPath: string, wtPath: string, branch: string, baseRef: string, isNew: boolean) =>
       this.worktreeAdd(repoPath, wtPath, branch, baseRef, isNew)
     )
-    platform().handle(IPC.gitWorktreeMerge, (repoPath: string, branch: string, baseRef: string, push?: boolean) =>
+    handle(IPC.gitWorktreeMerge, (repoPath: string, branch: string, baseRef: string, push?: boolean) =>
       this.worktreeMerge(repoPath, branch, baseRef, push)
     )
-    platform().handle(IPC.gitWorktreeRemove, (repoPath: string, wtPath: string, deleteBranch: boolean, pruneOnly?: boolean) =>
+    handle(IPC.gitWorktreeRemove, (repoPath: string, wtPath: string, deleteBranch: boolean, pruneOnly?: boolean) =>
       this.worktreeRemove(repoPath, wtPath, deleteBranch, pruneOnly)
     )
   }
@@ -300,6 +308,18 @@ export class GitService {
   repoRoot(cwd: string) {
     return worktreeOps.repoRoot(git, cwd)
   }
+  /** Local recovery proof only; absent from generic Git IPC. Each probe retains the original
+   * captured evidence guard rather than adopting whatever repository answers after an await. */
+  async worktreeRecoveryDirectories(repoPath: string, assertCurrent: () => void): Promise<{ gitDirectory: string; commonDirectory: string } | null> {
+    if (isRemoteRepo(repoPath)) return null
+    const directory = await git(repoPath, ['rev-parse', '--absolute-git-dir'], assertCurrent)
+    const common = await git(repoPath, ['rev-parse', '--path-format=absolute', '--git-common-dir'], assertCurrent)
+    assertCurrent()
+    if (!directory.ok || !common.ok || !path.isAbsolute(directory.out) || !path.isAbsolute(common.out) ||
+      /[\0\r\n]/.test(directory.out + common.out)) return null
+    return { gitDirectory: fs.realpathSync.native(directory.out), commonDirectory: fs.realpathSync.native(common.out) }
+  }
+
   worktreeList(repoPath: string): Promise<WorktreeListResult> {
     // A repo on an SSH host cannot be stat'd from here (see `isRemoteRepo`): answer "the read
     // failed", which is exactly what it is — NOT an empty list, which every caller would read as
@@ -358,6 +378,78 @@ export class GitService {
     return worktreeOps.worktreeRemove(git, repoPath, wtPath, os.homedir(), deleteBranch, pruneOnly, async (p) =>
       fs.existsSync(p)
     )
+  }
+
+  /** Host domain entry, intentionally absent from generic Git IPC. No dirty-removal escape. */
+  async worktreeRemoveClean(repoPath: string, wtPath: string, expectedBranch: string,
+    deleteBranch: boolean, proof: { directoryStamp: string; assertCurrent(): void }): Promise<worktreeOps.WorktreeOpResult> {
+    if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return REMOTE_WORKTREE_REFUSAL()
+    let removalDispatched = false
+    try {
+      // Capture the host approval before any asynchronous probe. Never adopt a replacement inode.
+      const approvedStamp = proof.directoryStamp
+      const assertCurrent = proof.assertCurrent
+      const checkDirectory = () => {
+        const stat = fs.lstatSync(wtPath, { bigint: true })
+        if (!stat.isDirectory() || stat.isSymbolicLink() || stat.ino === 0n ||
+          `${stat.dev}:${stat.ino}` !== approvedStamp || fs.realpathSync.native(wtPath) !== path.resolve(wtPath))
+          throw new Error('The approved worktree directory changed before removal.')
+      }
+      const fileStamp = (file: string) => {
+        const stat = fs.lstatSync(file, { bigint: true })
+        if (!stat.isFile() || stat.ino === 0n) throw new Error('Git identity is unavailable.')
+        return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
+      }
+      assertCurrent(); checkDirectory()
+      const marker = path.join(wtPath, '.git'); const markerStamp = fileStamp(marker)
+      const checkedGit: worktreeOps.GitExecutor = async (directory, args) => {
+        const removing = args[0] === 'worktree' && args[1] === 'remove'
+        let checkGitIdentity = () => {}
+        if (removing) {
+          // Git's no-force check does NOT preserve ignored files. Refuse every ignored entry,
+          // including directories; no filename allowlist can establish that their contents are disposable.
+          const ignored = await git(wtPath, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '-z'], () => {
+            assertCurrent(); checkDirectory()
+          })
+          if (!ignored.ok || ignored.out.length) return { ok: false, out: '',
+            err: 'Ignored files may be removed by Git. Move them outside the checkout before clean removal.' }
+          const gitDirectory = await git(wtPath, ['rev-parse', '--absolute-git-dir'], () => {
+            assertCurrent(); checkDirectory()
+          })
+          if (!gitDirectory.ok || !path.isAbsolute(gitDirectory.out))
+            return { ok: false, out: '', err: 'The linked Git directory could not be verified.' }
+          const gitRoot = fs.realpathSync.native(gitDirectory.out)
+          const head = path.join(gitRoot, 'HEAD'); const headStamp = fileStamp(head)
+          const branch = await readRegularFileNoFollow(head, 4096)
+          checkGitIdentity = () => {
+            if (fileStamp(marker) !== markerStamp || fileStamp(head) !== headStamp ||
+              fs.realpathSync.native(gitDirectory.out) !== gitRoot || branch?.trim() !== `ref: refs/heads/${expectedBranch}`)
+              throw new Error('The approved linked Git identity or branch changed before removal.')
+          }
+        }
+        if (isRemoteRepo(repoPath) || isRemoteRepo(wtPath)) return { ok: false, out: '', err: REMOTE_WORKTREE_REFUSAL().message }
+        return git(directory, args, () => {
+          // Runs synchronously immediately before execFile, after every asynchronous probe.
+          assertCurrent()
+          if (removing) { checkDirectory(); checkGitIdentity(); removalDispatched = true }
+        })
+      }
+      const result = await worktreeOps.worktreeRemoveClean(checkedGit, repoPath, wtPath, os.homedir(), expectedBranch, deleteBranch,
+        async (directory) => {
+          try { return (await fs.promises.stat(directory)).isDirectory() }
+          catch (error) {
+            if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false
+            throw error
+          }
+        })
+      if (!result.ok && removalDispatched) return { ...result, recoveryRequired: true,
+        message: `${result.message} Removal was dispatched and may have completed. Inspect recovery state; do not retry deletion.` }
+      return result
+    } catch (error) {
+      if (removalDispatched) return { ok: false, recoveryRequired: true,
+        message: 'Worktree removal was dispatched, but its outcome could not be verified. The checkout may be gone. Inspect recovery state; do not retry deletion.' }
+      return { ok: false, message: `Clean worktree removal could not be verified: ${(error as NodeJS.ErrnoException).code ?? 'unavailable'}. Nothing was intentionally discarded.` }
+    }
   }
 
   async status(cwd: string): Promise<GitStatus> {
