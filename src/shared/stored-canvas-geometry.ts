@@ -2,6 +2,27 @@ import type { CanvasNodeState } from './types'
 import { wrapGeometryNodes, type GeometryNode } from './canvas-geometry'
 import { COLLAPSED_HEIGHT } from './node-sizing'
 
+/**
+ * A node's `parentId` as it may be ADMITTED: it names a group frame in this same project, or it is
+ * dropped. A frame can go missing (a hand edit, a merge, a lost write, a frame removed while a peer
+ * moves a node into it) and its children then read as top level wherever they are drawn. Kept, the
+ * id makes `storedGeometryNodes` below refuse the whole project, so one damaged node would stop
+ * geometry for every agent there.
+ *
+ * The stored position stays as it is: with no parent, it already is where the node is drawn. A
+ * parent cycle is not repaired: it has no honest top-level reading, and nothing has produced one.
+ * A clean list comes back BY IDENTITY, so a well-formed project is never rewritten.
+ */
+export function sanitizeNodeParents(nodes: CanvasNodeState[]): CanvasNodeState[] {
+  const frames = new Set(nodes.filter((n) => n.kind === 'group').map((n) => n.id))
+  if (nodes.every((n) => !n.parentId || frames.has(n.parentId))) return nodes
+  return nodes.map((n) => {
+    if (!n.parentId || frames.has(n.parentId)) return n
+    const { parentId: _dropped, ...rest } = n
+    return rest
+  })
+}
+
 /** Persisted sizes are expanded sizes, exactly as Desktop's load/save boundary defines them. */
 export function storedGeometryNodes(nodes: readonly CanvasNodeState[]): GeometryNode[] {
   const ids = new Set<string>()

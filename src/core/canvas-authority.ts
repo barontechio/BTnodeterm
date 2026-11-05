@@ -45,6 +45,7 @@ import { isCanvasMutation } from '../shared/canvas-mutations'
 import { createCanvasOrder } from '../shared/canvas-order'
 import { defaultKanbanFor } from '../shared/kanban-default-board'
 import { carryLocalNodeExec, stripSharedNodeExec } from '../shared/node-exec'
+import { sanitizeNodeParents } from '../shared/stored-canvas-geometry'
 import type { BridgeLink, CanvasMutation, CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
 
 export interface CanvasAuthorityDeps {
@@ -393,7 +394,11 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       const local = incoming.get(n.id)
       return local ? carryLocalNodeExec(local, n) : n
     })
-    const out: Project = { ...p, nodes }
+    // A load hands these to `storedGeometryNodes`, and ops can leave a child with no frame (one peer
+    // removes it while another moves a node in). Only this view is cleaned: the state keeps what was
+    // ordered, so a frame cast back holds a child nothing has rewritten since. A save needs nothing
+    // here, because `projectToFile` drops the id.
+    const out: Project = { ...p, nodes: mode === 'load' ? sanitizeNodeParents(nodes) : nodes }
     setOrDelete(out, 'bridges', edgeList(g.content.bridges, p.bridges))
     setOrDelete(out, 'ropes', edgeList(g.content.ropes, p.ropes))
     setOrDelete(out, 'kanban', overlayKanban(p.id, p.kanban, g.content.kanban))

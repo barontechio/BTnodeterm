@@ -1,5 +1,6 @@
 import path from 'path'
 import { healPathAsName } from '../shared/project-name'
+import { sanitizeNodeParents } from '../shared/stored-canvas-geometry'
 import { neutralSshProjectNodes, routeSshProjectNodes } from '../shared/ssh-project-nodes'
 import type { AgentPermissionMode } from '../shared/agents/config'
 import { collisionSeed, derivedProjectId, legacyFileId } from '../shared/project-id'
@@ -390,7 +391,7 @@ export function projectToFile(
   // Trigger specs are additionally normalized on the way OUT too, so a malformed spec that
   // reached the live nodes some other way (a peer mutation, a hand edit) is never written into
   // the shared file as if it were ours.
-  const nodes = sanitizeNodeTriggers(
+  const nodes = sanitizeNodeParents(sanitizeNodeTriggers(
     stripSharedNodeExec(
       p.cwd
         ? toPortableNodes(p.nodes, p.cwd)
@@ -398,7 +399,7 @@ export function projectToFile(
           // desktop opens the same file as a local project (issue #1186). Re-derived on every load.
           neutralSshProjectNodes(p.nodes, p.ssh)
     )
-  )
+  ))
   const icon = sanitizeProjectIcon(p.icon)
   // The SECOND seam for layouts. Live project data is reachable by a peer canvas mutation and by a
   // hand edit that already got past a read, and whatever we write is what the next machine trusts:
@@ -721,7 +722,7 @@ export function fileToProject(
     // `partition` survives only when it is exactly the one THIS project (base.id, machine-local)
     // would mint — a foreign/cloned/unsafe one drops to un-owned default session. See
     // loadedAgentBrowserPartition; without it a cloned project.json forges another project's jar.
-    nodes: sanitizeNodeTriggers(
+    nodes: sanitizeNodeParents(sanitizeNodeTriggers(
       sanitizeBrowserPartitions(
         applyLocalNodeExec(
           base.cwd
@@ -734,7 +735,7 @@ export function fileToProject(
         ),
         base.id
       )
-    ),
+    )),
     // Hostile input like the rest of the file: a non-list or a malformed entry threw on load.
     ...(bridges ? { bridges } : {}),
     ...(ropes ? { ropes } : {}),

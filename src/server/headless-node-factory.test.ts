@@ -1179,6 +1179,39 @@ describe('HeadlessNodeFactory', () => {
     expect(pty.sends).toEqual([])
   })
 
+  describe('a saved parentId naming a frame that is gone', () => {
+    const damage = async () => {
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].nodes.push({
+        ...terminal('term-unrelated', 'Not yours', 'claude', 1500),
+        parentId: 'group-gone'
+      })
+      await store.save(workspace)
+    }
+
+    // The frame vanished from a node the caller does not own, so nothing the caller does may be
+    // blocked by it: one damaged node must not stop canvas control for a whole project.
+    it('does not block a verb on the caller\'s own nodes', async () => {
+      await damage()
+      expect(await factory.group('term-source', { nodes: 'term-owned' })).toMatchObject({ ok: true })
+      expect(await factory.geometry('place', 'term-source', { nodes: 'term-upstream', dx: '5' })).toMatchObject({ ok: true })
+      expect(await factory.showWeb('term-source', { url: 'https://example.invalid/' }, true)).toMatchObject({ ok: true })
+    })
+
+    it('gives a new frame no parent when its member was the damaged node', async () => {
+      await damage()
+      ownership.record('term-unrelated', { sourceNodeId: 'term-source', projectId: 'project-1' })
+
+      const reply = await factory.group('term-source', { nodes: 'term-unrelated', label: 'Repair' })
+
+      expect(reply).toMatchObject({ ok: true })
+      const groupId = (reply.result as { groupId: string }).groupId
+      const nodes = (await new WorkspaceStore().load({ sideline: false })).projects[0].nodes
+      expect(nodes.find((node) => node.id === groupId)?.parentId).toBeUndefined()
+      expect(nodes.find((node) => node.id === 'term-unrelated')?.parentId).toBe(groupId)
+    })
+  })
+
   it('wraps loose nodes in a labeled persisted group and fans out every structural mutation', async () => {
     const before = (await store.load({ sideline: false })).projects[0]
     const beforePositions = new Map(before.nodes.map((node) => [node.id, node.position]))

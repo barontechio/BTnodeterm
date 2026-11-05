@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { applyCanvasOp, type CanvasContent } from '../shared/canvas-content'
 import { isCanvasMutation, MUTATION_MAX_BYTES, sanitizeCanvasMutation } from '../shared/canvas-mutations'
 import { defaultKanbanFor } from '../shared/kanban-default-board'
+import { storedGeometryNodes } from '../shared/stored-canvas-geometry'
 import type { CanvasMutation, CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
 import { createCanvasAuthority, type CanvasAuthority, type CanvasAuthorityDeps } from './canvas-authority'
 import type { ContentAuthorityHooks } from './workspace-store'
@@ -321,6 +322,29 @@ describe('canvas authority — save and load overlays', () => {
     expect(h.writes).toEqual([])
     const out = await h.authority.overlayLoad(ws(project({ nodes: [at('a', 0)] })))
     expect(byId(out.projects[0].nodes, 'a')?.position.x).toBe(10)
+  })
+
+  it('a load hands out no child of a frame that ops removed, and the state still holds what was ordered', async () => {
+    const frame = node('frame', { kind: 'group' })
+    const h = harness({ disk: { P: content([frame, node('a', { parentId: 'frame' })]) } })
+    await h.authority.overlayLoad(ws(project()))
+    h.cast({ op: 'remove', id: 'frame' })
+    h.cast({ op: 'upsert', node: node('b', { parentId: 'frame' }) })
+    await settle()
+
+    const out = (await h.authority.overlayLoad(ws(project()))).projects[0].nodes
+
+    // The factory's reader: this threw and refused geometry for the whole project.
+    expect(() => storedGeometryNodes(out)).not.toThrow()
+    expect(byId(out, 'a')?.parentId).toBeUndefined()
+    expect(byId(out, 'b')?.parentId).toBeUndefined()
+    expect(byId(out, 'b')?.position).toEqual({ x: 0, y: 0 })
+
+    // The state itself is untouched: a frame cast back holds a child nothing has rewritten since.
+    h.cast({ op: 'upsert', node: frame })
+    await settle()
+    const back = (await h.authority.overlayLoad(ws(project()))).projects[0].nodes
+    expect(byId(back, 'b')?.parentId).toBe('frame')
   })
 
   it('an unavailable placeholder, a relay tab and an SSH project are never overlaid, and never seed the state', async () => {

@@ -5087,10 +5087,15 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   **Server creator ownership (2026-08 incident hardening):** enabled Server control accepts only
   verified node identity. `HeadlessNodeFactory` records which source node opened each new node in a
   process-local ledger; link/group/rename/color/sticky-update, message delivery, and close validate
-  the whole target set as current-run creations before writing or killing anything. `link` alone also
+  the whole target set as current-run creations before writing or killing anything. `link` also
   accepts the verified caller's own id as an endpoint: a caller never opened itself, so without this
-  it could not restore a link to its own station. That spares no other endpoint and no other verb, and
-  it records nothing in the ledger. Queued messages
+  it could not restore a link to its own station. That spares no other endpoint, changes no other
+  verb (`verify`, `board`, `assign` and `open-worktree` have their own-id rules), and records nothing
+  in the ledger. A `parentId` naming no group frame in its project is dropped when a project is loaded
+  or saved, the team authority's load overlay included (`sanitizeNodeParents`), because
+  `storedGeometryNodes` validates the whole project and one damaged node would otherwise refuse
+  geometry for every agent there. Other per-node damage (a non-finite size, a parent cycle) still
+  refuses the whole project. Queued messages
   revalidate creator ownership before flush. The ledger is intentionally empty after restart —
   project JSON, titles, hook history and tmux names are not creator proof — so
   boot neither attaches/creates backends nor sends persisted queued commands. A live backend with a
