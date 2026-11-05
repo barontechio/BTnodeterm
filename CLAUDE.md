@@ -5115,7 +5115,9 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   verb (`verify`, `board`, `assign` and `open-worktree` have their own-id rules), and records nothing
   in the ledger. `storedGeometryNodes` reads a `parentId` naming no node as top level, and
   `applyStoredGeometry` leaves that id as found unless the plan gives the node a real parent: refusing
-  stopped geometry for every agent in the project over one damaged node. If that frame ever returns,
+  stopped geometry for every agent in the project over one damaged node. `shared/dynamic-groups.ts`
+  reads it the same way, or every grouped open and every save moving a managed frame would refuse
+  there, and a plan cannot create one. If that frame ever returns,
   the id binds again and a position set meanwhile reads relative to it. Do not clean the id on the load
   seams: a load then disagrees with the host's raw readers (worktree admission compares the two) and a
   verb can rewrite another project's file. A parent that exists and is not a frame still refuses, like
