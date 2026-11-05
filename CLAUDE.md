@@ -5091,12 +5091,14 @@ command-bearing opens; this does not add a human-confirm dialog or change mobile
   accepts the verified caller's own id as an endpoint: a caller never opened itself, so without this
   it could not restore a link to its own station. That spares no other endpoint, changes no other
   verb (`verify`, `board`, `assign` and `open-worktree` have their own-id rules), and records nothing
-  in the ledger. `storedGeometryNodes` reads a `parentId` naming no group frame as top level, and
+  in the ledger. `storedGeometryNodes` reads a `parentId` naming no node as top level, and
   `applyStoredGeometry` leaves that id as found unless the plan gives the node a real parent: refusing
-  stopped geometry for every agent in the project over one damaged node. Do not clean it on the load
-  seams: a load then disagrees with the host's raw readers (worktree admission compares the two) and
-  every save rewrites other projects' files. Other per-node damage (a non-finite size, a parent cycle)
-  still refuses the whole project. Queued messages
+  stopped geometry for every agent in the project over one damaged node. If that frame ever returns,
+  the id binds again and a position set meanwhile reads relative to it. Do not clean the id on the load
+  seams: a load then disagrees with the host's raw readers (worktree admission compares the two) and a
+  verb can rewrite another project's file. A parent that exists and is not a frame still refuses, like
+  a cycle of any kind, a non-finite size or a duplicate id: the raw parent walks that authorize
+  affected nodes have no cycle guard, so a cycle reaching them would hang the server. Queued messages
   revalidate creator ownership before flush. The ledger is intentionally empty after restart —
   project JSON, titles, hook history and tmux names are not creator proof — so
   boot neither attaches/creates backends nor sends persisted queued commands. A live backend with a

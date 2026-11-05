@@ -3,14 +3,15 @@ import { wrapGeometryNodes, type GeometryNode } from './canvas-geometry'
 import { COLLAPSED_HEIGHT } from './node-sizing'
 
 /**
- * The frame a saved `parentId` names, if it names one. A frame can go missing (a hand edit, a merge, a
- * lost write, a frame removed while a peer moves a node in) and its children then read as top level
- * wherever they are drawn, so geometry reads them that way too. Refusing here would stop geometry for
- * every agent in the project over one damaged node, whoever owns it.
+ * The parent a saved `parentId` still resolves to. A frame can go missing (a hand edit, a merge, a lost
+ * write, a frame removed while a peer moves a node in) and its children are then drawn at their stored
+ * position, so geometry reads them as top level too. Refusing would stop geometry for every agent in
+ * the project over one damaged node, whoever owns it. A parent that exists is a different case: the
+ * canvas offsets its children by it whatever it is, so it stays a parent, and `storedGeometryNodes`
+ * refuses one that is not a frame.
  */
 function liveParentId(node: CanvasNodeState, byId: ReadonlyMap<string, CanvasNodeState>): string | undefined {
-  const parent = node.parentId ? byId.get(node.parentId) : undefined
-  return parent?.kind === 'group' ? parent.id : undefined
+  return node.parentId && byId.has(node.parentId) ? node.parentId : undefined
 }
 
 /** Persisted sizes are expanded sizes, exactly as Desktop's load/save boundary defines them. */
@@ -33,10 +34,12 @@ export function storedGeometryNodes(nodes: readonly CanvasNodeState[]): Geometry
     const seen = new Set([node.id])
     let parentId = liveParentId(node, byId)
     while (parentId) {
-      // A cycle has no honest top-level reading, so it still refuses.
-      if (seen.has(parentId)) throw new Error(`geometry-invalid-scene: invalid parent for ${node.id}`)
+      const parent = byId.get(parentId)!
+      if (parent.kind !== 'group' || seen.has(parentId)) {
+        throw new Error(`geometry-invalid-scene: invalid parent for ${node.id}`)
+      }
       seen.add(parentId)
-      parentId = liveParentId(byId.get(parentId)!, byId)
+      parentId = liveParentId(parent, byId)
     }
   }
   return nodes.map((node) => ({
@@ -59,8 +62,8 @@ export function applyStoredGeometry(original: readonly CanvasNodeState[], planne
         geometry.measured?.height ?? geometry.height ?? node.size.height
     } }
     if (geometry.parentId) next.parentId = geometry.parentId
-    // Only a real frame can be left. A missing one stays as found, or every geometry write would
-    // rewrite a node nobody named, possibly another owner's.
+    // Only a parent that exists can be left. A missing one stays as found, or every geometry write
+    // would rewrite a node nobody named, possibly another owner's.
     else if (liveParentId(node, byId)) delete next.parentId
     if (geometry.data.premaxRect) next.premaxRect = { ...geometry.data.premaxRect }
     else delete next.premaxRect

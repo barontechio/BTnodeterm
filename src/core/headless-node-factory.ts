@@ -1304,7 +1304,7 @@ export class HeadlessNodeFactory {
 
       source.project.bridges = [...existing, ...plan.edges]
       if (!(await this.castAndSave(workspace))) {
-        return { ok: false, error: 'link-not-saved: nothing was linked: the canvas could not be written (canvas control is stopping)' }
+        return { ok: false, error: 'link-not-saved: nothing was linked: the canvas could not be written' }
       }
       await this.publishPersisted([source.project.id])
       const note = plan.skipped.length

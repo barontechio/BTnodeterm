@@ -23,7 +23,7 @@ export interface NodeGeometry {
   /** The size it occupies now (a collapsed node: its header bar). Whole px. */
   width: number
   height: number
-  /** The frame it sits in, or null at the top level. */
+  /** The frame it sits in as saved (a frame that has gone keeps its id here), or null at the top level. */
   parent: string | null
   /** Header-only. `expandedHeight` is the height it opens to — the one `resize --height` sets. */
   collapsed?: true

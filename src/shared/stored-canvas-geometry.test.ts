@@ -31,7 +31,7 @@ describe('group wrapping over persisted geometry', () => {
     const frame = { ...node('new-frame'), kind: 'group' as const }
 
     it('reads as top level instead of refusing the whole project', () => {
-      const live = storedGeometryNodes([{ ...node('a'), parentId: 'gone' }, { ...node('b'), parentId: 'a' }])
+      const live = storedGeometryNodes([{ ...node('a'), parentId: 'gone' }, { ...node('f'), kind: 'group' as const, parentId: 'gone' }])
       expect(live.map((n) => n.parentId)).toEqual([undefined, undefined])
     })
 
@@ -62,9 +62,20 @@ describe('group wrapping over persisted geometry', () => {
       expect(wrapStoredNodes([parent, { ...node('a'), parentId: 'p' }, { ...node('b'), parentId: 'gone' }], ['a', 'b'], frame)).toBeNull()
     })
 
-    it('still refuses a parent cycle', () => {
-      const cycle = [{ ...node('x'), kind: 'group' as const, parentId: 'y' }, { ...node('y'), kind: 'group' as const, parentId: 'x' }]
+    // The raw parent walks that authorize affected nodes rely on this: they have no cycle guard of
+    // their own, and a cycle reaching them would hang the whole server.
+    it.each([
+      ['two frames', [{ ...node('x'), kind: 'group' as const, parentId: 'y' }, { ...node('y'), kind: 'group' as const, parentId: 'x' }]],
+      ['a frame and itself', [{ ...node('x'), kind: 'group' as const, parentId: 'x' }]],
+      ['a terminal and itself', [{ ...node('x'), parentId: 'x' }]],
+      ['two terminals', [{ ...node('x'), parentId: 'y' }, { ...node('y'), parentId: 'x' }]],
+      ['a frame and a terminal', [{ ...node('x'), kind: 'group' as const, parentId: 'y' }, { ...node('y'), parentId: 'x' }]]
+    ])('still refuses a parent cycle through %s', (_name, cycle) => {
       expect(() => storedGeometryNodes(cycle)).toThrow('geometry-invalid-scene')
+    })
+
+    it('still refuses a parent that exists and is not a frame: the canvas offsets its child by it', () => {
+      expect(() => storedGeometryNodes([node('t'), { ...node('c'), parentId: 't' }])).toThrow('geometry-invalid-scene')
     })
   })
 })

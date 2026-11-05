@@ -1247,6 +1247,17 @@ describe('HeadlessNodeFactory', () => {
       expect(fs.readFileSync(file, 'utf8')).toBe(before)
     })
 
+    it('refuses geometry over a parent cycle through a terminal instead of hanging on it', async () => {
+      const workspace = await store.load({ sideline: false })
+      workspace.projects[0].nodes.push({ ...terminal('term-loop', 'Loop'), parentId: 'term-loop' })
+      await store.save(workspace)
+
+      await expect(factory.geometry('place', 'term-source', { nodes: 'term-upstream', dx: '5' })).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining('geometry-invalid-scene')
+      })
+    })
+
     it('gives a new frame no parent when its member was the damaged node', async () => {
       await damage()
       ownership.record('term-unrelated', { sourceNodeId: 'term-source', projectId: 'project-1' })
