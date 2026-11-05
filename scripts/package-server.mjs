@@ -13,7 +13,10 @@ export const RUNTIME_INPUTS = [
   'out/session-host/host.cjs',
   'out/main/codex-relay.js',
   'LICENSE',
-  'resources/licenses'
+  'resources/licenses',
+  'docs/server-release-bt1.md',
+  'docs/web-push.md',
+  'docs/release-notes/v0.5.0-bt.1.md'
 ]
 const PATCHES = ['scripts/patch-node-pty.mjs', 'scripts/patch-smart-whisper.mjs']
 const PRIVATE_NAME = /^(?:\.git|\.env(?:\..*)?|\.npmrc|\.yarnrc(?:\..*)?|\.credentials(?:\..*)?|auth\.json|credentials\.json|userdata|user-data)$/i
@@ -233,12 +236,13 @@ export function packageServer({ output, root = path.resolve(path.dirname(fileURL
     const dependencies = dependencyInventory(staging, lock)
     // Keep the original lock for the recipe; runtime package.json carries no Desktop updater feed.
     const { build, devDependencies, scripts, ...runtimePkg } = pkg
-    fs.writeFileSync(path.join(staging, 'package.json'), json({ ...runtimePkg, scripts: { start: 'node out/server/main.cjs' } }))
+    fs.writeFileSync(path.join(staging, 'package.json'), json({ ...runtimePkg, main: './out/server/main.cjs', scripts: { start: 'node out/server/main.cjs' } }))
     writeLauncher(staging)
     fs.writeFileSync(path.join(staging, 'RUNTIME.txt'), `Server ${pkg.version}; source commit ${commit}.
 Requires exact Node ${process.version}, ABI ${process.versions.modules}, Linux ${process.arch}, glibc compatible with build host ${glibc}.
 Install tmux, git, curl and CA certificates separately. Node is not bundled.
 Run ./start-server.sh with operator-chosen private HOME and NODETERM_DATA_DIR outside this package.
+See docs/server-release-bt1.md and docs/web-push.md for operation, HTTPS and optional push enrollment.
 Updates are disabled. Existing license enforcement is unchanged.
 Speech native binaries are built and load-tested; models are not provisioned and transcription is not certified.
 Recreate from the recorded clean commit/lock with prebuilt outputs. npm ci --omit=dev --ignore-scripts,
