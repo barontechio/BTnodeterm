@@ -10532,8 +10532,9 @@ export function Canvas() {
       useFocusNode.getState().focus(move.id)
       setNodes((ns) => ns.map((n) => ({ ...n, selected: n.id === move.id })))
       useTerminalFocus.getState().request(move.id)
-      useAgentStatus.getState().setActive(move.id, true)
-      useAgentStatus.getState().clearUnread(move.id)
+      const statusStore = agentStatusForProject(flowOwnerProjectIdRef.current).store
+      statusStore.getState().setActive(move.id, true)
+      statusStore.getState().clearUnread(move.id)
       return true
     },
     [viewCenter, setNodes]

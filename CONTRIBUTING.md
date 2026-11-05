@@ -1,5 +1,9 @@
 # Contributing to nodeterm
 
+Directional focus in a relay tab writes active/unread state through the flow-store owner’s
+agent-status session, including focus-mode swaps. A local project may hold the same node id;
+clearing its status would acknowledge the wrong host. Keep local acknowledgements local.
+
 Server SSH linked-context reads use a separate agent request scope: per-node identity proof,
 current directed saved edge, saved caller/target identities and the HTTP response lifetime.
 Owner history access grants no linked-context permission. Abort on response/socket departure,
