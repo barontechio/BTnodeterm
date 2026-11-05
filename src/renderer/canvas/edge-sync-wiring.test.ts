@@ -61,3 +61,19 @@ describe('the guard refusal message', () => {
     expect(src).toMatch(/stamped\.op === 'upsert'\) setSyncNote/)
   })
 })
+
+describe('the publish effect refuses a torn render', () => {
+  // The effect publishes the RENDERED `nodes` / `linkEdges` / `controlEdges`; the baseline it diffs
+  // against was adopted from the REFS, which a peer op or a load moves synchronously ahead of the
+  // render. It must ask `renderedSceneIsCurrent` and publish nothing (nor adopt) from a render that
+  // lags the refs — the matching render follows (collab-sync.test.ts says what it cost).
+  const effect = src.slice(src.indexOf('// Publish on every settled node change.'), src.indexOf('// Receiving side: apply an incoming mutation.'))
+  it('is wired', () => {
+    expect(effect).toContain('pub.publish(states')
+    const check = effect.indexOf('renderedSceneIsCurrent(')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(effect.indexOf('pub.adopt(states)'))
+    expect(check).toBeLessThan(effect.indexOf('pub.publish(states'))
+    expect(effect.slice(check, effect.indexOf('pub.adopt(states)'))).toMatch(/return/)
+  })
+})
