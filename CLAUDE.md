@@ -168,11 +168,15 @@ An owner tab's whole save is rebased onto the host's copy (`shared/workspace-sav
 that client's baseline, which moves only when a save lands. A node or edge id both sides hold and the
 baseline lacks is the host's own item, adopted through an op or a server-change: refusing it failed
 that save and every later one until a reload after any `open-agent`. The host's copy stays for that
-save, because the tab's copy may predate it, and `baselineAfterSave` makes it the base of the tab's
-next save, exactly as after a load, so the tab's edits land whole then. A launch claim and a one-way
-`reader` land at once: a claimant reads a landed save as durable, and a lost reader widens who may
-read. Only a project id can really collide, and that is still refused. The cost: until that next save
-an edit to an adopted node is live but not on disk.
+save, because the tab's copy may predate it. `baselineAfterSave` then builds that item's base so a
+difference can only mean the tab changed something: a key the tab lacks stays out (an op never carries
+`shell` or `ssh.extraArgs`, and absence must not read as deletion), and exec fields, a launch and a
+`reader` take the tab's own value. A launch claim and a one-way `reader` land at once: a claimant reads
+a landed save as durable, and a lost reader widens who may read. Only a project id can really collide,
+and that is still refused. A child left under a frame this save removed moves up instead of refusing,
+as removing a frame moves its children. The costs: until the tab's next save, which comes only with
+its next edit, a change to an adopted node is live but not on disk; and a tab whose copy still lags
+the host at that save writes its older title or position.
 
 Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
 `settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
@@ -805,8 +809,9 @@ Persistence has two layers:
   and a render then commits with the new `nodes` but the OLD edge arrays. Three places read that
   torn render and each lost a persisted edge for good: the publish effect diffed it against the
   adopted baseline and cast `edge-remove` for a rope and a bridge every canvas held
-  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render; it cannot see a render that moved
-  the ref BACK, which review reproduced in isolation and not in the app); the rope prune paired the
+  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render; neither it nor the prune below
+  can see a render that moved the ref BACK, which review reproduced in isolation and not in the app);
+  the rope prune paired the
   rendered node set with the LATEST ropes and pruned the new rope as dangling (`pruneDanglingEdges`
   now decides in the effect, over the refs, and removes only the ids it saw: judging inside a
   functional update drops an add queued behind it, before `nodesRef` has moved); and

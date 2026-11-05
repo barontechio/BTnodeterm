@@ -74,9 +74,9 @@ function items<T extends { id: string }>(
 
 /**
  * A node this writer adopted from the host: the host's copy stays, because the writer's copy may
- * predate it, and `baselineAfterSave` makes that copy the base for the writer's next save, which then
- * carries its edits. Only a launch claim cannot wait: the claimant reads a landed save as "durable,
- * safe to type". It moves one way, so it cannot undo a host that already cleared the launch.
+ * predate it, and `baselineAfterSave` lets the writer's own changes through on its next save. Only a
+ * launch claim cannot wait: the claimant reads a landed save as "durable, safe to type". It moves one
+ * way, so this save cannot undo a host that already cleared or claimed the launch.
  */
 function adoptedNode(wanted: CanvasNodeState, fresh: CanvasNodeState): CanvasNodeState {
   const held = fresh.pendingLaunch
@@ -121,17 +121,27 @@ function project(base: Project, next: Project, current: Project, governed: boole
   }, adoptedNode))
   const nodeIds = new Set(out.nodes.map((n) => n.id))
   const removed = new Set(base.nodes.filter((n) => !nodeIds.has(n.id)).map((n) => n.id))
-  for (const n of out.nodes) if (n.parentId && removed.has(n.parentId)) {
-    // This writer removed the frame and took an adopted child out of it: its own placement stands,
-    // since the host's copy would now name a frame that is gone.
+  // A frame gone from this save can leave a child behind: one the writer took out itself, or one it
+  // never saw (a node opened into the frame while it was being removed). Refusing failed this save and
+  // all later ones, so the child moves up instead, as removing a frame moves its children.
+  for (const n of out.nodes) {
+    if (!n.parentId || !removed.has(n.parentId)) continue
     const wanted = next.nodes.find((candidate) => candidate.id === n.id)
-    const adoptedHere = !base.nodes.some((candidate) => candidate.id === n.id)
-    if (!adoptedHere || !wanted || wanted.parentId === n.parentId) {
-      throw new Error(`workspace-save-conflict: parent ${n.parentId} was removed; reload before retrying`)
+    if (wanted && !(wanted.parentId && removed.has(wanted.parentId))) {
+      n.position = structuredClone(wanted.position)
+      if (wanted.parentId) n.parentId = wanted.parentId
+      else delete n.parentId
+      continue
     }
-    n.position = structuredClone(wanted.position)
-    if (wanted.parentId) n.parentId = wanted.parentId
-    else delete n.parentId
+    const seen = new Set<string>()
+    while (n.parentId && removed.has(n.parentId) && !seen.has(n.parentId)) {
+      seen.add(n.parentId)
+      const frame = current.nodes.find((c) => c.id === n.parentId) ?? base.nodes.find((c) => c.id === n.parentId)
+      n.position = { x: n.position.x + (frame?.position.x ?? 0), y: n.position.y + (frame?.position.y ?? 0) }
+      if (frame?.parentId) n.parentId = frame.parentId
+      else delete n.parentId
+    }
+    if (n.parentId && removed.has(n.parentId)) delete n.parentId // A frame cycle in a hand-edited file.
   }
   out.nodes = groupsFirst(out.nodes)
   for (const key of ['bridges', 'ropes'] as const) {
@@ -161,10 +171,32 @@ export function mergeWorkspaceSave(base: Workspace, next: Workspace, current: Wo
 }
 
 /**
- * The writer's baseline once its save landed: what it submitted, except that an item it adopted in
- * this save counts as the host's copy. Its next save then diffs against what the host holds, exactly
- * as after a load, so its edits land whole. Using its own copy here would make those edits look
- * already saved, and a host copy in another frame would refuse its next move for good.
+ * The base an adopted item's next save is diffed against, built so a difference can only mean the
+ * writer changed something:
+ * - A key the writer's copy lacks stays out, or its absence would read as a deletion. An op never
+ *   carries a node's `shell` or `ssh.extraArgs` (node-exec.ts), and a copy can lag the host.
+ * - A key in `own` takes the writer's own value, because its copy cannot speak for it: exec fields, a
+ *   launch the host may already have claimed or cleared, a one-way `reader`.
+ * - Otherwise the key takes the host's value, so what the writer changed lands whole, and a value only
+ *   the writer holds (not in this base) lands as an addition.
+ * - `always` keys come from the host even if the writer lacks them: leaving a frame is a real change.
+ */
+function adoptedBaseline<T extends object>(mine: T, host: T, own: readonly string[], always: readonly string[] = []): T {
+  const m = mine as Record<string, unknown>
+  const h = host as Record<string, unknown>
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(m)) {
+    if (own.includes(key)) out[key] = m[key]
+    else if (Object.hasOwn(h, key)) out[key] = h[key]
+  }
+  for (const key of always) if (Object.hasOwn(h, key)) out[key] = h[key]
+  return structuredClone(out) as T
+}
+
+/**
+ * The writer's baseline once its save landed: what it submitted, except for items it adopted in this
+ * save. See `adoptedBaseline`. Using its own copy for those would make its earlier edits look already
+ * saved, and a host copy in another frame would refuse its next move for good.
  */
 export function baselineAfterSave(base: Workspace, submitted: Workspace, merged: Workspace): Workspace {
   const out = structuredClone(submitted)
@@ -172,14 +204,25 @@ export function baselineAfterSave(base: Workspace, submitted: Workspace, merged:
     const before = base.projects.find((p) => p.id === project.id)
     const landed = merged.projects.find((p) => p.id === project.id)
     if (!before || !landed) continue
-    const rebase = <T extends { id: string }>(mine: T[], old: readonly T[], host: readonly T[]): T[] =>
+    const rebase = <T extends { id: string }>(mine: T[], old: readonly T[], host: readonly T[], make: (m: T, h: T) => T): T[] =>
       mine.map((x) => {
         const copy = old.some((o) => o.id === x.id) ? undefined : host.find((h) => h.id === x.id)
-        return copy ? structuredClone(copy) : x
+        return copy ? make(x, copy) : x
       })
-    project.nodes = rebase(project.nodes, before.nodes, landed.nodes)
-    if (project.bridges) project.bridges = rebase(project.bridges, before.bridges ?? [], landed.bridges ?? [])
-    if (project.ropes) project.ropes = rebase(project.ropes, before.ropes ?? [], landed.ropes ?? [])
+    const held = new Set(project.nodes.map((n) => n.id))
+    project.nodes = rebase(project.nodes, before.nodes, landed.nodes, (m, h) => {
+      const node = adoptedBaseline(m, h, ['shell', 'ssh', 'pendingLaunch'], ['parentId'])
+      // Its copy still names a frame it removed, and this save moved the node up. That placement
+      // means nothing to the host, so it must not read as a move on the next save.
+      if (m.parentId && !held.has(m.parentId)) {
+        node.parentId = m.parentId
+        node.position = structuredClone(m.position)
+      }
+      return node
+    })
+    const edge = (m: BridgeLink, h: BridgeLink): BridgeLink => adoptedBaseline(m, h, ['reader'])
+    if (project.bridges) project.bridges = rebase(project.bridges, before.bridges ?? [], landed.bridges ?? [], edge)
+    if (project.ropes) project.ropes = rebase(project.ropes, before.ropes ?? [], landed.ropes ?? [], edge)
   }
   return out
 }

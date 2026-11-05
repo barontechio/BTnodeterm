@@ -102,6 +102,103 @@ describe('a tab saving a node the host created', () => {
     expect(diskNode('opened')?.position).toEqual({ x: 11, y: 11 })
   })
 
+  it('never deletes what an op does not carry: a shell, ssh args, who opened the node', async () => {
+    const tab = await load()
+    await hostAdds(node('opened', {
+      shell: '/bin/zsh',
+      ssh: { host: 'h', user: 'u', extraArgs: '-o ServerAliveInterval=30' },
+      openedBy: 'a',
+      agentSessionId: 'session'
+    }))
+    const mine = adopt(tab, 'opened', { ssh: { host: 'h', user: 'u' } })
+    await save(tab)
+    mine.title = 'Edited later'
+    await save(tab)
+    mine.title = 'Edited again'
+    await save(tab)
+
+    const host = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'opened')!
+    expect(host.title).toBe('Edited again')
+    expect(host.shell).toBe('/bin/zsh')
+    expect(host.ssh?.extraArgs).toBe('-o ServerAliveInterval=30')
+    expect(host.openedBy).toBe('a')
+    expect(host.agentSessionId).toBe('session')
+  })
+
+  it.each([
+    ['cleared', undefined],
+    ['claimed', { after: [], command: 'run', attempted: true, manualOnly: true }]
+  ])('never undoes a launch the host already %s, on any later save', async (_name, held) => {
+    const tab = await load()
+    const opened = node('opened', { pendingLaunch: { after: [], command: 'run' } })
+    await hostAdds(opened)
+    const before = structuredClone(await store.load({ sideline: false }))
+    const after = structuredClone(before)
+    const hostCopy = after.projects[0].nodes.find((n) => n.id === 'opened')!
+    if (held) hostCopy.pendingLaunch = held
+    else delete hostCopy.pendingLaunch
+    await store.saveChanges(before, after)
+
+    // The tab's copy still holds the launch as it first received it.
+    const mine = adopt(tab, 'opened', { pendingLaunch: { after: [], command: 'run' } })
+    await save(tab)
+    mine.title = 'Edited later'
+    await save(tab)
+
+    const host = (await store.load({ sideline: false })).projects[0].nodes.find((n) => n.id === 'opened')!
+    expect(host.title).toBe('Edited later')
+    expect(host.pendingLaunch).toEqual(held)
+  })
+
+  it.each([
+    ['no reader', undefined],
+    ['the other reader', 'f']
+  ])('does not change a one-way link the host holds when a stale copy with %s saves twice', async (_name, reader) => {
+    const tab = await load()
+    const before = structuredClone(await store.load({ sideline: false }))
+    const after = structuredClone(before)
+    after.projects[0].bridges = [{ id: 'b', source: 'a', target: 'f', reader: 'a' }]
+    await store.saveChanges(before, after)
+
+    tab.projects[0].bridges = [{ id: 'b', source: 'a', target: 'f', ...(reader ? { reader } : {}) }]
+    await save(tab)
+    tab.projects[0].nodes[0].title = 'Edited later'
+    await save(tab)
+
+    expect(onDisk().bridges).toEqual([expect.objectContaining({ id: 'b', reader: 'a' })])
+  })
+
+  it('keeps saving after a frame is removed while the host opened a node into it', async () => {
+    const tab = await load()
+    await hostAdds(node('opened', { parentId: 'f', position: { x: 3, y: 4 } }))
+    tab.projects[0].nodes = tab.projects[0].nodes.filter((n) => n.id !== 'f')
+    await save(tab)
+    expect(diskNode('f')).toBeUndefined()
+    expect(diskNode('opened')).toMatchObject({ position: { x: 503, y: 504 } })
+    expect(diskNode('opened')?.parentId).toBeUndefined()
+
+    tab.projects[0].nodes[0].title = 'Still saving'
+    await save(tab)
+    expect(diskNode('a')?.title).toBe('Still saving')
+  })
+
+  it('does not put a dangling parent back when the tab still shows the child in the frame it removed', async () => {
+    const tab = await load()
+    await hostAdds(node('opened', { parentId: 'f', position: { x: 3, y: 4 } }))
+    tab.projects[0].nodes = tab.projects[0].nodes.filter((n) => n.id !== 'f')
+    const mine = adopt(tab, 'opened', { parentId: 'f', position: { x: 3, y: 4 } })
+    await save(tab)
+    mine.title = 'Edited later'
+    await save(tab)
+    mine.title = 'Edited again'
+    await save(tab)
+
+    const landed = diskNode('opened')!
+    expect(landed.title).toBe('Edited again')
+    expect(landed.parentId).toBeUndefined()
+    expect(landed.position).toEqual({ x: 503, y: 504 })
+  })
+
   it('lands a removal of the adopted node by its next save', async () => {
     const tab = await load()
     await hostAdds(node('opened'))

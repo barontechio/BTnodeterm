@@ -164,33 +164,125 @@ describe('rebasing an owner workspace save', () => {
     expect(adopted.position).toEqual({ x: 7, y: 8 })
   })
 
-  it('still refuses to orphan a child this writer never saw', () => {
+  it('moves up a child this writer never saw, instead of refusing every save from here on', () => {
     const base = workspace()
-    base.projects[0].nodes.push({ ...node('frame'), kind: 'group' })
+    base.projects[0].nodes.push({ ...node('outer'), kind: 'group', position: { x: 100, y: 100 } })
+    base.projects[0].nodes.push({ ...node('frame'), kind: 'group', parentId: 'outer', position: { x: 10, y: 10 } })
     const next = structuredClone(base)
     const current = structuredClone(base)
     next.projects[0].nodes = next.projects[0].nodes.filter((n) => n.id !== 'frame')
-    current.projects[0].nodes.push({ ...node('adopted'), parentId: 'frame' })
+    current.projects[0].nodes.push({ ...node('stranger'), parentId: 'frame', position: { x: 1, y: 2 } })
 
-    expect(() => mergeWorkspaceSave(base, next, current)).toThrow('parent frame was removed')
+    const stranger = mergeWorkspaceSave(base, next, current).projects[0].nodes.find((n) => n.id === 'stranger')!
+
+    expect(stranger.parentId).toBe('outer')
+    expect(stranger.position).toEqual({ x: 11, y: 12 })
+  })
+
+  it('moves a child up through every frame this save removed', () => {
+    const base = workspace()
+    base.projects[0].nodes.push({ ...node('outer'), kind: 'group', position: { x: 100, y: 100 } })
+    base.projects[0].nodes.push({ ...node('frame'), kind: 'group', parentId: 'outer', position: { x: 10, y: 10 } })
+    const next = structuredClone(base)
+    const current = structuredClone(base)
+    next.projects[0].nodes = next.projects[0].nodes.filter((n) => n.id !== 'frame' && n.id !== 'outer')
+    current.projects[0].nodes.push({ ...node('stranger'), parentId: 'frame', position: { x: 1, y: 2 } })
+
+    const stranger = mergeWorkspaceSave(base, next, current).projects[0].nodes.find((n) => n.id === 'stranger')!
+
+    expect(stranger.parentId).toBeUndefined()
+    expect(stranger.position).toEqual({ x: 111, y: 112 })
+  })
+
+  it('moves a child up out of a frame cycle in a hand-edited file, instead of hanging', () => {
+    const base = workspace()
+    base.projects[0].nodes.push({ ...node('x'), kind: 'group', parentId: 'y' })
+    base.projects[0].nodes.push({ ...node('y'), kind: 'group', parentId: 'x' })
+    const next = structuredClone(base)
+    const current = structuredClone(base)
+    next.projects[0].nodes = next.projects[0].nodes.filter((n) => n.id !== 'x' && n.id !== 'y')
+    current.projects[0].nodes.push({ ...node('stranger'), parentId: 'x' })
+
+    const stranger = mergeWorkspaceSave(base, next, current).projects[0].nodes.find((n) => n.id === 'stranger')!
+
+    expect(stranger.parentId).toBeUndefined()
   })
 
   describe('baselineAfterSave', () => {
-    it('makes an adopted item the host copy and leaves everything else as submitted', () => {
+    const adoptingSave = (mine: Partial<CanvasNodeState>, host: Partial<CanvasNodeState>) => {
+      const base = workspace()
+      const submitted = structuredClone(base)
+      submitted.projects[0].nodes.push({ ...node('adopted'), ...mine })
+      const merged = structuredClone(base)
+      merged.projects[0].nodes.push({ ...node('adopted'), ...host })
+      return baselineAfterSave(base, submitted, merged).projects[0].nodes.find((n) => n.id === 'adopted')!
+    }
+
+    it('takes the host value of a key both copies hold, so the writer\'s change shows as a change', () => {
+      expect(adoptingSave({ title: 'Mine' }, { title: 'Host' }).title).toBe('Host')
+    })
+
+    it('leaves out a key only the host holds, so its absence is not a deletion', () => {
+      const out = adoptingSave({}, { openedBy: 'someone', agentSessionId: 'session' })
+      expect('openedBy' in out).toBe(false)
+      expect('agentSessionId' in out).toBe(false)
+    })
+
+    it('leaves out a key only the writer holds, so it lands as an addition', () => {
+      expect('collapsed' in adoptingSave({ collapsed: true }, {})).toBe(false)
+    })
+
+    it('keeps the writer\'s own value for what its copy cannot speak for', () => {
+      const claimed = { after: [], command: 'run', attempted: true, manualOnly: true }
+      const mine = { after: [], command: 'run' }
+      expect(adoptingSave({ pendingLaunch: mine }, { pendingLaunch: claimed }).pendingLaunch).toEqual(mine)
+      expect(adoptingSave({ shell: '/bin/a' }, { shell: '/bin/b' }).shell).toBe('/bin/a')
+    })
+
+    it('takes the host\'s parent even if the writer lacks one: leaving a frame is a change', () => {
+      expect(adoptingSave({}, { parentId: 'f' }).parentId).toBe('f')
+    })
+
+    it('touches only adopted items: everything else stays as submitted', () => {
       const base = workspace()
       const submitted = structuredClone(base)
       submitted.projects[0].nodes[0].title = 'Mine'
-      submitted.projects[0].nodes.push({ ...node('adopted'), size: { width: 999, height: 999 } })
       submitted.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c' }]
       const merged = structuredClone(submitted)
-      merged.projects[0].nodes.at(-1)!.size = { width: 1, height: 1 }
+      merged.projects[0].nodes[0].title = 'Host changed it concurrently'
       merged.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', reader: 'a' }]
+      base.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c' }]
 
       const out = baselineAfterSave(base, submitted, merged).projects[0]
 
       expect(out.nodes[0].title).toBe('Mine')
-      expect(out.nodes.at(-1)!.size).toEqual({ width: 1, height: 1 })
-      expect(out.bridges).toEqual(merged.projects[0].bridges)
+      expect(out.bridges).toEqual(submitted.projects[0].bridges)
+    })
+
+    it.each([
+      ['no reader', undefined],
+      ['another reader', 'c']
+    ])('keeps the writer\'s own reader on an adopted edge whose copy has %s', (_name, reader) => {
+      const base = workspace()
+      const submitted = structuredClone(base)
+      submitted.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', ...(reader ? { reader } : {}) }]
+      const merged = structuredClone(base)
+      merged.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', reader: 'a' }]
+
+      expect(baselineAfterSave(base, submitted, merged).projects[0].bridges).toEqual(submitted.projects[0].bridges)
+    })
+
+    it('keeps the writer\'s placement when its copy names a frame it no longer holds', () => {
+      const base = workspace()
+      const submitted = structuredClone(base)
+      submitted.projects[0].nodes.push({ ...node('child'), parentId: 'gone', position: { x: 1, y: 2 } })
+      const merged = structuredClone(base)
+      merged.projects[0].nodes.push({ ...node('child'), position: { x: 101, y: 102 } })
+
+      const child = baselineAfterSave(base, submitted, merged).projects[0].nodes.find((n) => n.id === 'child')!
+
+      expect(child.parentId).toBe('gone')
+      expect(child.position).toEqual({ x: 1, y: 2 })
     })
   })
 

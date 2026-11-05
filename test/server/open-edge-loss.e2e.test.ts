@@ -278,7 +278,7 @@ describe.skipIf(process.env.EDGE_LOSS_E2E !== '1' || !fs.existsSync(CHROMIUM) ||
       // And the two ways it can pass while still being wrong: a tab whose saves are all refused never
       // writes the loss to disk, and a tab casting a removal is one race away from it.
       const frames = [results.tap, ...extraTaps].flatMap((t) => (t as { frames?: Array<Record<string, unknown>> }).frames ?? [])
-      expect(frames.filter((f) => JSON.stringify(f).includes('workspace-save-conflict')), 'refused tab saves').toEqual([])
+      expect(frames.filter((f) => f.ch === 'workspace:save:res' && f.ok === false), 'refused tab saves').toEqual([])
       if (!SWITCH) {
         expect(frames.filter((f) => f.dir === 'out' && /remove/.test(JSON.stringify(f))), 'removals cast by a tab').toEqual([])
       }
