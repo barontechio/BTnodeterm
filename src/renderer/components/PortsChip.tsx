@@ -1,3 +1,4 @@
+import { DevelopmentPortsChip } from './DevelopmentPortsChip'
 import { memo, useCallback, useState } from 'react'
 import {
   devPortUrl,
@@ -32,7 +33,7 @@ interface Pending {
  * host. A local port that is taken, or a privileged one, is never forwarded silently: the person
  * is asked, and a different local port is only ever their explicit choice.
  */
-export const PortsChip = memo(function PortsChip({
+const NativePortsChip = memo(function NativePortsChip({
   nodeId,
   projectId,
   remote,
@@ -192,4 +193,10 @@ export const PortsChip = memo(function PortsChip({
       )}
     </span>
   )
+})
+
+/** Preserve native forwarding; the optional Server namespace never falls back to viewer localhost. */
+export const PortsChip = memo(function PortsChip(props: React.ComponentProps<typeof NativePortsChip>): React.JSX.Element | null {
+  const api = sessionForProject(props.projectId).api.developmentPreviews
+  return api ? <DevelopmentPortsChip api={api} projectId={props.projectId} nodeId={props.nodeId} /> : <NativePortsChip {...props} />
 })

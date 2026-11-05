@@ -59,6 +59,15 @@ afterAll(() => {
 })
 
 describe('the Server Edition refuses canvas control by name', () => {
+  it('lets a verified agent discover support while control is disabled', async () => {
+    const res = await control('capabilities', 'n-caps', 'application/json', nodeAuthToken(SECRET, 'n-caps'))
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      ok: true, result: { version: 1, edition: 'server', enabled: false }
+    })
+    const unverified = await control('capabilities', 'n-caps-unknown', 'application/json')
+    expect(unverified.status).toBeGreaterThanOrEqual(400)
+  })
   it('answers every verb with the same machine-readable error, in JSON', async () => {
     // Verified, so what is measured is the EDITION's answer on either side of the identity cutoff
     // (an unverified mutation is refused by identity from 2026-10-13 — covered separately below).
@@ -202,7 +211,24 @@ describe('the Server Edition wires it at boot', () => {
 })
 
 describe('the enabled Server Edition handler parses and dispatches the v1 surface', () => {
+  it('describes enabled support without making unsupported commands executable', async () => {
+    const handler = createServerEditionControlHandler({} as never)
+    const discovery = await handler({ verb: 'capabilities', nodeId: 'n', args: {}, verified: true })
+    expect(discovery).toMatchObject({ ok: true, result: { edition: 'server', enabled: true } })
+    expect(await handler({ verb: 'browser', nodeId: 'n', args: {}, verified: true })).toMatchObject({
+      ok: false, error: CONTROL_UNSUPPORTED_ERROR
+    })
+  })
   const actions = () => ({
+    orchestrate: vi.fn(async () => ({ ok: true as const })),
+    worktree: vi.fn(async () => ({ ok: true as const })),
+    reportIssue: vi.fn(async () => ({ ok: true as const })),
+    showImage: vi.fn(async () => ({ ok: true as const })),
+    showVideo: vi.fn(async () => ({ ok: true as const })),
+    showWeb: vi.fn(async () => ({ ok: true as const })),
+    board: vi.fn(async () => ({ ok: true as const })),
+    assign: vi.fn(async () => ({ ok: true as const })),
+    geometry: vi.fn(async () => ({ ok: true as const })),
     openProject: vi.fn(async () => ({ ok: true as const, result: { projectId: 'project-loop' } })),
     openTerminal: vi.fn(async () => ({ ok: true as const, result: { id: 'term-new' } })),
     openAgent: vi.fn(async () => ({ ok: true as const, result: { id: 'agent-new' } })),
@@ -216,7 +242,20 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     run: vi.fn(async () => ({ ok: true as const })),
     reportOutcome: vi.fn(async () => ({ ok: true as const, message: 'recorded' })),
     githubRead: vi.fn(async () => ({ ok: true as const, message: 'lane' })),
+    list: vi.fn(async () => ({ ok: true as const, message: 'rows' })),
     deliver: vi.fn(async () => ({ ok: true as const, message: 'queued' }))
+  })
+
+  it('routes branch only after identity and argument checks, and names a missing adapter', async () => {
+    const branch = vi.fn(async () => ({ ok: true as const }))
+    const handler = createServerEditionControlHandler({ ...actions(), branch })
+    expect(await handler({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: false })).toMatchObject({ ok: false })
+    expect(await handler({ verb: 'branch', nodeId: 'src', args: {}, verified: true })).toMatchObject({ ok: false })
+    expect(branch).not.toHaveBeenCalled()
+    await handler({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: true })
+    expect(branch).toHaveBeenCalledWith('src', { node: 'target' }, true)
+    expect(await createServerEditionControlHandler(actions())({ verb: 'branch', nodeId: 'src', args: { node: 'target' }, verified: true }))
+      .toMatchObject({ ok: false, message: expect.stringContaining('branch-unavailable') })
   })
 
   it('routes report-outcome to its action, after the shared parse', async () => {
@@ -236,6 +275,18 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     expect(a.reportOutcome).toHaveBeenCalledTimes(1)
   })
 
+  it('normalizes the Claude alias without dropping launch flags and gates image creation on identity', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    const args = { agent: 'codex', prompt: 'Keep all flags', model: 'model-x', after: 'dep', 'run-now': '' }
+    await handler({ verb: 'open-claude', nodeId: 'src', args, verified: true })
+    expect(a.openAgent).toHaveBeenCalledWith('src', { ...args, agent: 'claude' }, true)
+    await handler({ verb: 'show-image', nodeId: 'src', args: { path: '/tmp/picture.png' }, verified: false })
+    expect(a.showImage).not.toHaveBeenCalled()
+    await handler({ verb: 'show-image', nodeId: 'src', args: { path: '/tmp/picture.png' }, verified: true })
+    expect(a.showImage).toHaveBeenCalledWith('src', { path: '/tmp/picture.png' }, true)
+  })
+
   it('routes issues / prs to the GitHub read action, after the shared parse and the identity gate', async () => {
     const a = actions()
     const handler = createServerEditionControlHandler(a)
@@ -249,6 +300,22 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     await expect(handler({ verb: 'issues', nodeId: 'src', args: {}, verified: false }))
       .resolves.toMatchObject({ ok: false, error: expect.stringContaining('identity-refused') })
     expect(a.githubRead).toHaveBeenCalledTimes(2)
+  })
+
+  it('routes list to its action after the shared parse and the identity gate', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    await expect(handler({ verb: 'list', nodeId: 'src', args: {}, verified: true }))
+      .resolves.toEqual({ ok: true, message: 'rows' })
+    expect(a.list).toHaveBeenCalledWith('src', {})
+    await handler({ verb: 'list', nodeId: 'src', args: { geometry: 'on' }, verified: true })
+    expect(a.list).toHaveBeenLastCalledWith('src', { geometry: 'on' })
+    // The shared geometry gate refuses a value `list --geometry` does not read.
+    await expect(handler({ verb: 'list', nodeId: 'src', args: { geometry: 'maybe' }, verified: true }))
+      .resolves.toMatchObject({ ok: false, error: expect.stringContaining('--geometry') })
+    await expect(handler({ verb: 'list', nodeId: 'src', args: {}, verified: false }))
+      .resolves.toMatchObject({ ok: false, error: expect.stringContaining('identity-refused') })
+    expect(a.list).toHaveBeenCalledTimes(2)
   })
 
   it('refuses the --after <id>:ok form and a malformed --after-success before any action', async () => {
@@ -286,7 +353,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     await expect(
       handler({ verb: 'settings', nodeId: 'term-source', args: { get: 'gridSize' }, verified: true })
     ).resolves.toMatchObject({ ok: true })
-    expect(a.settings).toHaveBeenCalledWith('term-source', { get: 'gridSize' })
+    expect(a.settings).toHaveBeenCalledWith('term-source', { get: 'gridSize' }, true)
     // A key off the allowlist never reaches the action.
     await expect(
       handler({
@@ -463,46 +530,43 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
 
   it('keeps every deferred or unknown verb a clean permanent edition refusal', async () => {
     const handler = createServerEditionControlHandler(actions())
-    for (const verb of ['list', 'browser', 'write', 'not-a-verb']) {
+    for (const verb of ['browser', 'not-a-verb']) {
       const reply = await handler({ verb, nodeId: 'term-source', args: {}, verified: true })
       expect(reply, verb).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
       expect(reply.message, verb).toContain('do not retry')
     }
   })
 
-  it('refuses `arrange` by name in both forms — a flag this edition cannot serve is never dropped', async () => {
-    // Headless canvas control keeps no measured node sizes, so the whole verb is deferred here.
-    // `--group` must take that same named refusal rather than be ignored on the way to something
-    // that answers ok.
-    const handler = createServerEditionControlHandler(actions())
-    const forms: Record<string, string>[] = [{ nodes: 'a,b' }, { group: 'g1', layout: 'lineage' }, { group: 'top' }]
-    for (const args of forms) {
-      const reply = await handler({ verb: 'arrange', nodeId: 'term-source', args, verified: true })
-      expect(reply).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
-      expect(reply.message).toContain('"arrange"')
-      expect(reply.message).toContain('do not retry')
+  it('routes a valid write only through the installed confirmed adapter', async () => {
+    const a = { ...actions(), write: vi.fn(async () => ({ ok: true, message: 'sent' })) }
+    const handler = createServerEditionControlHandler(a)
+    const args = { node: 'term-target', text: 'Review this' }
+    expect(await handler({ verb: 'write', nodeId: 'term-source', args, verified: false })).toMatchObject({ ok: false })
+    expect(a.write).not.toHaveBeenCalled()
+    expect(await handler({ verb: 'write', nodeId: 'term-source', args, verified: true })).toMatchObject({ ok: true })
+    expect(a.write).toHaveBeenCalledWith('term-source', args, true)
+    const absent = createServerEditionControlHandler(actions())
+    expect(await absent({ verb: 'write', nodeId: 'term-source', args, verified: true })).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
+  })
+
+  it('routes every geometry verb with its complete flags after identity validation', async () => {
+    const a = actions()
+    const handler = createServerEditionControlHandler(a)
+    const calls: Array<[string, Record<string, string>]> = [
+      ['ungroup', { group: 'g' }], ['move', { nodes: 'a', group: 'top' }],
+      ['resize', { nodes: 'a', width: '540' }], ['place', { nodes: 'a', x: '0', y: '0' }],
+      ['arrange', { nodes: 'a,b', gap: '0' }], ['arrange', { group: 'g', layout: 'lineage' }],
+      ['arrange', { group: 'top' }], ['align', { nodes: 'a,b', edge: 'left' }]
+    ]
+    for (const [verb, args] of calls) {
+      expect(await handler({ verb, nodeId: 'src', args, verified: true })).toEqual({ ok: true })
+      expect(a.geometry).toHaveBeenLastCalledWith(verb, 'src', args)
+      const count = a.geometry.mock.calls.length
+      expect(await handler({ verb, nodeId: 'src', args, verified: false })).toMatchObject({ ok: false })
+      expect(a.geometry).toHaveBeenCalledTimes(count)
     }
   })
 
-  // They run in the DESKTOP renderer's dispatch. This edition's browser bridge never subscribes to
-  // `onAgentControl`, and its headless handler serves no layout verb (`arrange`, `move`, `align`,
-  // `list` included), so they take the same named permanent refusal — never "Unknown verb", which
-  // reads like a typo to retry, and never a dropped flag answered ok.
-  it('refuses the geometry verbs by name, permanently (issue #1288)', async () => {
-    const handler = createServerEditionControlHandler(actions())
-    const calls: Array<[string, Record<string, string>]> = [
-      ['resize', { nodes: 'a', width: '540' }],
-      ['place', { nodes: 'a', x: '0', y: '0' }],
-      ['list', { geometry: 'on' }],
-      ['arrange', { nodes: 'a,b', gap: '0' }]
-    ]
-    for (const [verb, args] of calls) {
-      const reply = await handler({ verb, nodeId: 'term-source', args, verified: true })
-      expect(reply, verb).toMatchObject({ ok: false, error: CONTROL_UNSUPPORTED_ERROR })
-      expect(reply.message, verb).toContain(`"${verb}"`)
-      expect(reply.message, verb).toContain('do not retry')
-    }
-  })
 })
 
 /**
@@ -539,8 +603,18 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
       openProject: vi.fn(),
       openTerminal: vi.fn(),
       openAgent,
+      orchestrate: vi.fn(),
+      worktree: vi.fn(),
+      reportIssue: vi.fn(),
+      showImage: vi.fn(),
+      showVideo: vi.fn(),
+      showWeb: vi.fn(),
+      board: vi.fn(),
+      assign: vi.fn(),
+      geometry: vi.fn(),
       close: vi.fn(),
       link: vi.fn(),
+      list: vi.fn(),
       group: vi.fn(),
       rename: vi.fn(),
       color: vi.fn(),

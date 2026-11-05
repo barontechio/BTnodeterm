@@ -1,3 +1,5 @@
+import { browserRemoteMedia, remoteTransferReference } from '../lib/remote-transfers'
+import { IMAGE_MIME } from '@shared/image-preview'
 import { useEffect, useRef, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
 import { IconClose } from '../components/icons'
@@ -20,19 +22,8 @@ import { hintLabel } from '@shared/platform-utils'
 import { chipFor, commandTooltip } from '../lib/keybindingOverrides'
 import { pdfBlobUrl } from '../lib/pdfBlob'
 import { MaximizeButton } from './MaximizeButton'
+import { RetainedFileText, useRetainedFileText } from './RetainedFileText'
 
-// Image extensions get a visual preview instead of the Monaco text editor.
-const IMAGE_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  bmp: 'image/bmp',
-  ico: 'image/x-icon',
-  svg: 'image/svg+xml',
-  avif: 'image/avif'
-}
 
 /**
  * A code editor node backed by Monaco. Reads the file on mount, auto-detects the language
@@ -66,9 +57,11 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [pdfError, setPdfError] = useState('')
   const [loadError, setLoadError] = useState('')
   const filePath = (data.filePath as string) ?? ''
+  const loadedPath = useRef(filePath)
   // Set by a worktree removal sweep (`displacedByWorktree` / `resetDisplacedCwd` in Canvas.tsx):
   // this file no longer exists, and unlike a terminal's cwd there is nothing to re-point it at.
   const fileMissing = !!data.fileMissing
+  const retainedText = useRetainedFileText(fileMissing, modelRef)
   // This node's core api (a stable context read — the local session's api IS window.nodeTerminal).
   const { api } = useSession()
   // Backend pick (the `FsApi` shape is identical across both, so the rest of the component is
@@ -110,7 +103,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
 
   // A worktree removal can mark `fileMissing` on a node that is ALREADY mounted (open, live
   // Monaco instance). The main effect below only runs once on mount, so it can't react to that —
-  // free the editor/model here instead. The div swaps out of the JSX below too, but React does not
+  // retain its text above, then free the editor/model here. The div swaps out of the JSX below too, but React does not
   // dispose Monaco's own resources just because its container left the tree.
   useEffect(() => {
     if (!fileMissing) return
@@ -126,6 +119,23 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
     // either open a silently-blank buffer (text) or chase a "couldn't read" error we already know
     // the reason for (image).
     if (!filePath || fileMissing) return
+
+    if (isImage && data.sshFs && activeProjectId && api.remoteTransfers) {
+      const transfers = api.remoteTransfers
+      let disposed = false, reference: string | null = null
+      let renew: ReturnType<typeof setInterval> | undefined
+      void browserRemoteMedia(transfers, activeProjectId, id, filePath).then(url => {
+        reference = remoteTransferReference(url)
+        if (disposed) { if (reference) void transfers.release(reference); return }
+        setImageSrc(url)
+        renew = setInterval(() => {
+          if (reference) void transfers.renew(reference).then(ok => {
+            if (!ok && !disposed) { setImageSrc(''); setImageError('Remote image reference expired.') }
+          }).catch(() => { if (!disposed) { setImageSrc(''); setImageError('Remote image unavailable.') } })
+        }, 60_000)
+      }).catch(() => { if (!disposed) setImageError('Remote image unavailable.') })
+      return () => { disposed = true; clearInterval(renew); if (reference) void transfers.release(reference).catch(() => {}) }
+    }
 
     // Images: load as a data URL and render an <img> preview (no Monaco).
     if (isImage) {
@@ -323,6 +333,7 @@ export function EditorNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <span className="editor-node__loading">
               This file’s worktree was removed — it no longer exists.
             </span>
+            <RetainedFileText text={retainedText} source={loadedPath.current} />
           </div>
         ) : isImage ? (
           <div className="editor-node__image nodrag nowheel">

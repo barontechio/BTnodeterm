@@ -1,5 +1,61 @@
 # Contributing to nodeterm
 
+Directional focus in a relay tab writes active/unread state through the flow-store owner’s
+agent-status session, including focus-mode swaps. A local project may hold the same node id;
+clearing its status would acknowledge the wrong host. Keep local acknowledgements local.
+
+Server SSH linked-context reads use a separate agent request scope: per-node identity proof,
+current directed saved edge, saved caller/target identities and the HTTP response lifetime.
+Owner history access grants no linked-context permission. Abort on response/socket departure,
+not normal POST-body completion; revoke the scope on completion/timeout and recheck before queued
+SSH dispatch, after IO and synchronously before HTTP publication. Retain all original edge/proof/
+source/target validators through formatting; never recapture authority for already-read bytes.
+Remote read adapters derive paths from saved sessions, never hook paths.
+
+Server SSH owner chat now supports paginated Codex rollouts as well as Claude transcripts.
+Keep the harness-specific adapters separate: a Claude reader must never answer a Codex request.
+Codex discovery uses its remote login CODEX_HOME or canonical managed home, descriptor-relative
+no-follow traversal, a bounded date-tree scan and a matching session_meta header. The shared
+Codex parser handles the returned window. Revalidate saved harness/account/session, connection
+generation and requester lifetime after IO; remote failure never authorizes local history reads.
+This does not grant agent context-link permission or start continuous meters.
+
+Development previews are opt-in: Linux/tmux/IPv4, operator-approved exact project/node/port/argv
+records, fresh process/pane birth and listener identity, and accepted-socket proof before HTTP/WS
+bytes. The optional owner namespace never reaches relay guests. Keep static HTML script-disabled.
+Use separate PSL-validated registrable domains and opaque sandboxed active previews; cookies,
+storage and workers are unavailable. DNS grant names must never replace a live registry entry.
+The host-private PTY descriptor pins the actual local tmux client, server, session and single
+pane identity; remote, Zellij, session-host, raw and multi-pane backends are refused. Discovery
+retains its socket identity. Empty argv entries are significant. DNS-equivalent reserved-host
+aliases are rejected before application routing and do not become grant keys.
+Disabled mode starts no discovery or gateway. See `docs/development-preview-gateway.md` for the
+configuration, deployment acceptance and unsupported SSH/platform/storage cases.
+
+Owner clean worktree removal is additive through `worktree:removal:clean` and the owner recovery
+panel in Desktop and Server. It takes a saved app-created group id, waits for the real owner broker
+outside queues, and uses the existing worktree permit, backend-start barrier, canvas reservation
+and journal. A durable prepared intent precedes no-force Git; all ignored files are refused and the
+branch is retained. A refused/uncertain Git reply never closes terminals. Independently verified
+absence is recorded even after owner departure; subsequent effects still require live approval.
+Exact acknowledged recycling precedes conditional repair, and recovered publication stays inside
+the actual workspace FIFO with immutable serialization/file receipts. Held commands remain manual.
+
+The initial removal cohort is deliberately conservative: local Linux live plain PTYs or verified
+single-pane tmux, with bounded OS process birth/cwd/fd/descendant observations for all managed local
+sessions. Unpersisted, cold, released, remote, agent/account, ambiguous or unverifiable identities
+refuse before Git. The managed tmux socket inventory must match the captured sessions; a failed list
+is not absence. No external-process or filesystem lock is claimed. Configured archive hooks and
+any overlapping historical recovery row refuse before effects. Protected paths include the actual
+backend config/socket and configured linked Claude and short-home Codex roots, pinned from the
+owning settings getter; failed reads or account-root changes refuse. History/manualStart is never erased
+to admit another cycle. Legacy Desktop force/archive behavior is unchanged. Relay, guests and agent
+RPCs cannot use this owner plane; the mobile companion has no removal UI in this change.
+
+Missing-file repair preserves editor/diff nodes and paths. Mounted text buffers are captured before
+Monaco disposal and remain read-only/copyable in the open node; they are not written to the missing
+path and do not survive closing/reloading. Recovery does not claim a durable unsaved-buffer backup.
+
 Thanks for looking. This file is the short door: enough to get running, plus the house rules that
 actually get a pull request sent back. The long version — every subsystem and the reasoning behind
 its invariants — lives in `CLAUDE.md` at the repo root, which is also loaded automatically if you
@@ -11,6 +67,10 @@ whose license or usage-limit checks were removed or bypassed; changing that code
 ordinary work.
 
 ## Getting set up
+
+You need Node.js 20+ (22 for the Server Edition) on Linux or **macOS 12 Monterey or newer** —
+the macOS floor is Electron's and esbuild's, and the README's *Build from source* section says
+what fails on an older Mac.
 
 ```bash
 npm install        # also patches + rebuilds node-pty against Electron's ABI (postinstall)
@@ -54,6 +114,55 @@ The repo is split by Electron process boundary and the split is enforced, not ad
 
 `src/core/no-electron.test.ts` and `src/server/no-electron.test.ts` fail if `src/core` or
 `src/server` import `electron` or `../main/*`.
+
+Canvas automation shares `shared/geometry-command.ts`, `shared/board-assignment.ts` and the board
+projections between Desktop and Server. Host commands authorize every affected node before the
+serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
+lazy defaults; assignment changes never launch or type into a session.
+
+Host operations that need stable canvas execution metadata can use `CanvasExecutionReservations`
+with a real node batch claim. Acquire the metadata reservation inside the workspace writer FIFO,
+retain it until dispatched work settles, and release explicitly. Store admission runs before Core
+publication and disk writes; client admission corrects refused optimistic edits. Ordered mutation
+observation keeps allowed visual changes in corrections. This primitive does not enable removal.
+
+Both owning shells install `WorktreeCanvasAdmission` with recovery state before owner launches.
+It refuses new execution references to retired paths, including dangling aliases and stale saves,
+while allowing historical layout edits, safe repairs and inert missing-file notices. Use bulk
+private host snapshots for whole-project checks; shared files still carry no private exec fields.
+
+Known prepared/removed recovery members also have a persistent dispatch quarantine. A normal node
+claim, including a `worktree` label, cannot waive it. The host recovery adapter must explicitly
+register the actual batch permit through `WorktreeRecoveryDispatch.withRecovery` and await the
+effect. It grants no actor/owner approval. Keep uncertain recovery facts; no deletion RPC is enabled.
+
+`PtyManager.recycleWorktreeMember` requires that same live `runWorktreeAction` permit and its
+backend-start barrier. Await exact backend teardown before metadata recovery. Owner departure
+retains exclusion until dispatched work settles and prevents further effects. Backend callbacks
+leave request ALS; application continuations do not. Replacement routing belongs to Core's
+headless client, and viewers wait. This helper neither launches nor types into a replacement.
+The barrier is process-local; it does not lock the filesystem against other applications.
+
+`WorktreeRecoveryService` provides owner-only inspection and kept-checkout recovery in both shells.
+An explicit owner click can keep only the original canonical directory/inode and linked branch.
+Recheck Git and owner lifetime inside the journal FIFO under `runWorktreeAction`; keeping performs
+no Git mutation, session input/teardown or canvas edit. `WorktreeRecoveryHost` uses the app's physical
+owner API; relay APIs omit administration. Uncertain replies never replay the action. Recorded missing-checkout repair supports plain local terminals and inert file notices through the
+owner broker. Agent recovery and confirmed deletion remain pending; observed-missing recovery is described below.
+
+Local transcript tail readers must open once, measure with that handle's `stat`, read through the same handle, and close in `finally`. A pathname may be replaced between measurement and reading; never reopen it after checking its size. Decode only the bytes actually read when a transcript can shrink.
+
+Global transcript search is owner-only and local to the host's configured Claude account roots.
+Index refresh identity is the transcript path, since session ids can repeat across accounts.
+Scoped search uses its additive RPC channel; never fall back to unscoped search on an old host.
+
+Settings edits use explicit partial patches through the host's FIFO writer. Publish owner-only
+settings pushes only after atomic persistence; a failed write must retain the durable cache.
+The UI merges pushes with its pending edits. Only a missing patch handler permits the legacy full
+save fallback; a lost reply never does. Host read/modify/write operations use `SettingsStore.update`.
+Agent settings changes use `core/settings-control.ts` and require individual owner confirmation,
+followed by a conditional FIFO edit. Capability toggles must call the shared `setProjectCapability`
+setter so the file flag and the machine-local answer stay paired.
 
 **Put new service logic in `src/core` behind `CorePlatform`, not inline in `src/main`.** That is the
 seam the Server Edition boots from; logic left in `src/main` silently does not exist there, and the
@@ -155,6 +264,38 @@ copies are deleted only after a SUCCESSFUL process query shows nothing runs from
 directory can be renamed aside. The host protocol stays additive-only — an older host is kept and
 used, an incompatible one is left running and reported, never killed.
 
+Managed Codex lifecycle lives in `core/codex-account-service.ts`. Its shell adapter supplies a
+stable authenticated owner lifetime and private RPC registration. Switch tokens belong to that
+lifetime, never just a numeric client id. Release reservations on reload/disconnect and shutdown;
+keep prepare/commit/finish/rollback and account-removal exclusion. Login terminals require durable
+settings first. Credentials remain in the account's host-local home, never in RPC results.
+
+SSH project orchestration and its remote hooks/filesystem/atomic-write services live in core.
+`core/remote-ssh/ssh-project.ts` accepts transport/authentication/status runners; the native adapter
+keeps Electron prompts and IPC in main. Compatibility exports preserve old imports. Keep existing
+host-key, integration-consent, pending-kill, tunnel-repair and account-home checks when adding a shell.
+`core/ssh-store.ts` acknowledges serialized inventory edits only after owner-only atomic persistence.
+
+SSH secret prompts use `core/remote-ssh/passphrase-prompts.ts`: one recipient lifetime per
+request, bounded pending state, explicit decline distinct from no answer, and no secret echo/store.
+Reload/disconnect invalidates its tickets. Askpass and app-owned ssh-agent services also live in
+core; native adapters retain their pre-core data-directory namespace so instances cannot unlink
+one another's sockets. Start these services lazily and release them with their owning shell.
+
+SSH process runners are composed in `core/remote-ssh/ssh-process-runners.ts`, preserving the
+process-wide child gate and native/OpenSSH backend choice. Inject the owning shell's agent and
+askpass services. Remote workspace reconciliation/throttling is shared in `core/remote-workspace-io.ts`;
+flush its trailing writes before ending masters, and preserve checked absence versus read failure.
+
+Multi-client Git must capture its remote resolver per request with `withGitRemoteResolver`.
+`GitService.registerIpc` accepts an optional sender-aware request scope. An explicit local resolver
+hides the native global fallback; an unavailable remote must refuse before any local command.
+The host adapter must also revalidate its captured connection identity before each remote effect.
+
+Remote workspace reads distinguish a checked missing path from permission/I/O/transport failure.
+`SshFs.readTextChecked` uses the checked reader's private absence status; an arbitrary nonzero
+`cat` exit must never become permission to create or overwrite the remote project/settings file.
+
 ## Three surfaces
 
 A feature is not done until you have decided how it behaves on each — even if the decision is "not
@@ -172,6 +313,67 @@ applicable here":
 Anything reachable from `window.nodeTerminal` needs a **real** implementation in
 `src/renderer/bridge/`, or a deliberate, documented degrade. The `satisfies NodeTerminalApi` gate
 forces you to *declare* every member, but a no-op stub compiles fine while doing nothing.
+
+Canvas-command implementation support is described by `shared/control-capabilities.ts` and
+available through the authenticated `capabilities` command and `control:capabilities` owner RPC.
+Keep the manifest and handler in the same change. Support is not authorization: identity,
+project scope, capability consent and backend checks still run when the command executes.
+
+Server canvas commands persist through `core/canvas-content-writer.ts`: edit a private snapshot,
+publish its content mutations before an authority-overlay save, and re-read the persisted project
+before notifying browsers. After a slow external effect, apply only its still-valid patches to a
+fresh read. The writer does not authorize commands or replace the workspace's write queue.
+
+Owner workspace saves carry a per-connection baseline and merge inside the store's write queue.
+Use `WorkspaceStore.saveChanges` for a command's private snapshot or `updateWorkspace` for a
+short edit that must inspect fresh state under that queue. Do not call a queued `save()` from
+inside either callback. Keep governed content on the existing authority path and forget client
+baselines on renderer/socket departure. See [workspace save concurrency](docs/workspace-save-concurrency.md).
+
+Canvas geometry and sizing rules live in `shared/canvas-geometry.ts` and `shared/node-sizing.ts`.
+The algorithms accept a structural node shape and preserve its other fields; React Flow supplies
+live measurements, and a host command supplies stored dimensions. Renderer modules keep their
+existing imports as re-exports. Keep opener/wait-rope interpretation in `shared/canvas-lineage.ts`
+so layout and team progress agree. A core command must patch stored geometry, not round-trip
+the whole node through renderer hydration and serialization.
+
+Local team/review execution uses `core/headless-node-factory.ts` in both shells. Pure team,
+review, prompt and placement planners live in `shared/`. Persist the complete batch before
+starting sessions; release dependencies only from verified current-session evidence. Process
+ownership and launch identities are never reconstructed from saved nodes. The historical
+`pendingLaunch.executor: 'server'` value identifies host execution in either edition. Run now
+uses the owner-only `control:run-launch` claim path and must not fall back to terminal input
+after an uncertain host reply. Desktop keeps its legacy adapters for SSH, Windows and agents
+without a local headless backend. A missing account or prompt file holds work for recovery.
+
+Worktree creation/binding uses `shared/worktree-create.ts`; host commands use
+`core/worktree-control.ts` with Git, workspace and setup adapters. Keep the successful checkout in
+every binding/preparation failure reply. Host preparation materializes only resolved project
+shared paths and awaits the existing setup trust gate before exposing the frame. Do not reinterpret
+a failed Git list as absence, adopt creator rights after restart, or delete a directory to undo a
+canvas save failure. Group opens use the shared stored-node placement and verify the checkout.
+
+Server media uses `core/media-references.ts` and the authenticated HTTP route in `server/media.ts`.
+References are reusable for seeking, expiring, owner-client-bound and scoped to a saved local node;
+never reuse one-shot download tickets or accept filesystem paths in the HTTP URL. Recheck access,
+canonical path and inode before serving. Keep issuance, reference count, streams and byte-range
+parsing bounded; destroy streams on cancellation/revocation. Native Desktop keeps `nt-media://`.
+
+Browser web previews use `shared/web-preview.ts` and `BrowserWebNode`. Local HTML uses the optional
+`core/web-previews.ts` service and a distinct HTTPS virtual host; serve no app/auth/WS routes there,
+and never serve snapshots on the app origin. Keep local HTML static: resource CSP does not stop a
+script from navigating its own frame. Both the response sandbox and iframe omit script permission.
+References require owner issuance and a current saved local web node. Bound files, snapshots,
+pending reads/writes and reference lifetimes; preserve referenced generated files across restart.
+
+Host confirmation uses `core/owner-confirmation.ts` with the optional owner UI API. Capture exact
+normalized arguments, target/session identity and policy in the intent binding. Await the person
+outside workspace locks and command queues, then consume the one-use permit immediately before
+the effect; its mandatory `checkCurrent` callback revalidates that binding. Never await consumption
+inside a synchronous WorkspaceStore edit. A failed proof read, expired permit or disconnected owner
+is a refusal. Decisions belong to the exact connection epoch; peers never receive or approve them.
+The UI reuses ConfirmDialog with explicit-click approval and no automatic focus. Existing waiver
+rules remain in `shared/control-confirm.ts`; the broker does not grant standing consent.
 
 The **canvas and the kanban board are two views of the same nodes.** When you add something to a
 canvas node — a header action, a badge, a menu item — ask whether the board's card and card modal
@@ -697,6 +899,12 @@ anything else. Board-level fields survive every transform — `pullLinks` is one
   Do not "fix" this by re-stamping `sshRemoteTmux` onto those nodes: the host would then refuse its
   own sessions. CLAUDE.md, "Projects (tabs)".
 
+- **Read agent status through the node's session — `useSessionStores()` / `agentStatusForProject` —
+  never `useAgentStatus` directly, in any surface that can show a team tab's node.** A team tab
+  keeps its host's status in its own session store and shares node ids with the SSH project it was
+  handed off from, so the default store answers for the wrong project. CLAUDE.md, "A relay session
+  owns its agent status".
+
 - **Phone keys and store links are platform-neutral.** New paired keys are stamped
   `nodeterm-mobile-<id>`, but revoke must keep matching the legacy `nodeterm-ios-<id>` stamp every
   existing iPhone carries (`src/main/pairing-core.ts`). Link to a store only through
@@ -926,14 +1134,17 @@ creator ledger is process-local and must never be rebuilt from `.nodeterm/projec
 hook history, or a surviving tmux name: all are writable or stale. A restart therefore clears
 ownership, performs no node/session adoption, and leaves durable queued launches dormant. Metadata
 mutations and message delivery validate every target before writing anything; missing proof is a
-named refusal. Validate Server upgrades against a disposable data directory and port. Restarting a
+named refusal. The operator may widen the reach to the caller's whole project
+(`--control-scope project`, `src/server/control-scope.ts`): every ownership check goes through
+`ownsMutation`, and `creator` must stay byte-identical. Validate Server upgrades against a disposable data directory and port. Restarting a
 shared live service is
 an explicit operator action, never a test or an automatic repair step.
 
 **A canvas-control verb you add in `Canvas.tsx` does not exist on the Server Edition.** The verbs
 run in the DESKTOP renderer's dispatch; the browser bridge never subscribes to `onAgentControl`, and
 the Server Edition answers `/control/*` itself (`src/server/control-unsupported.ts`), serving only
-`SERVER_V1_VERBS` through the headless node factory. Everything else — `list`, `arrange`, `move`,
+`SERVER_V1_VERBS` through the headless node factory (`list` answers with the desktop's own rows,
+`@shared/control-listing`). Everything else — `arrange`, `move`,
 `resize`, `place` included — gets the named permanent `control-unsupported-on-this-edition` refusal.
 So "it is in the renderer, so both shells have it" is false here; either add a headless action or
 leave the refusal, and pin which in `control-unsupported.test.ts`. A new verb's flag gate goes in
@@ -1242,6 +1453,8 @@ disable it with its reason (`NEW_FILE_NO_CWD_HINT`,
 nothing, and a message that names the wrong cause ("not a git repository" for a project that has no
 folder to be one) sends the user hunting a problem that does not exist.
 
+**Opening a project goes through `gateProjectOpen` (`src/renderer/lib/projectLimitGate.ts`); a new way to open one must call it — see `docs/project-limit.md`.**
+
 **Agent features attach to base harness capabilities, not frontend allowlists.** A custom agent can
 inherit a builtin harness, so add the capability and its one shared leaf (`src/shared/agents`) and
 let every UI ask the helper. Repeating Claude/Codex/etc. cases in menus breaks that inheritance and
@@ -1480,6 +1693,11 @@ bite most often:
 - `handleNodesChange` must not call `onNodesChange` with an empty batch (it re-renders the canvas
   every frame through React Flow's ResizeObserver).
 - Work done per terminal on a project switch must be coalesced and on-screen-first.
+- Don't put a `backdrop-filter` on a surface whose content changes often. Chromium re-runs it
+  every time the surface is drawn, and the damage spreads to the glass next to it. Liquid Glass
+  terminals frost a static wallpaper copy instead (`.term-node__frost`, `lib/glassFrost.ts`): six
+  streaming terminals went from 92% to 42% GPU. The SVG refraction filter (`url(#nt-refract)`)
+  runs only left of the Readable tick, for the same reason.
 - macOS memory pressure comes from the kernel's level (`onKernelPressure` in
   `core/memory-pressure.ts`), fired on escalations only, and at the same severity at most once per
   `KERNEL_LEVER_GAP_MS` (a level flapping normal/warn re-arms it every fall). Never re-fire it on a
@@ -1681,8 +1899,8 @@ require a known safe account id and a safe resolved remote home before spawning.
 builder supplies their private `CODEX_HOME`; never fall back to the system login when that scope
 is unavailable. System SSH Codex retains the host environment, including during early attach
 before home discovery; never inject a guessed `HOME` or `CODEX_HOME`. Custom Codex harnesses use
-the same guard. Desktop supports remote account lifecycle; the Server browser still explicitly
-rejects managed Codex account management.
+the same guard. Desktop supports remote account lifecycle. The Server browser supports local managed Codex
+accounts through the shared core service; unavailable SSH contexts remain explicitly refused.
 
 - Media URLs live for the app run. Remote cache pruning must keep files already handed to
   players; the cache cap is soft until restart. Use the existing `video` node for audio too.
@@ -1762,3 +1980,256 @@ resolving pointer targets. Keep actions on one guest exclusive. A CDP viewport o
 (`--screenshot --full true`) survives debugger detach and a reload: it goes through the lease,
 which clears it before every detach and on the next attach — never send emulation around it, and
 never reattach a released lease to clean up.
+
+**Host terminal actions coordinate at the PTY boundary.** `PtyManager.runNodeAction` is a
+host-only bounded exclusion, never a callback RPC or a renderer mutex. Acquire after consent,
+reject pending writes/creates/teardowns, bind the saved execution identity and exact physical
+generation, and check the permit at dispatch. Cancellation does not release a still-running
+backend operation. Detached expired continuations must not escape onto a new node. Raw input
+refusals are addressed and throttled; relay/scoped-guest event policy must attribute their node.
+`ConfirmedNodeWrite` uses the existing creator ledger, confirmation broker and handover tracker.
+Preserve drafts, distinguish pre-send refusal from uncertain input, and mark submitted/uncertain
+work before releasing exclusion so a delayed hook cannot authorize a second send. Keep Desktop's
+existing confirmation waivers until its orchestration has an explicit shared adapter.
+
+Server message envelopes use `PtyManager.sendSettledEnvelope`: its one pane-queue slot includes
+capture, paste, settlement waits and Enter. Do not compose two public `sendText` calls around an
+unreserved wait. The implementation lives in `core/settled-envelope.ts`, with a Server compatibility
+export, and calls the private delivery path from inside the queue to avoid recursive deadlock.
+
+**Session title reads are node-bound on Server.** Carry the optional trailing node id through the
+browser API; derive account/harness/host from current saved routing and the runtime session.
+Unknown or remote targets return no title, never a local transcript scan. Recheck after async
+reads and immediately before sweep publication, including account/session replacement and manual
+title changes. The periodic sweep must not overlap itself; disposing it prevents late publication.
+
+**Server SSH history is an owner-scoped read.** Derive endpoint/session/account from current saved
+node routing and a verified connection generation. Bind queued commands and their result to the
+request's owner lifetime; a disconnect or completed RPC invalidates detached work. Clone argv at
+queue entry and detach request ALS from transport-owned callbacks after validating dispatch.
+The optional Python 3/POSIX reader writes no helper files, opens directory-relative no-follow
+descriptors and rechecks named identities. Cap discovery, byte windows and concurrent reads.
+Only a verified clean miss is absence; unavailable roots/runtime/permissions remain unknown.
+Never fall back to another account or local history, or treat read permission as terminal control.
+
+SSH disconnect must retain its per-project close until the mux exit settles. Queue reconnects
+behind that close, cancel queued requests on a later disconnect/shutdown, and recheck the captured
+connection after awaits. Failed exit is uncertainty, not absence: retain identity and require an
+explicit retry rather than adopting a possibly closing socket.
+
+Group terminal operations use `PtyManager.runNodeActions`, not nested single-node claims. Every
+member is claimed synchronously or none is; existing pane/control/create/teardown work on any
+member refuses the batch. Capacity counts nodes, cancellation retains all fences until the effect
+settles, and caller mutation cannot change the captured member set. This exclusion does not reserve
+a filesystem path or authorize removal: worktree removal still needs its own path/project guard.
+
+Claude branching must prove a fresh branch marker and the same verified new runtime id under the
+source pane's host claim. A stale `/resume` line or an unconfirmed submit never authorizes opening
+a copy; uncertain effects are not retried. The original-resume continuation derives account/cwd/model
+from the saved target, honors project launch trust and validates again in the writer's disk queue.
+Persist before launch, retain a failed/cancelled command for manual recovery, and check the owner
+before each actual write. The protocol and continuation alone do not enable the Server command:
+its consent and submit-transition adapters remain required gates. The original-resume continuation
+reserves its new node before casting/persisting it, holds exclusion through launch/outcome publication,
+and adopts the physical generation before typing. Reuse the existing delivered-command ledger when
+the held launch is cleared; clearing a field alone is not delivery evidence.
+
+Backend constructors, shared driver timers and physical lifecycle registration leave node-action
+ALS through `NodeExecutionCoordinator.backend` after dispatch validation. Only that backend context
+may create `backendCallback` wrappers; they retain physical-generation checks and competing-action
+fences when later invoked. Application promises stay action-bound and cannot use an expired claim
+to start a backend. Never expose these host internals as a callback RPC or use them for user input.
+
+Host execution decisions use `WorkspaceStore.getNodeForHostAction`, a unique-node, cloned snapshot
+that reapplies this machine's exec overlay with the same trust rules as `load`. Shared records and
+`getNodeResolved` deliberately omit held commands/shell fields and cannot prove their absence.
+Keep this accessor internal; it does not change shared serialization or create a wire API. Remote
+classification still examines every saved placement, even when ambiguity prevents an action snapshot.
+
+The first Claude branch submit path is a fixed host-only command for live local POSIX tmux panes.
+Its notification runs after the Enter exec is issued and before awaiting its reply. A failed
+notification still waits for the real submit promise to settle. It grants no runtime identity by
+itself: the branch protocol must verify fresh output and a matching verified session, and the
+owner-confirmed domain service must hold the physical-node claim. No callback crosses IPC.
+
+`ConfirmedNodeBranch` and `ConfirmedNodeWrite` share `LocalClaudeActionTarget`, including linked
+account-directory identity and machine-local held launches. Branch approval stays outside queues;
+only the actual Enter dispatch permits a target session transition. Require fresh pane output and
+the matching verified new runtime before opening the original. Its continuation reserves the new
+node before publication, preserves launch recovery, and uses the existing delivery/creator ledgers.
+Desktop and Server UI branching use the separate authenticated-owner entry with the real document
+lifetime. A direct human action creates no agent grant; agent CLI branching still requires its own
+confirmed caller/project policy. Never forward owner actions to a relay viewer's local desktop.
+
+`GitService.worktreeRemoveClean` is a host-domain building block, without generic IPC. It checks
+the current local directory identity and expected linked branch, and invokes Git without `--force`.
+A failed removal reply can still report verified directory absence; retain the branch and recover
+bindings explicitly. It supplies no owner consent, node exclusion or directory reservation itself.
+
+`PtyManager.runWorktreeAction` combines member claims with a temporary barrier against new backend
+starts. Refuse dispatch while any backend creation is unresolved; a start may not have resolved its
+actual cwd yet. Existing unrelated panes remain usable, and owner departure retains the barrier
+until the awaited external work settles. This primitive does not reserve canvas bindings or grant
+permission to remove a directory.
+
+Context-link routing classifies saved remote placements as well as live sessions. A missing remote
+reader or capture adapter must refuse, never search local histories or capture an unmounted local
+pane. Use `isRemoteWorkspaceNode` at the shell seam and recheck link/account/session/routing identity
+after asynchronous reads. Owner-only history support does not authorize an agent context read.
+
+Worktree deletion recovery uses `WorktreeRemovalJournal`, not the fail-open/debounced orchestration
+facts. A prepared intent must be acknowledged by `writeFileDurableAtomic` before any external
+effect; an unsupported directory flush refuses. After a publication/ack failure, reload before
+doing anything else: new bytes may already exist. Corruption, unknown versions, lost ownership or
+an observed external edit refuse writes. Persist only bounded node identity hashes, never commands
+or credentials. Recovery phases and retained path tombstones grant no Git, node or canvas authority;
+the domain adapter must supply those and prove each transition. These primitives expose no RPC.
+
+Both owning shells load this journal before enabling launches and inject its physical-start guard
+into `PtyManager`. Check the requested local cwd before stale-cwd fallback or painter teardown.
+Resolve dangling symlink ancestors too: an alias to a removed checkout must not launch in home.
+Unverifiable paths refuse while recovery facts exist; an empty journal adds no path-resolution IO.
+Existing live co-attachments remain usable. Binding admission and the removal/recovery UI still
+belong to the worktree domain adapter.
+
+Client canvas admission must answer optimistic edits. `setClientMutationAdmission` retires a
+refused sender's pending slot with a sender-only acknowledgement; that value reaches neither the
+authority nor another client. Publish the canonical correction separately, without the sender's
+source tag and with causality after the refusal, then send an addressed project-scoped notice.
+This preserves ordering across pending edits and optimistic deletes. A missing canonical target
+requires an explicit reload notice. The hook grants no backend or storage rights: domain/store
+checks still precede every durable write and physical effect.
+
+Shared headless control (`core/headless-node-factory.ts`) preserves creator scope. Under project
+scope, creator proof requires a unique current placement in the recorded project. Validate every
+close target before any kill and require a currently control-capable source for agent `run` before
+claiming or delivering a launch. Authenticated owner Run now retains its separate unique local
+target and exact-command checks; a plain terminal remains eligible for that explicit owner action.
+
+Clean host worktree removal requires the approved directory stamp and a host dispatch-freshness
+callback. The local Git runner invokes that callback immediately before each subprocess; removal
+also rechecks the canonical inode after asynchronous probes. This is not a filesystem lock against
+external writers. Git's no-force removal deletes ignored files: the conservative host path refuses
+all observed ignored entries, including directories, without a disposable-filename allowlist. The legacy
+Desktop explicit dirty/force flow is unchanged. These guards supply no owner consent, protected-root
+policy, durable intent or canvas/session recovery; the domain adapter must still provide them.
+
+The clean-removal runner rechecks the linked Git marker and expected symbolic HEAD after the
+ignored-file probe, pinning their stamps through the final synchronous dispatch check. An external
+writer can still race the eventual Git operation; these observations are not OS-wide locks.
+Once removal dispatch occurs, failed acknowledgement or unavailable absence verification reports
+`recoveryRequired`, never no-effect reassurance or retry permission. A failed stat is not absence;
+only verified absence sets `worktreeGone`. Retain the branch after an uncertain removal reply.
+
+Recorded missing-checkout recovery uses the existing owner broker before entering any queue.
+For now it supports recorded local plain terminals, groups and editor/diff notices; agent
+account/runtime identities explicitly refuse until their verified adapter is installed. It never
+retries Git deletion. A durable repair plan pins both original and repaired execution hashes, so
+lost metadata acknowledgements can be reconciled with fresh consent without accepting arbitrary
+identity changes. Teardown uses the real worktree permit and independent recovery dispatch grant.
+`CanvasContentWriter.repairExecution` keeps the original reservation inside the WorkspaceStore FIFO;
+old-cache recognition ends before the next queued writer and cannot survive the repair scope.
+Accepted visual edits and unrelated content survive the fresh conditional repair.
+
+Journal version 5 retains manual-start quarantine and manual-resume history after durable repair
+and host restart, even when cwd is safe. Strict legacy v1-v4 reads retain their provenance; mutation
+upgrades durably. Keep v5-capable hosts while these records exist, including an empty v5 envelope;
+downgrade requires offline operator reconciliation, never silent loss of manual restrictions.
+Verified rebinding releases only the retired path after actual durable-byte proof; it does not
+release manual-start quarantine. Explicit owner resume supports plain Linux and verified single-pane
+local tmux shells through the existing coordinator/held FIFO. Native new-only creation never attaches
+to an existing name. Actual process/pane/client acknowledgement and the exact captured Session bind
+create/input admission. No journal label, renderer pause or copied permit authorizes execution.
+Global and actual project/local/target/trust source captures are checked at physical dispatch and
+again after observed persistence and the final physical probe, immediately before admission. They
+must not merely rehash copied overrides. A mismatch retains observed facts and quarantine; later
+settings changes do not revoke established Sessions. Lost replies never replay held commands or
+cold starts. Public errors omit private nonces, arguments, env and profile hashes. Agent/account,
+remote/unsupported backend, confirmed removal and coordinated restart remain separate gates.
+
+Recovery's reserved FIFO write explicitly fsyncs the affected local content files, the private
+execution index and their parent directories. An ordinary atomic save is not that acknowledgement.
+Unsupported flushes, replacement identities and lost acknowledgements retain the repair plan and
+manual restrictions; they never publish recovered completion. This barrier does not lock external
+filesystem writers and does not change ordinary autosave durability or remote storage semantics.
+
+Execution repair checks its live permit after asynchronous authority/storage work and immediately
+before each new local directory/atomic-write dispatch. Already dispatched IO is awaited; expiry
+prevents later metadata effects and retains pending recovery. Recovery saves are local-only, so an
+unrelated SSH cache cannot turn this transaction into a remote metadata write.
+
+The bounded recovery plan also hashes the exact split-store intermediate state (new public content,
+old private execution overlay). An index publication failure can leave that state on disk. Fresh
+owner consent may reconcile that specific state; arbitrary mixed account/session/command edits
+remain refused. The journal carries hashes, never held command text or credentials.
+
+Recovery planning uses a detached workspace snapshot: app-data/inline load results can share live
+cached nodes. Split-save data-file admission uses the planned private overlay inside the held FIFO,
+not the previous index overlay. Folder, app-data and cwd-less paths must all prove content/index
+publication and file/directory durability. Recovery dispatch guards also cover the atomic writer's
+temporary write and every rename attempt, including retries after transient sharing failures.
+
+Observed-missing recovery is a distinct v3 provenance, never a fabricated prior checkout inode or
+an assertion that this host dispatched Git. Read-only owner discovery offers bounded saved local
+groups; no journal write or teardown occurs on refresh. One real owner-broker approval pins the
+saved members, actual repository identity and canonical searchable existing ancestor. Re-prove
+checkout absence and local Git repository evidence before durably recording observed absence, then
+use the same acknowledged teardown and held metadata repair. Changed/prunable Git metadata is not
+permission to retry deletion; a surviving mismatched association refuses. Observed-missing records
+cannot take the keep-original path. Lost first publication acknowledgement retains known node
+quarantine in memory as well as on restart. Legacy v1/v2 records retain their real recorded inode
+provenance and upgrade only on a durable mutation. Old binaries reject v3, including empty journals.
+The durable journal writer carries a live dispatch guard through asynchronous file preparation and
+each publication attempt when new owner-bound facts are being authorized; observed completed effect
+facts remain separate from new action authority.
+
+Observed absence also pins the original Git directory/common directory and a private fingerprint of
+canonical markers, config, HEAD and bounded linked-worktree administration (at most 128 entries and
+512 KiB of metadata). Actual local Git rev-parse routes must match this captured evidence. The same
+synchronous no-follow proof runs at durable temporary writes/renames and later effect dispatches;
+it never refreshes consent onto replacement metadata after an await. Separate canonical Git dirs
+remain supported; redirected, unreadable, oversized or changed metadata refuses. Unrelated Git
+administration changes can conservatively invalidate approval. This is not an external filesystem
+lock. Version 3 envelopes reject unknown top-level fields; legacy v1/v2 reads keep their explicit
+historical contract, rather than silently interpreting future authority fields.
+
+SSH connect attempts retain their original ticket and requester predicate through setup IO,
+queued command dispatch and connected publication. Cancellation may close only the connection
+created by that attempt; an expired requester reusing an existing master must not destroy it.
+Transport callbacks leave the short connect scope, and optional background setup starts only
+after authorized publication. A cancelled attempt rejects even when its physical close is pending.
+
+A retained SSH connection during pending or uncertain teardown owns cleanup only. Background
+CLI probes use connection-lifetime queue checks and cannot publish connected, retry, or start
+follow-up setup after close begins, including close triggered synchronously by a status callback.
+
+Browser notifications are open-page effects owned by the actual WS/relay API lifetime. Request
+permission only with explicit `force` AND current browser user activation; background events never
+prompt. Canvas injects routing, using the live nodes epoch and fresh globally unique membership,
+exact project/API/workspace-session identity and known CLI session id. Carry the validity guard
+through deferred project landing; disposal, replacement, removal or offline state cancels focus.
+Keep offline stubs inert and native Desktop behavior unchanged. Settings points to browser site
+permissions, not OS settings. This does not implement Service Worker/Web Push, closed-page delivery
+or private mobile notification support. Existing consent and entitlement gates still apply.
+
+Ordinary account-switch notices retain actual compatibility-flow observations separately: exposure
+dispatch/acknowledgement, requested node account update, restart result and reservation finalization.
+Codex rollback only releases a reservation; it never removes an exposed rollout or compensates
+node/runtime effects. A lost commit/remote reply can follow publication. Claude copy facts survive
+recycle failure, including bulk reports; a failed copy may be partial. Renderer restart completion
+is not verified conversation resumption, and a requested canvas update is not a durable host receipt.
+Keep existing eligibility, authority and effect ordering; these notices grant no new restart,
+whole-node coordination or durable recovery capability.
+
+Project allowance claims send device and machine identity only to the configured API. Keep `redirect: 'error'` on `/v1/limits/claim`: a 307/308 must not forward the POST to another authority. Failed redirects use the existing offline result and must not persist an allowance.
+
+
+Browser closed-page Web Push is a separate opt-in Server cookie-owner service (`core/web-push.ts`,
+`server/web-push.ts`), not the mobile push protocol or a document/WS grant. Bind consent to the
+real durable auth session hash and project; logout/expiry revokes it, closing pages does not.
+Consume the mirror's actionable seam, reserve attempts durably before send, and revalidate the
+unique local node/session and consent across IO. Use only approved-provider, public-DNS-pinned,
+nonredirecting bounded egress; standard encryption/VAPID never makes a caller endpoint trusted.
+The minimal worker has no fetch/cache/offline handlers. Click receipts grant no authority and
+must pass authenticated host resolution plus the actual local Canvas membership/session guard.
+See `docs/web-push.md` for operator configuration, privacy, caps and the limits of CDP evidence.

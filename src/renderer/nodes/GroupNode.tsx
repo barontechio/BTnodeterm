@@ -194,14 +194,30 @@ export function GroupNode({ id, data, selected }: NodeProps<CanvasNode>) {
             }}
           />
         )}
-        <input
-          className="group-node__name nodrag"
-          value={data.title}
-          spellCheck={false}
-          onChange={(e) => updateNodeData(id, { title: e.target.value })}
-        />
+        <span className="group-node__name-size">
+          <span className="group-node__name-mirror" aria-hidden="true">
+            {data.title.replace(/[\r\n]/g, '') || '\u00a0'}
+          </span>
+          <input
+            className="group-node__name nodrag"
+            aria-label="Group name"
+            title={data.title}
+            value={data.title}
+            spellCheck={false}
+            onChange={(e) => updateNodeData(id, { title: e.target.value })}
+          />
+        </span>
         {wt && (
-          <div className="group-node__wt nodrag">
+          <div
+            className="group-node__wt nodrag nowheel"
+            role="group"
+            aria-label="Worktree details and actions"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              // Let the browser scroll this row instead of moving the selected frame.
+              if (e.key.startsWith('Arrow')) e.stopPropagation()
+            }}
+          >
             {stale ? (
               // The directory is gone from disk (deleted outside the app). Merge and Remove would
               // act on a path that no longer exists, so only Unbind is offered.

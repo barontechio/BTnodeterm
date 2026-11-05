@@ -143,6 +143,27 @@ describe('initServerContextLink', () => {
     return { link, handler: handler!, registered: !!handler }
   }
 
+  it('classifies saved remote nodes independently of reader availability and revalidates routing changes', async () => {
+    const secret = join(dir, 'remote-collision.jsonl')
+    writeFileSync(secret, JSON.stringify({ type: 'user', message: { content: 'local-only-secret' } }))
+    setNodeTranscript('routing-target', 'session', secret)
+    let remote = false
+    const pty = fakePty(); const capture = vi.spyOn(pty, 'captureSession')
+    const { link, handler } = start({ ptyManager: pty, isRemoteNode: (id) => id === 'routing-target' && remote,
+      canvases: () => [{ id: 'p', nodes: [node('reader'), node('routing-target', { agentId: 'claude' })], bridges: [bridge('reader', 'routing-target')] }] })
+    try {
+      await link.refresh()
+      expect(await handler({ verb: 'summary', nodeId: 'reader', args: {} })).toContain('local-only-secret')
+      remote = true; await link.refresh()
+      const read = vi.spyOn(fsPromises, 'readFile')
+      try {
+        expect(await handler({ verb: 'summary', nodeId: 'reader', args: {} })).not.toContain('local-only-secret')
+        expect(await handler({ verb: 'terminal', nodeId: 'reader', args: {} })).not.toContain('pane of routing-target')
+        expect(read).not.toHaveBeenCalled(); expect(capture).not.toHaveBeenCalled()
+      } finally { read.mockRestore() }
+    } finally { capture.mockRestore(); await link.stop() }
+  })
+
   it('registers the read handler the route would otherwise refuse for', async () => {
     const { link, handler, registered } = start({
       ptyManager: fakePty(),

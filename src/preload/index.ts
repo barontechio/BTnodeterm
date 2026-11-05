@@ -5,6 +5,7 @@ import type { AlertSoundKind } from '../shared/alert-sound'
 import { resolveUiScale } from '../shared/ui-scale'
 import type { RecentConversationsRequest } from '../shared/recent-conversations'
 import type { OpenLinkChoice, OpenLinkPrompt } from '../shared/open-link'
+import type { OwnerConfirmation } from '../shared/owner-confirmation'
 import type {
   CanvasMutation,
   CanvasState,
@@ -132,6 +133,11 @@ const api: NodeTerminalApi = {
       ipcRenderer.on(channel, handler)
       return () => ipcRenderer.removeListener(channel, handler)
     },
+    onInputBlocked: (listener) => {
+      const handler = (_e: unknown, event: { nodeId: string; reason?: 'worktree-recovery' }) => listener(event)
+      ipcRenderer.on(IPC.ptyInputBlocked, handler)
+      return () => ipcRenderer.removeListener(IPC.ptyInputBlocked, handler)
+    },
     onExit: (sessionId, listener) => {
       const channel = IPC.ptyExit(sessionId)
       const handler = (_e: unknown, code: number) => listener(code)
@@ -190,11 +196,12 @@ const api: NodeTerminalApi = {
       ipcRenderer.on(IPC.workspaceExternalChange, h)
       return () => ipcRenderer.removeListener(IPC.workspaceExternalChange, h)
     },
-    // Deliberate no-op on the desktop shell: nothing here writes the project file on an agent's
-    // behalf. `HeadlessNodeFactory` is Server Edition only — the desktop's canvas-control verbs run
-    // through the renderer's own React Flow state, and its watcher path stays on onExternalChange.
-    // A real subscription would be dead wiring for a channel this main process never broadcasts.
-    onServerChange: (_cb: (project: Project) => void) => () => {},
+    // Host-owned orchestration publishes the persisted project without raising an outside-edit conflict.
+    onServerChange: (cb: (project: Project) => void) => {
+      const h = (_e: unknown, project: Project) => cb(project)
+      ipcRenderer.on(IPC.workspaceServerChange, h)
+      return () => ipcRenderer.removeListener(IPC.workspaceServerChange, h)
+    },
     // Quit / restart-to-update flush (src/main/renderer-flush.ts): answer with the request id once
     // the callback settles, whether it saved, had nothing to save, or failed.
     onFlushRequest: (cb: () => Promise<unknown> | void) => {
@@ -243,6 +250,18 @@ const api: NodeTerminalApi = {
     }
   },
   worktree: {
+    recovery: {
+      list: () => ipcRenderer.invoke(IPC.worktreeRecoveryList),
+      inspect: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryInspect, id),
+      keep: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryKeep, id),
+      recover: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryRepair, id),
+      discoverMissing: () => ipcRenderer.invoke(IPC.worktreeRecoveryDiscover),
+      discoverRemoval: () => ipcRenderer.invoke(IPC.worktreeRemovalDiscover),
+      removeClean: (id) => ipcRenderer.invoke(IPC.worktreeRemovalClean, id),
+      recoverMissing: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryMissing, id),
+      rebind: (id) => ipcRenderer.invoke(IPC.worktreeRecoveryRebind, id),
+      resume: (id, nodeId) => ipcRenderer.invoke(IPC.worktreeRecoveryResume, id, nodeId)
+    },
     // Wire carries exactly `(projectId, worktreePath)` — never the sharedPaths list: main reads it
     // itself by projectId and validates the path against the project's own git worktrees
     // (worktree-shared-paths-handlers.ts).
@@ -255,7 +274,9 @@ const api: NodeTerminalApi = {
   },
   settings: {
     load: () => ipcRenderer.invoke(IPC.settingsLoad),
-    save: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings)
+    save: (settings) => ipcRenderer.invoke(IPC.settingsSave, settings),
+    patch: (patch) => ipcRenderer.invoke(IPC.settingsPatch, patch),
+    onChanged: subscribe<[import('../shared/types').Settings]>(IPC.settingsChanged)
   },
   integrations: {
     status: () => ipcRenderer.invoke(IPC.integrationsStatus)
@@ -553,8 +574,21 @@ const api: NodeTerminalApi = {
       return () => ipcRenderer.removeListener(IPC.licenseChanged, handler)
     }
   },
+  projectLimit: {
+    // No arguments on purpose: core reads the deviceId and machine hash itself, so nothing the page
+    // sends can name another device or machine.
+    state: () => ipcRenderer.invoke(IPC.projectLimitState),
+    claim: () => ipcRenderer.invoke(IPC.projectLimitClaim),
+    onChange: (listener) => {
+      const handler = (_e: unknown, s: Parameters<typeof listener>[0]) => listener(s)
+      ipcRenderer.on(IPC.projectLimitChanged, handler)
+      return () => ipcRenderer.removeListener(IPC.projectLimitChanged, handler)
+    }
+  },
   announcements: {
-    fetch: () => ipcRenderer.invoke(IPC.announcementsFetch)
+    fetch: () => ipcRenderer.invoke(IPC.announcementsFetch),
+    popups: () => ipcRenderer.invoke(IPC.announcementsPopups),
+    popupImage: (sha256: string) => ipcRenderer.invoke(IPC.announcementsPopupImage, sha256)
   },
   usage: {
     fetch: (accountId?: string) => ipcRenderer.invoke(IPC.usageFetch, accountId),
@@ -654,6 +688,7 @@ const api: NodeTerminalApi = {
   // Our own mutation coming back is the ACK that tells us where it landed in that order; the renderer
   // recognizes it by `src` and does not re-apply it (src/shared/canvas-order.ts).
   canvas: {
+    onMutationRejected: subscribe<[string, string]>(IPC.canvasMutationRejected),
     mutate: (projectId, mutation) => ipcRenderer.send(IPC.canvasMut, projectId, mutation),
     onMutation: (listener) => {
       const handler = (
@@ -751,7 +786,8 @@ const api: NodeTerminalApi = {
       )
   },
   transcripts: {
-    search: (query: string) => ipcRenderer.invoke(IPC.transcriptSearch, query)
+    search: (query, scope) => scope === undefined ? ipcRenderer.invoke(IPC.transcriptSearch, query) :
+      ipcRenderer.invoke(IPC.transcriptSearchScoped, query, scope)
   },
   remoteHost: {
     start: () => ipcRenderer.invoke(IPC.remoteHostStart),
@@ -925,6 +961,18 @@ const api: NodeTerminalApi = {
   // Absolute path of a dropped/picked File (File.path was removed in Electron 30+).
   getPathForFile: (file: File) => webUtils.getPathForFile(file),
   userDataDir: () => ipcRenderer.invoke(IPC.appUserDataDir),
+  control: {
+    capabilities: () => ipcRenderer.invoke(IPC.controlCapabilities),
+    runLaunch: (nodeId, command) => ipcRenderer.invoke(IPC.controlRunLaunch, nodeId, command),
+    branchClaude: (nodeId, at) => ipcRenderer.invoke(IPC.controlBranchClaude, nodeId, at)
+  },
+  ownerConfirmation: {
+    connect: () => ipcRenderer.invoke(IPC.ownerConfirmationConnect),
+    disconnect: (epoch) => ipcRenderer.invoke(IPC.ownerConfirmationDisconnect, epoch),
+    decide: (answer) => ipcRenderer.invoke(IPC.ownerConfirmationDecide, answer),
+    onRequest: subscribe<[OwnerConfirmation]>(IPC.ownerConfirmationRequest),
+    onDismiss: subscribe<[string]>(IPC.ownerConfirmationDismiss)
+  },
   notify: (payload) => ipcRenderer.invoke(IPC.appNotify, payload),
   openNotificationSettings: () => ipcRenderer.invoke(IPC.appOpenNotificationSettings),
   onFocusNode: (listener) => {
@@ -967,6 +1015,7 @@ const api: NodeTerminalApi = {
     ipcRenderer.on(IPC.agentStatus, handler)
     return () => ipcRenderer.removeListener(IPC.agentStatus, handler)
   }, () => ipcRenderer.invoke(IPC.agentSubagentSnapshot), listener),
+  agentStatusSnapshot: () => ipcRenderer.invoke(IPC.agentStatusSnapshot),
   reportHibernated: (nodeId, on) => ipcRenderer.send(IPC.agentHibernated, { nodeId, on }),
   seedAgentIdentity: (entries) => ipcRenderer.send(IPC.agentSeedIdentity, entries),
   onAgentWake: (listener) => {

@@ -8,11 +8,11 @@ import { LiveLinkPopover, type PopoverAnchor } from './LiveLinkPopover'
  * R57 — THE rule for whether a surface may show THIS machine's live links for a node. The store is
  * keyed by node id and lists only links this machine created; a relay tab shows ANOTHER machine's
  * canvas, and a git-shared project opened both locally and over the relay carries the same node
- * ids. So only a node viewed through the LOCAL session shows the chip (and counts as "has a live
+ * ids. So only a node viewed through this host’s local or Server session shows the chip (and counts as "has a live
  * link" on a kanban card). Unknown (null) shows nothing.
  */
 export function showsLiveLinks(source: SessionSource | null): boolean {
-  return source === 'local'
+  return source === 'local' || source === 'server'
 }
 
 /**

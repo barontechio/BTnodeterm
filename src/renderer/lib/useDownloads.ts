@@ -1,3 +1,4 @@
+import { browserRemoteDownload } from './remote-transfers'
 // The download state a file surface shows: a strip of transfers, and a per-ROW mark on the entry
 // that was clicked. Shared by the Explorer drawer and the file-manager node so both report a
 // download the same way — the transport itself is `performDownload` (lib/download.ts).
@@ -80,8 +81,10 @@ export function useDownloads({
       setRowDl((m) => ({ ...m, [path]: 'running' }))
       const res = await performDownload(
         route,
-        { path, projectId, destDir },
+        { path, projectId, destDir, isDir },
         {
+          remoteTicket: (p, remotePath) => window.nodeTerminal.remoteTransfers
+            ? browserRemoteDownload(window.nodeTerminal.remoteTransfers, p, remotePath) : Promise.resolve(null),
           scp: (p, remotePath, dest) => window.nodeTerminal.sshProject.downloadFile(p, remotePath, dest),
           ticket: (p) => files.downloadTicket(p),
           hand: triggerBrowserDownload

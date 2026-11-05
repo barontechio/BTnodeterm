@@ -110,3 +110,22 @@ describe('core trust gate', () => {
     expect(parseDenied(JSON.stringify({ t: 'cast', method: TRUST_CONFIRM, args: [] }))).toBeNull()
   })
 })
+
+it('required browser pins must commit before open and persistence failure refuses', async () => {
+  let release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const onOpen = vi.fn(), onPinFailure = vi.fn()
+  const gate = createTrustGate({ peerKeyB64: 'HOST', sessionId: 'browser', sas: () => null,
+    sendConfirm: () => {}, onOpen, requirePin: true, onPinFailure, pins: { record: () => pending } })
+  gate.confirmHere()
+  gate.onTunnelText(JSON.stringify({ t: 'cast', method: TRUST_CONFIRM, args: [] }))
+  expect(gate.isOpen()).toBe(false); expect(onOpen).not.toHaveBeenCalled()
+  release(); await pending; await Promise.resolve()
+  expect(onOpen).toHaveBeenCalledOnce()
+  const refused = createTrustGate({ peerKeyB64: 'HOST', sessionId: 'failed', sas: () => null,
+    sendConfirm: () => {}, onOpen, requirePin: true, onPinFailure, pins: { record: async () => { throw new Error('quota') } } })
+  refused.confirmHere(); refused.onTunnelText(JSON.stringify({ t: 'cast', method: TRUST_CONFIRM, args: [] }))
+  await Promise.resolve(); await Promise.resolve()
+  expect(refused.isOpen()).toBe(false); expect(onPinFailure).toHaveBeenCalledOnce()
+  expect(onOpen).toHaveBeenCalledOnce()
+})

@@ -46,7 +46,7 @@ export interface SessionNameSweepDeps {
    *  satisfies the type. It is not optional in PRACTICE: without it a grok entry would be resolved
    *  by claude's reader, which scans `~/.claude/projects` for an id that can never be there — once a
    *  minute, per node, forever. */
-  resolve: (sessionId: string, accountId?: string, agentId?: string) => Promise<string | null>
+  resolve: (sessionId: string, accountId?: string, agentId?: string, nodeId?: string) => Promise<string | null>
   /** Publish a changed name into the mirror. */
   publish: (nodeId: string, name: string) => void
   /**
@@ -79,14 +79,21 @@ export async function sweepSessionNames(deps: SessionNameSweepDeps): Promise<num
     // A hand-renamed node keeps its name — the same rule the canvas poll applies (`titleAuto`).
     const node = deps.node(e.nodeId)
     if (node?.titleAuto === false) continue
+    const binding = { nodeId: e.nodeId, sessionId: e.sessionId, agentId: e.agentId, accountId: node?.accountId, hadNode: node !== undefined }
     let name: string | null = null
     try {
-      name = await deps.resolve(e.sessionId, node?.accountId, e.agentId)
+      name = await deps.resolve(e.sessionId, node?.accountId, e.agentId, e.nodeId)
     } catch {
       continue // transient read failure — try again next pass
     }
-    if (!name || name === e.name) continue
-    deps.publish(e.nodeId, name)
+    // Async readers must not rename a replacement session/account or override a manual title.
+    const matches = deps.entries().filter((entry) => entry.nodeId === binding.nodeId)
+    const latest = matches.length === 1 ? matches[0] : undefined
+    const current = deps.node(binding.nodeId)
+    if (!name || !latest || latest.sessionId !== binding.sessionId || latest.agentId !== binding.agentId ||
+      current?.accountId !== binding.accountId || (current !== undefined) !== binding.hadNode ||
+      current?.titleAuto === false || name === latest.name) continue
+    deps.publish(binding.nodeId, name)
     changed++
   }
   return changed
@@ -100,10 +107,18 @@ export const SESSION_NAME_SWEEP_MS = 60_000
 export function startSessionNameSweep(
   deps: SessionNameSweepDeps & { onChanged?: () => void; intervalMs?: number }
 ): () => void {
+  let stopped = false
+  let running = false
   const run = (): void => {
-    void sweepSessionNames(deps).then((n) => {
-      if (n > 0) deps.onChanged?.()
-    })
+    if (stopped || running) return
+    running = true
+    void (async () => {
+      try {
+        const n = await sweepSessionNames({ ...deps, publish: (id, name) => { if (!stopped) deps.publish(id, name) } })
+        if (!stopped && n > 0) deps.onChanged?.()
+      } catch { /* a background publisher failure must not become an unhandled rejection */ }
+      finally { running = false }
+    })()
   }
   const timer = setInterval(run, deps.intervalMs ?? SESSION_NAME_SWEEP_MS)
   timer.unref?.()
@@ -111,6 +126,7 @@ export function startSessionNameSweep(
   const first = setTimeout(run, 5_000)
   first.unref?.()
   return () => {
+    stopped = true
     clearInterval(timer)
     clearTimeout(first)
   }

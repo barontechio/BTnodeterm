@@ -111,7 +111,7 @@ describe('LiveLinksSection', () => {
     useEntitlement.setState({ isPremium: false })
     render()
     expect(host.textContent).toContain(
-      'Live links need a Pro license on this server — not available in the Server Edition yet'
+      'Live links require licensing to be enabled in this server’s host configuration.'
     )
     expect(buttons('Upgrade to Pro')).toEqual([])
   })

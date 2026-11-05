@@ -153,7 +153,7 @@ export function FilesNode({ id, data, selected }: NodeProps<CanvasNode>) {
   /** Same decision the Explorer drawer makes (lib/download.ts), read off THIS node's filesystem:
    *  an SSH host's files come down over scp, a browser tab's over an HTTP ticket, and a desktop
    *  local listing (already on this machine) or a relay peer's offers no Download at all. */
-  const route = downloadRoute({ browser: isBrowserRuntime(), ssh: isSshFs, source })
+  const route = downloadRoute({ browser: isBrowserRuntime(), ssh: isSshFs, source, remoteTransfers: !!api.remoteTransfers })
   const { downloads, rowDl, download, downloadTo, dismiss } = useDownloads({
     route,
     // The same project `fs` lists through: an sshFs node lives in the active project.

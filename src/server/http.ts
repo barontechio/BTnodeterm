@@ -1,3 +1,5 @@
+import { browserTeamConnectPolicy } from './browser-join-policy'
+import type { DevelopmentPreviewTransport } from './development-preview'
 // Plain node:http request handler for the server edition.
 // Deliberately NOT Fastify: the handler surface is tiny (a handful of auth
 // routes + static renderer serving), it must be embeddable in an existing
@@ -12,6 +14,10 @@ import { noteProxyRefusal, proxyAuthDecision, type TrustProxyConfig } from './pr
 import { loginClientKey } from './client-address'
 import { sameOriginRequest } from './origin'
 import { handleDownload } from './download'
+import { handleMedia } from './media'
+import type { MediaReferences } from '../core/media-references'
+import type { WebPreviews } from '../core/web-previews'
+import { handleWebPreview, previewHost } from './web-preview'
 import type { DownloadTickets } from '../core/download-tickets'
 
 export const SESSION_COOKIE = 'nt_session'
@@ -56,6 +62,7 @@ const COMPRESS_CACHE_MAX_BYTES = 32 * 1024 * 1024
 
 export interface HttpHandlerOpts {
   auth: Auth
+  webPush?: import('./web-push').ServerWebPush
   rendererDir: string
   /**
    * Reverse-proxy SSO trust (issue #29): when set, a request whose TCP peer is inside the
@@ -67,6 +74,10 @@ export interface HttpHandlerOpts {
   /** Ticket store backing `GET /download` (Explorer file downloads). Omitted in tests that don't
    *  exercise it — the route then simply doesn't exist. */
   downloadTickets?: DownloadTickets
+  mediaReferences?: MediaReferences
+  remoteTransfers?: import('./remote-transfer-http').RemoteTransferHttp
+  webPreviews?: WebPreviews
+  developmentPreviews?: DevelopmentPreviewTransport
   /**
    * NODETERM_PUBLIC_ORIGIN (an https origin, normalized). When set the session cookie is always
    * `Secure`, every response carries HSTS, and an `Origin` equal to it passes the same-origin check
@@ -396,8 +407,8 @@ async function serveStatic(
   const identity = async (): Promise<Buffer> => {
     const raw = await fs.promises.readFile(filePath)
     // CSP rewrite ONLY on index.html: give the WS client a connect-src. `'self'` covers a
-    // same-origin ws:/wss: URL (CSP3 matches ws↔http and wss↔https for 'self'), which is the only
-    // socket the bridge opens — `ws: wss:` allowed a socket to ANY host (S6).
+    // same-origin ws:/wss: URL. Hosted team joins additionally use only the operator-configured
+    // relay origin, never the unrestricted `ws: wss:` schemes or a caller-supplied CSP source.
     if (!isIndex) return raw
     const html = raw.toString('utf8')
     const marker = "default-src 'self';"
@@ -410,7 +421,8 @@ async function serveStatic(
       )
       return raw
     }
-    return Buffer.from(html.replace(marker, "default-src 'self'; connect-src 'self';"))
+    return Buffer.from(html.replace(marker, `default-src 'self'; ${browserTeamConnectPolicy()}`)
+      .replace("frame-src 'self' blob:", "frame-src 'self' blob: https: http:"))
   }
 
   const enc =
@@ -440,7 +452,7 @@ async function serveStatic(
 export function createHttpHandler(
   opts: HttpHandlerOpts
 ): (req: http.IncomingMessage, res: http.ServerResponse) => void {
-  const { auth, rendererDir, trustProxy, downloadTickets, publicOrigin } = opts
+  const { auth, rendererDir, trustProxy, downloadTickets, mediaReferences, webPreviews, publicOrigin } = opts
   let warnedNoPublicOrigin = false
 
   return function handler(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -466,7 +478,17 @@ export function createHttpHandler(
     const pathname = url.pathname
     const method = req.method || 'GET'
 
-    // Every response, before any route can answer (S6, S5).
+    if (opts.developmentPreviews?.ownsHost(req.headers.host ?? '')) {
+      await opts.developmentPreviews.handle(req, res)
+      return
+    }
+
+    if (webPreviews && previewHost(req, webPreviews.origin)) {
+      await handleWebPreview(req, res, webPreviews)
+      return
+    }
+
+    // Every application response (S6, S5); the isolated preview host sets its own policy above.
     res.setHeader('X-Frame-Options', 'DENY')
     res.setHeader('Content-Security-Policy', FRAME_CSP)
     res.setHeader('X-Content-Type-Options', 'nosniff')
@@ -478,6 +500,8 @@ export function createHttpHandler(
         `[nodeterm-server] requests are arriving for a non-loopback host name but NODETERM_PUBLIC_ORIGIN is not set: the session cookie is marked Secure only when your proxy sends X-Forwarded-Proto: https, and no HSTS header is sent. Set NODETERM_PUBLIC_ORIGIN to the https address you open in the browser (for example https://term.example.com). See docs/SERVER.md.`
       )
     }
+
+    if (pathname === '/web-preview') { res.writeHead(404); res.end(); return }
 
     const decision =
       trustProxy !== undefined ? proxyAuthDecision(trustProxy, req.headers, req.socket.remoteAddress) : 'none'
@@ -495,6 +519,19 @@ export function createHttpHandler(
     // Refused BEFORE any rate-limit slot is taken, so a refused post costs the lockout nothing.
     if (method === 'POST' && pathname.startsWith('/auth/') && !sameOriginRequest(req.headers, publicOrigin)) {
       sendJson(res, 403, { error: 'cross_origin' })
+      return
+    }
+
+    if (pathname.startsWith('/auth/web-push/')) {
+      if (!opts.webPush) { sendJson(res, 503, { available: false, error: 'Web Push unavailable.' }); return }
+      await opts.webPush.handle(req, res, sessionTokenFromCookie(req.headers.cookie), publicOrigin)
+      return
+    }
+
+    // A minimal inert worker may update without login. No fetch handler or application data.
+    if (pathname === '/web-push-sw.js' && method === 'GET') {
+      res.setHeader('Cache-Control', 'no-store')
+      await serveStatic(req, res, rendererDir, pathname)
       return
     }
 
@@ -625,7 +662,12 @@ export function createHttpHandler(
     }
 
     // Authenticated: an Explorer download redeems its one-shot ticket here (see download.ts).
+    if (opts.remoteTransfers && url.pathname === '/ssh-transfer') {
+      const { handleRemoteTransfer } = await import('./remote-transfer-http')
+      if (await handleRemoteTransfer(req, res, url, opts.remoteTransfers, proxyAuthed ? undefined : token, publicOrigin)) return
+    }
     if (downloadTickets && (await handleDownload(req, res, url, downloadTickets))) return
+    if (mediaReferences && (await handleMedia(req, res, url, mediaReferences))) return
 
     // Authenticated: serve static renderer files (index.html fallback for '/').
     await serveStatic(req, res, rendererDir, pathname)

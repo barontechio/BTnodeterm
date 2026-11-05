@@ -76,6 +76,7 @@
  * make the only verb whose code and table disagree.
  */
 const STORE_ANSWERED_VERBS: ReadonlySet<string> = new Set([
+  'capabilities',
   'list',
   'send',
   'reply',

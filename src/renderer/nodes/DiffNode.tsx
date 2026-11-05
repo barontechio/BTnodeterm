@@ -13,6 +13,7 @@ import { useSession } from '../session/session'
 import type { CanvasNode } from '../state/workspace'
 import { tooLargeSize, formatBytes } from '@shared/fsLimits'
 import { MaximizeButton } from './MaximizeButton'
+import { RetainedFileText, useRetainedFileText } from './RetainedFileText'
 
 /**
  * A Monaco diff editor node for a changed file. Staged diff = HEAD vs index;
@@ -42,11 +43,13 @@ export function DiffNode({ id, data, selected }: NodeProps<CanvasNode>) {
   const [loadError, setLoadError] = useState('')
   const cwd = (data.cwd as string) ?? ''
   const rel = (data.filePath as string) ?? ''
+  const loadedPath = useRef(`${cwd}/${rel}`)
   const staged = !!data.diffStaged
   const commitOid = (data.commitOid as string | undefined) || ''
   // Set by a worktree removal sweep (`displacedByWorktree` / `resetDisplacedCwd` in Canvas.tsx):
   // the repo this diff was scoped to no longer exists, and there is nothing to re-point it at.
   const fileMissing = !!data.fileMissing
+  const retainedText = useRetainedFileText(fileMissing, originalRef, modifiedRef)
 
   // A worktree removal can mark `fileMissing` on a node that is ALREADY mounted (open, live diff
   // editor). The main effect below only runs once on mount, so it can't react to that — free the
@@ -162,6 +165,7 @@ export function DiffNode({ id, data, selected }: NodeProps<CanvasNode>) {
             <span className="editor-node__loading">
               This file’s worktree was removed — it no longer exists.
             </span>
+            <RetainedFileText text={retainedText} source={loadedPath.current} />
           </div>
         </div>
       ) : loadError ? (

@@ -38,6 +38,7 @@ export interface LiveLinkTarget {
 export interface LiveLinkAvailabilityFacts {
   /** `isBrowserRuntime()` — the Server Edition has no license layer yet (R43). */
   serverEdition: boolean
+  serverLicenseEnabled?: boolean
   /** The session the node's PROJECT belongs to. A relay tab's node is another machine's terminal. */
   source: SessionSource | null
   /** This machine's active links (the store's list length). */
@@ -46,7 +47,7 @@ export interface LiveLinkAvailabilityFacts {
 
 /** Why a live link cannot be created for a node seen through these facts, or null. */
 export function liveLinkUnavailable(f: LiveLinkAvailabilityFacts): string | null {
-  return shareDisabledReason({ serverEdition: f.serverEdition, relayTab: f.source === 'relay', activeLinks: f.activeLinks })
+  return shareDisabledReason({ serverEdition: f.serverEdition, serverLicenseEnabled: f.serverLicenseEnabled, relayTab: f.source === 'relay', activeLinks: f.activeLinks })
 }
 
 export interface LiveLinkOpenDeps {
@@ -293,6 +294,7 @@ export function liveLinkCommands(o: {
   entitled: boolean
   /** `isBrowserRuntime()`: no license layer there (R43), so nothing to stop. */
   serverEdition: boolean
+  serverLicenseEnabled?: boolean
   icon: ReactNode
   chatIcon: ReactNode
   manage: () => void
@@ -320,7 +322,7 @@ export function liveLinkCommands(o: {
           }
         ]
       : []),
-    ...(showsStopAll({ serverEdition: o.serverEdition, entitled: o.entitled, activeLinks: o.activeLinks })
+    ...(showsStopAll({ serverEdition: o.serverEdition, serverLicenseEnabled: o.serverLicenseEnabled, entitled: o.entitled, activeLinks: o.activeLinks })
       ? [
           {
             id: 'live-links-stop-all',

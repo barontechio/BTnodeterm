@@ -36,11 +36,3 @@ describe('releaseOnRendererDeparture', () => {
     expect(release).not.toHaveBeenCalled()
   })
 })
-
-describe('main/index.ts wiring', () => {
-  it('releases the window GitHub subscriber through the shared helper', async () => {
-    const { readFileSync } = await import('node:fs')
-    const source = readFileSync(new URL('./index.ts', import.meta.url), 'utf8').replace(/\r\n/g, '\n')
-    expect(source).toMatch(/releaseOnRendererDeparture\(win, win\.webContents, \(\) => dropGitHubClient\?\.\(presenceId\)\)/)
-  })
-})

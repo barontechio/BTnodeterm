@@ -3,6 +3,8 @@ import { IPC } from '../shared/ipc'
 import { initPlatform, resetPlatformForTests } from './platform'
 import { fakePlatform, type FakePlatform } from './platform-fake'
 import { DEFAULT_SETTINGS } from '../shared/types'
+import { OwnerLifetimes } from './owner-lifetimes'
+import { WorktreeRecoveryDispatch } from './worktree-recovery-dispatch'
 
 const backend = vi.hoisted(() => ({
   supported: vi.fn(() => true),
@@ -122,6 +124,146 @@ describe('PtyManager session-host contracts', () => {
     manager = new PtyManagerCtor()
     return manager
   }
+
+  describe('acknowledged host worktree recycling', () => {
+    function deferred() {
+      let resolve!: () => void
+      return { promise: new Promise<void>((done) => { resolve = done }), resolve: () => resolve() }
+    }
+    it('requires the actual worktree barrier permit rather than an action label or lookalike', async () => {
+      const m = await makeManager()
+      await m.runNodeActions(['member'], 'worktree', { current: () => true }, async (permit) => {
+        await expect(m.recycleWorktreeMember('member', permit)).rejects.toThrow('invalid')
+      })
+      await m.runWorktreeAction(['member'], { current: () => true }, async (permit) => {
+        await expect(m.recycleWorktreeMember('member', { ...permit })).rejects.toThrow('invalid')
+        await expect(m.recycleWorktreeMember('outside', permit)).rejects.toThrow('invalid')
+      })
+      const started = deferred(); const done = deferred()
+      let held!: import('./node-execution').NodeExecutionBatchPermit
+      const action = m.runWorktreeAction(['member'], { current: () => true }, async (permit) => {
+        held = permit; started.resolve(); await done.promise
+      })
+      await started.promise
+      try { await expect(m.recycleWorktreeMember('member', held)).rejects.toThrow('busy') }
+      finally { done.resolve() }
+      await action
+      expect(backend.hasSession).not.toHaveBeenCalled(); expect(backend.kill).not.toHaveBeenCalled()
+    })
+
+    it('retains quarantine independently, then acknowledges teardown under the explicit recovery permit', async () => {
+      const shim = fakeSessionHostPty(); backend.create.mockReturnValue(shim)
+      const m = await makeManager(); await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      const dispatch = new WorktreeRecoveryDispatch({ isNodePending: (id) => id === 'member' })
+      m.setNodeExecutionAdmission((id, permit) => dispatch.assertAllowed(id, permit))
+      await m.runWorktreeAction(['member'], { current: () => true }, async (permit) => {
+        await expect(m.recycleWorktreeMember('member', permit)).rejects.toThrow('recovery-required')
+        expect(backend.kill).not.toHaveBeenCalled()
+        await dispatch.withRecovery(permit, () => m.recycleWorktreeMember('member', permit))
+      })
+      expect(backend.kill).toHaveBeenCalledExactlyOnceWith('nt-member', { reserveReplacement: true, requireV2: true })
+      expect(m.nodeExecutionIdentity('member')).toBeUndefined()
+      expect(m.writeHeadless('member', 'still pending recovery')).toBe(false)
+      expect(shim.destroy).toHaveBeenCalledOnce(); expect(shim.resume).toHaveBeenCalled()
+    })
+
+    it('retains claims through a pending probe after owner departure and sends no later kill', async () => {
+      const shim = fakeSessionHostPty(); backend.create.mockReturnValue(shim)
+      const m = await makeManager(); await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      const original = m.nodeExecutionIdentity('member'); const owners = new OwnerLifetimes()
+      const started = deferred(); const done = deferred()
+      backend.hasSession.mockImplementationOnce(async () => { started.resolve(); await done.promise; return true })
+      const work = m.runWorktreeAction(['member'], { current: () => true, owner: owners.get(1, () => true) },
+        (permit) => m.recycleWorktreeMember('member', permit))
+      void work.catch(() => {}); await started.promise; owners.forget(1)
+      await expect(m.runNodeAction('member', 'write', { current: () => true }, () => {})).rejects.toThrow('busy')
+      await expect(m.createHeadless({ persistKey: 'new-node', cols: 80, rows: 24 })).rejects.toThrow('busy')
+      done.resolve(); await expect(work).rejects.toThrow('expired')
+      expect(backend.kill).not.toHaveBeenCalled(); expect(shim.kill).not.toHaveBeenCalled()
+      expect(shim.destroy).not.toHaveBeenCalled()
+      expect(m.nodeExecutionIdentity('member')).toBe(original)
+    })
+
+    it('keeps the original index and quarantine after an uncertain backend acknowledgement', async () => {
+      const shim = fakeSessionHostPty(); backend.create.mockReturnValue(shim)
+      const m = await makeManager(); await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      const original = m.nodeExecutionIdentity('member')
+      const dispatch = new WorktreeRecoveryDispatch({ isNodePending: (id) => id === 'member' })
+      m.setNodeExecutionAdmission((id, permit) => dispatch.assertAllowed(id, permit))
+      backend.hasSession.mockResolvedValue(true); backend.kill.mockRejectedValue(new Error('kill acknowledgement lost'))
+      await expect(m.runWorktreeAction(['member'], { current: () => true }, (permit) =>
+        dispatch.withRecovery(permit, () => m.recycleWorktreeMember('member', permit)))).rejects.toThrow('acknowledgement lost')
+      expect(m.nodeExecutionIdentity('member')).toBe(original); expect(shim.kill).not.toHaveBeenCalled()
+      expect(shim.destroy).not.toHaveBeenCalled()
+      expect(backend.kill).toHaveBeenCalledOnce(); expect(m.writeHeadless('member', 'unsafe retry')).toBe(false)
+    })
+
+    it('waits for an already dispatched kill after departure without publishing a replacement', async () => {
+      const shim = fakeSessionHostPty(); backend.create.mockReturnValue(shim)
+      const m = await makeManager(); await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      const owners = new OwnerLifetimes(); const started = deferred(); const done = deferred()
+      backend.kill.mockImplementationOnce(async () => { started.resolve(); await done.promise })
+      const work = m.runWorktreeAction(['member'], { current: () => true, owner: owners.get(1, () => true) },
+        (permit) => m.recycleWorktreeMember('member', permit))
+      void work.catch(() => {}); await started.promise; owners.forget(1)
+      await expect(m.runNodeAction('member', 'restart', { current: () => true }, () => {})).rejects.toThrow('busy')
+      await expect(m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })).rejects.toThrow('busy')
+      done.resolve(); await expect(work).rejects.toThrow('expired')
+      expect(backend.kill).toHaveBeenCalledOnce(); expect(backend.create).toHaveBeenCalledOnce()
+      expect(shim.destroy).not.toHaveBeenCalled()
+    })
+
+    it('detaches protocol-owned lifecycle continuations while keeping the application transaction scoped', async () => {
+      const m = await makeManager()
+      await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+      const resume = deferred(); let late!: Promise<boolean>
+      backend.hasSession.mockImplementationOnce(async () => {
+        late = resume.promise.then(() => m.writeHeadless('outside', 'protocol callback')); return true
+      })
+      await m.runWorktreeAction(['member'], { current: () => true }, (permit) => m.recycleWorktreeMember('member', permit))
+      resume.resolve(); expect(await late).toBe(true)
+    })
+
+    it('refuses a saved disconnected remote target before probing or ending any local backend', async () => {
+      const m = await makeManager()
+      m.setRemoteNodeOwner((id) => id === 'member' ? { projectId: 'ssh-project', hostKey: 'owner@remote' } : null)
+      await expect(m.runWorktreeAction(['member'], { current: () => true }, (permit) => m.recycleWorktreeMember('member', permit)))
+        .rejects.toThrow('Remote terminals')
+      expect(backend.hasSession).not.toHaveBeenCalled(); expect(backend.kill).not.toHaveBeenCalled()
+    })
+
+    it('delivers deferred recycle notices outside the expired action context', async () => {
+      const m = await makeManager()
+      await m.createHeadless({ persistKey: 'member', cols: 80, rows: 24 })
+      await m.createHeadless({ persistKey: 'outside', cols: 80, rows: 24 })
+      const internal = m as unknown as { fireRecycled(nodeId: string, ready: boolean): void }
+      const original = internal.fireRecycled.bind(m); let delivered: boolean | undefined
+      const notification = vi.spyOn(internal, 'fireRecycled').mockImplementation((id, ready) => {
+        delivered = m.writeHeadless('outside', 'physical notification'); original(id, ready)
+      })
+      vi.useFakeTimers()
+      try {
+        await m.runWorktreeAction(['member'], { current: () => true }, (permit) => m.recycleWorktreeMember('member', permit))
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(notification).toHaveBeenCalledWith('member', false); expect(delivered).toBe(true)
+      } finally { vi.useRealTimers() }
+    })
+
+    it('hands the replacement slot to the Core while a viewer waits for that exact new generation', async () => {
+      const m = await makeManager(); m.registerIpc()
+      const options = { persistKey: 'member', cols: 80, rows: 24 }
+      await host.handlers[IPC.ptyCreate](7, options)
+      await m.runWorktreeAction(['member'], { current: () => true }, (permit) => m.recycleWorktreeMember('member', permit))
+      let joined = false
+      const viewer = (host.handlers[IPC.ptyCreate](7, options) as Promise<unknown>).then(() => { joined = true })
+      await Promise.resolve(); expect(joined).toBe(false)
+      const replacement = await m.createHeadless(options)
+      await viewer
+      expect(replacement.fresh).toBe(true); expect(joined).toBe(true)
+      expect(backend.create).toHaveBeenCalledTimes(2)
+    })
+  })
 
   describe('shared size follows the backend (issue #914)', () => {
     function sizesSent(sessionId: string): Array<{ to: number | 'broadcast'; size: unknown }> {

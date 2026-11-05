@@ -51,6 +51,7 @@ function fakeLocalApi() {
     githubControl: { NAME: 'local-github-control' },
     dialog: { NAME: 'local-dialog' },
     license: { NAME: 'local-license' },
+    projectLimit: { NAME: 'local-project-limit' },
     pty: { onData: ptyOnData },
     claude: { cliCaps: () => Promise.resolve({}), readTranscript: () => Promise.reject() },
     relayClient: { disconnect: vi.fn() }
@@ -87,16 +88,34 @@ describe('buildRelayApi', () => {
 
   it('keeps app-global namespaces as the LOCAL window.nodeTerminal references', () => {
     const { local } = fakeLocalApi()
+    local.notify = vi.fn(async () => 'shown' as const)
+    local.onFocusNode = vi.fn(() => () => {})
     ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
     const t = new FakeTransport()
     const { api } = buildRelayApi('conn-1', t)
 
     // Your update banner, clipboard, settings and license are YOURS, not the host's.
+    expect(api.notify).toBe(local.notify)
+    expect(api.onFocusNode).toBe(local.onFocusNode)
     expect(api.updates).toBe(local.updates)
     expect(api.clipboard).toBe(local.clipboard)
     expect(api.settings).toBe(local.settings)
     expect(api.license).toBe(local.license)
+    // The free-project allowance is THIS machine's; the host refuses `projectLimit:*` from a peer.
+    expect(api.projectLimit).toBe(local.projectLimit)
     expect(api.githubControl).toBe(local.githubControl)
+  })
+
+  it('does not expose the viewer desktop owner actions under remote node ids', async () => {
+    const { local } = fakeLocalApi(); const branch = vi.fn(); const runLaunch = vi.fn()
+    local.control = { capabilities: async () => null, branchClaude: branch, runLaunch }
+    local.worktree = { materializeShared: vi.fn(), recovery: { list: vi.fn(), inspect: vi.fn(), keep: vi.fn() } }
+    ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+    const t = new FakeTransport(); const { api } = buildRelayApi('conn-1', t)
+    expect(await api.control!.capabilities()).toBeNull()
+    expect(api.control!.branchClaude).toBeUndefined(); expect(api.control!.runLaunch).toBeUndefined()
+    expect(api.worktree.recovery).toBeUndefined()
+    expect(branch).not.toHaveBeenCalled(); expect(runLaunch).not.toHaveBeenCalled(); expect(t.sent).toEqual([])
   })
 
   it('routes GitHub issue data to the host while keeping control local', () => {
@@ -393,4 +412,65 @@ describe('buildRelayApi — canvasAuthority (which projects publish even when al
     expect(api.canvasAuthority.assumeAllUntilAnswered).toBe(false)
     expect(t.sent).toEqual([])
   })
+})
+
+it('browser joined API cannot fall through to the owning local Server administration', async () => {
+  const { markBrowserTeamConnection, forgetBrowserTeamConnection } = await import('./browser-team/connections')
+  const { local } = fakeLocalApi()
+  const saved = (globalThis as Record<string, unknown>).window
+  const admin = vi.fn(() => Promise.reject(new Error('local administration reached')))
+  Object.assign(local, {
+    ssh: { list: admin }, remoteTransfers: { prepare: admin }, media: { allow: admin }, developmentPreviews: { list: admin },
+    settings: { load: admin, save: admin }, worktree: { create: admin, recovery: {} },
+    githubControl: { status: admin }, transcripts: { search: admin }
+  })
+  ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+  Object.assign(window, { addEventListener: vi.fn(), removeEventListener: vi.fn() })
+  markBrowserTeamConnection('browser-isolation')
+  try {
+    const handle = buildRelayApi('browser-isolation', new FakeTransport(), { hosted: true })
+    expect(await handle.api.control!.capabilities()).toBeNull()
+    await expect(handle.api.ssh.list()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(handle.api.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(handle.api.githubControl.status()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(handle.api.worktree.recovery).toBeUndefined()
+    expect(handle.api.remoteTransfers).toBeUndefined()
+    expect(await handle.api.settings.load()).toHaveProperty('fontSize')
+    const retired = buildRelayApi('browser-team-retired', new FakeTransport())
+    expect(retired.api.hosted).toBeDefined()
+    expect(await retired.api.canvasAuthority.governed()).toEqual([])
+    await expect(retired.api.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(admin).not.toHaveBeenCalled()
+  } finally {
+    forgetBrowserTeamConnection('browser-isolation')
+    ;(globalThis as Record<string, unknown>).window = saved
+  }
+})
+
+it('offline browser relay API never inherits owning Server administration; Desktop retains its contract', async () => {
+  const runtime = await import('./runtime')
+  const { offlineRelayApi } = await import('../session/offline-relay-session')
+  const { local } = fakeLocalApi()
+  const saved = (globalThis as Record<string, unknown>).window
+  const admin = vi.fn(async () => undefined)
+  Object.assign(local, { settings: { save: admin }, ssh: { list: admin }, remoteTransfers: { prepare: admin } })
+  ;(globalThis as Record<string, unknown>).window = { nodeTerminal: local }
+  const shell = vi.spyOn(runtime, 'isBrowserRuntime').mockReturnValue(true)
+  try {
+    const offline = offlineRelayApi()
+    await expect(offline.settings.save({} as never)).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    await expect(offline.ssh.list()).rejects.toMatchObject({ code: E_UNSUPPORTED })
+    expect(offline.settings).not.toBe(local.settings)
+    expect(offline.ssh).not.toBe(local.ssh)
+    expect(offline.remoteTransfers).toBeUndefined()
+    expect(admin).not.toHaveBeenCalled()
+    shell.mockReturnValue(false)
+    const native = offlineRelayApi()
+    expect(native.settings).toBe(local.settings)
+    expect(native.ssh).toBe(local.ssh)
+    expect(native.remoteTransfers).toBeUndefined()
+  } finally {
+    shell.mockRestore()
+    ;(globalThis as Record<string, unknown>).window = saved
+  }
 })

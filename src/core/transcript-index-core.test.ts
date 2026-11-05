@@ -161,4 +161,11 @@ describe('planRefresh', () => {
     expect(plan.keep.map((e) => e.sessionId)).toEqual(['a'])
     expect(plan.toRead).toEqual([])
   })
+
+  it('never reuses another account copy of the same session id and mtime', () => {
+    const inA = { ...prior[0], transcriptPath: '/account-a/a.jsonl', text: 'Account A' }
+    const inB = { ...prior[0], transcriptPath: '/account-b/a.jsonl', text: 'Account B' }
+    expect(planRefresh([inA, inB], [inA, inB]).keep).toEqual([inA, inB])
+    expect(planRefresh([inA], [inB])).toEqual({ keep: [], toRead: [inB] })
+  })
 })

@@ -76,8 +76,10 @@ describe('Canvas live-link wiring', () => {
     expect(callback('readLocalPersistence')).toContain('localSession.api.pty.tmuxStatus()')
   })
 
-  it('R43: no Upgrade button from the dialog on the Server Edition', () => {
-    expect(src).toContain("onUpgrade={isBrowserRuntime() ? undefined : () => void useEntitlement.getState().upgrade('pro')}")
+  it('offers checkout only for a configured Server license layer', () => {
+    expect(src).toContain('onUpgrade={isBrowserRuntime() && !serverLicenseEnabled ? undefined :')
+    expect(src).toContain('serverLicenseEnabled: useEntitlement.getState().serverLicenseEnabled')
+    expect(src).toContain("useEntitlement.getState().upgrade('pro').catch")
   })
 
   it('R48: the palette\'s Stop all goes through the confirm; revoke-all runs nowhere else', () => {

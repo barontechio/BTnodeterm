@@ -36,13 +36,13 @@ function sources(dir: string, out: string[] = []): string[] {
  * temp it owns and checks the byte count before anything is published — or is not a remote write.
  */
 const ALLOWED = new Map<string, string>([
-  ['main/remote-atomic-write.ts', 'the helper: `cat` into its own temp, byte count checked, then rename'],
+  ['core/remote-atomic-write.ts', 'the helper: `cat` into its own temp, byte count checked, then rename'],
   [
     'core/agents/hooks/remote-settings-file.ts',
     "the user-file transaction: `cat` into its own stage dir, byte count checked, then rename"
   ],
   [
-    'main/remote-ssh/legacy-hook-endpoint.ts',
+    'core/remote-ssh/legacy-hook-endpoint.ts',
     'the endpoint migration: `cat` into its own stage, byte count and digest checked, then rename'
   ],
   ['main/ptmx-limit.ts', 'a LOCAL heredoc under the admin prompt; the body is in the command, not on stdin']

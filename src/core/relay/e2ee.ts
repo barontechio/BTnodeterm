@@ -3,7 +3,9 @@
 // Pure functions over NaCl box (Curve25519 + XSalsa20-Poly1305): no sockets, no
 // Electron. The box format is `nonce ‖ ciphertext ‖ mac` so an interoperable peer
 // can be implemented against the same wire format.
-import { hkdfSync } from 'node:crypto'
+import { hkdf } from '@noble/hashes/hkdf'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToB64, b64ToBytes, legacyB64ToBytes } from './bytes'
 import nacl from 'tweetnacl'
 
 export type KeyPair = {
@@ -16,7 +18,7 @@ export function genKeyPair(): KeyPair {
 }
 
 export function publicKeyToB64(key: Uint8Array): string {
-  return Buffer.from(key).toString('base64')
+  return bytesToB64(key)
 }
 
 /**
@@ -38,11 +40,11 @@ export function canonicalB64ToBytes(b64: unknown, bytes: number, what: string): 
   if (b64.length !== 4 * Math.ceil(bytes / 3)) {
     throw new Error(`Invalid ${what}: expected ${bytes} bytes of canonical base64`)
   }
-  const out = Buffer.from(b64, 'base64')
+  const out = b64ToBytes(b64)
   if (out.length !== bytes) {
     throw new Error(`Invalid ${what}: expected ${bytes} bytes, got ${out.length}`)
   }
-  if (out.toString('base64') !== b64) throw new Error(`Invalid ${what}: not canonical base64`)
+  if (bytesToB64(out) !== b64) throw new Error(`Invalid ${what}: not canonical base64`)
   return Uint8Array.from(out)
 }
 
@@ -108,7 +110,7 @@ export function isUsablePeerKeyB64(b64: unknown): boolean {
 // characters and truncates, so a corrupt/short blob would otherwise decode to a short-but-accepted
 // key that only blows up ("bad secret key size") deep inside a later nacl.box call.
 export function secretKeyFromB64(b64: string): Uint8Array {
-  const key = Uint8Array.from(Buffer.from(b64, 'base64'))
+  const key = legacyB64ToBytes(b64)
   if (key.length !== nacl.box.secretKeyLength) {
     throw new Error(`Invalid secret key: expected ${nacl.box.secretKeyLength} bytes, got ${key.length}`)
   }
@@ -164,7 +166,7 @@ export function deriveSessionKey(
   salt.set(hostNonce)
   salt.set(clientNonce, hostNonce.length)
   const info = new TextEncoder().encode('nodeterm-relay-session-v2')
-  const out = hkdfSync('sha256', baseShared, salt, info, 32)
+  const out = hkdf(sha256, baseShared, salt, info, 32)
   return new Uint8Array(out)
 }
 

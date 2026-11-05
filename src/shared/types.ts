@@ -1,6 +1,7 @@
 import type { ChatPromptResult, EmptyPromptResult, TextDeliveryResult } from './text-delivery'
 import type { PushWebhookMinted, PushWebhookResult, PushWebhookTokenInfo } from './push-webhook'
 import type { IdentitySeedEntry } from './agent-identity-seed'
+import type { AgentStatusSnapshotEntry } from './agent-status-snapshot'
 import type { WhiteboardFile, WhiteboardSaveResult } from './whiteboard'
 import type { PrWaitHold } from './pr-wait'
 import type { SessionBackend } from './session-backend'
@@ -30,6 +31,7 @@ import type { ProjectKanbanGitHub } from './github-issues'
 import type { KanbanPullAutoMove, KanbanPullLinks } from './kanban-pull-links'
 import type { BoardDispatch } from './board-dispatch'
 import type { CodexAccount } from './codex-account'
+import type { ClaimResult, ProjectLimitState } from './project-limit'
 import type { NotchAlign } from './notch-hud'
 import type { ProjectIcon, ProjectIconPickResult } from './project-icon'
 import type { AlertSoundKind, AlertSoundSaveResult, CustomAlertSounds } from './alert-sound'
@@ -485,9 +487,9 @@ export interface PendingLaunch {
   /** Delivered to the node's shell once the wait is over (agent CLI + prompt, or a plain command). */
   command: string
   /**
-   * Which core process owns delivery. Absent is the historical renderer-owned path. Server
-   * Edition headless opens stamp `server`, so a connected browser can render the armed state and
-   * dependency edges without racing the server to type the command into the same pane. The
+   * Which core process owns delivery. Absent is the historical renderer-owned path. Headless
+   * opens and orchestration on both shells retain the `server` wire value, so a connected viewer
+   * renders the armed state without racing the host scheduler to type into the same pane. The
    * desktop's headless start (#925) stamps `core` on its manualOnly write-ahead claim.
    */
   executor?: 'server' | 'core'
@@ -496,7 +498,7 @@ export interface PendingLaunch {
    * agent can briefly report `done` while its argv prompt is still booting; that idle blip must not
    * release a downstream launch. The server removes an id only after a verified `working` event,
    * then requires the ordinary later `done`. Persisted so a server restart cannot forget the gate.
-   * Desktop-owned launches leave this absent; renderer parity is a separate follow-up.
+   * Legacy renderer-owned launches leave this absent; headless orchestration on either shell uses it.
    */
   awaitWorking?: string[]
   /**
@@ -1469,10 +1471,13 @@ export interface PtyApi {
    *  the `/resume` name (e.g. after resume) without cross-contaminating same-folder sessions.
    *  `accountId` scopes the lookup to a managed Claude account's transcript root (default `~/.claude`).
    *  `agentId` picks the reader — grok's name lives in its session metadata, not a claude transcript;
-   *  omitted (every pre-grok caller) means the claude transcript reader. */
-  readSessionName(sessionId: string, accountId?: string, agentId?: string): Promise<string | null>
+   *  omitted (every pre-grok caller) means the claude transcript reader. `nodeId` binds Server
+   *  reads to current saved host/account/session routing; Native keeps its existing reader. */
+  readSessionName(sessionId: string, accountId?: string, agentId?: string, nodeId?: string): Promise<string | null>
   /** Listens for PTY output. Returns an unsubscribe function. */
   onData(sessionId: string, listener: (data: string) => void): () => void
+  /** Optional for older hosts. An exclusive host action refused this client's keyboard input. */
+  onInputBlocked?(listener: (event: { nodeId: string; reason?: 'worktree-recovery' }) => void): () => void
   /** Fires when the PTY process exits. Returns an unsubscribe function. */
   onExit(sessionId: string, listener: (exitCode: number) => void): () => void
   /** The authoritative size of a co-attached session: min(cols) × min(rows) over all subscribers
@@ -1611,6 +1616,8 @@ export interface ProjectSetupApi {
 }
 
 export interface WorktreeApi {
+  /** Owner administration for this core's local recovery state. Absent on old/relay clients. */
+  recovery?: import('./worktree-recovery').WorktreeRecoveryApi
   /**
    * Symlink a project's configured `sharedPaths` (git-ignored dirs like `node_modules`) from its
    * repo root into a freshly-created git worktree, so a setup `npm install` there sees the links.
@@ -1741,8 +1748,11 @@ export interface FilesApi {
 }
 
 export interface MediaApi {
-  /** Allow an absolute local path to be served, and return its nt-media:// URL. */
-  allow(absPath: string): Promise<string>
+  /** Desktop returns nt-media://; Server requires a saved node scope and returns an HTTP reference. */
+  allow(absPath: string, scope?: import('./media').MediaScope): Promise<string>
+  /** Optional Server reference lifecycle; native protocol URLs need neither operation. */
+  renew?(url: string): Promise<boolean>
+  release?(url: string): Promise<void>
   /**
    * Allow a file that lives on an SSH project's HOST: main pulls it into a local cache over the
    * project's ControlMaster (skipped when the cached copy's size still matches the remote), then
@@ -2353,11 +2363,20 @@ export interface Settings {
    *  footprint across restarts. Independent of manual "Pause session", which always persists this
    *  way regardless of this setting. */
   agentHibernationPersistAcrossRestart: boolean
-  /** Send anonymous usage data (version/OS) to the telemetry backend. Opt-OUT (default on):
-   *  version/OS only, nothing personal, client IP never stored. Turn it off in Settings → Privacy
+  /** Send anonymous usage data: the version/OS telemetry ping, and the open-project count on the
+   *  /v1/check call (`openProjects`, a number only — never names, paths or hosts). Opt-OUT
+   *  (default on): nothing personal, client IP never stored. Turn it off in Settings → Privacy
    *  (or hard-disable with DO_NOT_TRACK / NODETERM_TELEMETRY_DISABLED). Note: a lighter anonymous
    *  install count also rides the /v1/check call and is NOT gated on this toggle — see core/check.ts. */
   telemetryEnabled: boolean
+  /** The user's consent to license and free-project-allowance calls to api.nodeterm.dev while
+   *  DO_NOT_TRACK / NODETERM_TELEMETRY_DISABLED is set. Default off: under DNT nothing
+   *  license-related leaves the machine until the user says so. Covers ONLY the calls behind
+   *  `licenseNetworkGate()` (core/license.ts) — never telemetry or the check feed, which stay off
+   *  under DNT whatever this says. Read as `=== true` (main installs it via
+   *  `setLicenseNetworkConsent`), so a hand-edited non-boolean is no consent. Shown and revocable in
+   *  Settings → Privacy only while DNT is set. Never settable by an agent (SETTINGS_VERB_FORBIDDEN). */
+  licenseNetworkConsent: boolean
   /** Debug log panel (issue #78): captures the app's own console into an in-memory, redacted
    *  ring and unlocks the log viewer. Default off — a debugging tool, not a daily surface.
    *  Toggle in Settings → Application → Debug. */
@@ -2617,6 +2636,8 @@ export const DEFAULT_SETTINGS: Settings = {
   // Opt-out (default on). Existing users pick this up on hydrate ONLY if their settings.json has
   // no telemetryEnabled key yet; anyone who already saved settings keeps their stored value.
   telemetryEnabled: true,
+  // Off: under DO_NOT_TRACK no license call runs until the user consents in Settings → Privacy.
+  licenseNetworkConsent: false,
   debugLogPanel: false,
   phoneAccessEnabled: true,
   mobilePushEnabled: true,
@@ -2653,6 +2674,9 @@ export const DEFAULT_SETTINGS: Settings = {
 export interface SettingsApi {
   load(): Promise<Settings>
   save(settings: Settings): Promise<void>
+  /** Atomic owner edits; null means an older host has no patch handler. */
+  patch?(patch: Partial<Settings>): Promise<Settings | null>
+  onChanged?(listener: (settings: Settings) => void): () => void
 }
 
 /** Agent-integration consent status (issue #744). The CHOICE rides `settings.agentIntegrations`;
@@ -2763,6 +2787,9 @@ export interface SshPassphraseRequest {
 }
 
 export interface SshProjectApi {
+  capabilities?(): Promise<{ enabled: boolean; filesystem: boolean; transfers: boolean; media: boolean; transcriptAgents?: string[]; hostContext: 'server' } | null>
+  connectPrompts?(): Promise<string>
+  disconnectPrompts?(epoch: string): Promise<void>
   /** Open (or reuse) the ControlMaster for an SSH project; resolves once connected. */
   connect(
     projectId: string,
@@ -3069,12 +3096,29 @@ export interface Announcement {
   level?: 'info' | 'success' | 'warning'
 }
 
+/** A one-time popup from the same feed (`popups` in the check reply): shown once per install. */
+export interface PopupAnnouncement extends Announcement {
+  /** The button's label; absent = "Learn more" for a link, "Upgrade to Pro" for the checkout. */
+  ctaLabel?: string
+  /** 'upgrade' = the button starts the app's own Pro checkout instead of opening `url`. */
+  action?: 'upgrade'
+  /** The SHA-256 naming its picture, fetched with `AnnouncementsApi.popupImage`. */
+  image?: string
+}
+
 export interface AnnouncementsApi {
   /** Fetch the announcements feed from the website (returns [] on any failure). */
   fetch(): Promise<Announcement[]>
+  /** The feed's one-time popups ([] on any failure, and on the Server Edition, which does not read
+   *  the feed). Which of them were already shown is the renderer's record, not the feed's. */
+  popups(): Promise<PopupAnnouncement[]>
+  /** A popup's picture as a `data:` URL, or null when it cannot be had. */
+  popupImage(sha256: string): Promise<string | null>
 }
 
 export interface NotifyPayload {
+  /** Browser routing hint; native notification handling remains unchanged. */
+  projectId?: string
   title: string
   body: string
   /** Node to focus/center when the notification is clicked. */
@@ -3500,6 +3544,8 @@ export interface ContextWindowUsage {
 }
 
 export interface ContextApi {
+  /** Optional owner demand; emits node-scoped observations through onUpdate. Unsubscribe releases it. */
+  watchRemote?(nodeId: string): () => void
   /** Fires whenever a session's context fill changes. Returns unsubscribe. */
   onUpdate(listener: (usage: ContextWindowUsage) => void): () => void
   /**
@@ -3534,12 +3580,14 @@ export interface ContextApi {
 export interface CanvasApi {
   /**
    * Publish one local node mutation for `projectId` (a project IS a canvas — a mutation is only
-   * ever applied to the canvas it was made on). Fire-and-forget; the reflector fans it out to every
-   * OTHER attached client and never echoes it back to the sender.
+   * ever applied to the canvas it was made on). The reflector echoes its ordered acknowledgement.
+   * A host refusal retires that pending slot, then publishes the canonical state and a notice.
    */
   mutate(projectId: string, mutation: CanvasMutation): void
-  /** Fires with each PEER's mutation (project id + mutation). Returns unsubscribe. */
+  /** Fires with ordered peer/core mutations and our acknowledgements. Returns unsubscribe. */
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
+  /** Addressed host refusal; a canonical correction may arrive on onMutation. Older hosts omit it. */
+  onMutationRejected?(listener: (projectId: string, message: string) => void): () => void
 }
 
 /**
@@ -3571,7 +3619,34 @@ export interface TranscriptLine {
  *  metadata so committed tool cards keep the same summary/diff-click treatment as live ones. */
 export type ChatPart =
   | { kind: 'text'; text: string }
-  | { kind: 'thinking'; text: string }
+  | {
+      kind: 'thinking'
+      text: string
+      /**
+       * How long the model thought, in ms — this record's timestamp minus that of the newest `user`
+       * record before it (the prompt, tool_result or meta line the request answered). Present only on
+       * the opt-in `thinking` read, only when both stamps exist and the gap is ≥ 0. Measured 2026-11-02
+       * on CLI 2.1.275–2.1.316: a thinking record is written when the thinking ENDS, and the record
+       * after it is a tool call whose write time scales with its input, so the gap to the NEXT record
+       * is not thinking time; nor is the gap to the record right BEFORE it, which is an empty
+       * encrypted thinking record of the same message written ~10 ms earlier (1,018 of 1,037).
+       * A paged read sees only its own window, so a thinking record with no `user` record before it
+       * in that window (the start of an older page) carries no `ms`.
+       */
+      ms?: number
+    }
+  | {
+      /**
+       * An image the user attached to a prompt (a pasted screenshot): `data` is the base64 payload,
+       * drawn as `data:<mediaType>;base64,<data>`. Present only on the opt-in `rich` read
+       * (`ChatParseOptions.rich`), and only for a base64 source whose `mediaType` is in
+       * `CHAT_IMAGE_TYPES` (core/transcript-reader.ts) — never `image/svg+xml`. An image a tool
+       * returned (inside a `tool_result`) is tool output and never becomes one.
+       */
+      kind: 'image'
+      mediaType: string
+      data: string
+    }
   | {
       kind: 'tool'
       name: string
@@ -3579,17 +3654,35 @@ export type ChatPart =
       result?: string
       summary?: ChatToolSummary
       /** Markdown worth reading in full (an `ExitPlanMode` plan, an `AskUserQuestion` question and
-       *  its options — `core/chat-tool-body.ts`). Present = the renderer shows an expanded card
-       *  instead of the collapsed chip. Capped at 64K characters. */
+       *  its options, and on the opt-in `rich` read a `TodoWrite` checklist — `core/chat-tool-body.ts`).
+       *  Present = the renderer shows an expanded card instead of the collapsed chip (a superseded
+       *  todo list excepted: `lib/chatTodo.ts`). Capped at 64K characters. */
       body?: string
       /** `AskUserQuestion` only: the questions read for the answer controls (`readQuestions`) —
        *  the SAME reader the held request's texts come from, so a surface can match the card to the
        *  held ticket. Absent = unreadable input = the card stays read-only. */
       questions?: ChatQuestion[]
+      /** `Edit` / `Write` only, on the opt-in `rich` read (`ChatParseOptions.rich`): the change the
+       *  call asked for, read from its INPUT — never from the result — so the renderer can draw it as
+       *  a diff. Absent = any other tool, an unreadable input, or a read without `rich`. */
+      diff?: ChatToolDiff
       /** The transcript's `tool_use` id. Set only by a PAGED read (`ChatTranscriptResult.olderCursor`
        *  present): a result carried across a page boundary (`unmatchedResults`) is attached by it. */
       id?: string
     }
+
+/**
+ * The change an `Edit` / `Write` tool call asked for (`ChatPart` tool `diff`). Edit's
+ * `{file_path, old_string, new_string}` maps to `{filePath, oldText, newText}`; Write's
+ * `{file_path, content}` to `{filePath, oldText: '', newText: content}`. An empty `newText` on an
+ * Edit is a deletion. Each text is capped at a tool body's length (`capText`, core/chat-tool-body.ts:
+ * 64K characters, then `TOOL_BODY_TRUNCATED`, with no markdown fence repair — it is file content).
+ */
+export interface ChatToolDiff {
+  filePath: string
+  oldText: string
+  newText: string
+}
 
 /** A structured chat message reconstructed from a Claude session transcript. */
 export interface ChatMessage {
@@ -3605,7 +3698,8 @@ export interface ChatMessage {
   /**
    * When the transcript line was written (epoch ms, from claude's ISO `timestamp`). Set on BOTH
    * read paths; absent when the line states none (grok, older records). The ⌘M thread shows it as a
-   * relative time under an assistant message.
+   * relative time under an assistant turn and a clock time under a user message, and starts a day
+   * divider at each local day's first stamped message.
    */
   at?: number
 }
@@ -3664,6 +3758,8 @@ export interface ChatTranscriptResult {
    *  not answer, a growth re-read that failed, a remote node with no reachable master) — as opposed
    *  to "no transcript exists". Absent on every other result. */
   unreadable?: true
+  /** Optional actionable refusal from a strict SSH reader; older hosts keep generic copy. */
+  unreadableReason?: 'remote-runtime-unavailable' | 'remote-unsafe-transcript' | 'remote-reader-unavailable' | 'remote-reader-permission-required'
 }
 
 /**
@@ -3882,9 +3978,16 @@ export interface TranscriptHit {
   accountId?: string
 }
 
+export interface TranscriptSearchScope {
+  /** null = system account; absent = all configured local accounts. */
+  accountId?: string | null
+  cwd?: string
+  limit?: number
+}
+
 export interface TranscriptsApi {
   /** Search all on-disk Claude session transcripts by content. */
-  search(query: string): Promise<TranscriptHit[]>
+  search(query: string, scope?: TranscriptSearchScope): Promise<TranscriptHit[]>
 }
 
 /** What the Claude CLI on THIS machine can do. Fed by the `claude --version` probe in
@@ -4156,6 +4259,7 @@ export interface LicenseDetail {
 }
 
 export interface LicenseApi {
+  capabilities?(): Promise<{ enabled: boolean; hostContext: 'server' } | null>
   /** Open Stripe checkout bound to this device and poll for the entitlement (no key paste).
    * `target` picks the link: 'seats' = the add-seats (quantity) link, else base Pro (default).
    * Returns the current status immediately; the active status arrives via onChange. */
@@ -4175,6 +4279,20 @@ export interface LicenseApi {
    *  per 30 days (error 'too_soon' + retryAfterDays). Answers with COUNTS only: no key and no
    *  source ride a successful release, so callers must merge rather than replace. */
   releaseOthers(): Promise<LicenseDetail>
+}
+
+/** The free-tier open-project limit (src/shared/project-limit.ts; core computes the state). Desktop
+ *  only: the Server Edition's stub answers `INACTIVE_PROJECT_LIMIT` and claims `disabled`,
+ *  and a relay tab keeps the local preload — the allowance is this machine's, never the host's. */
+export interface ProjectLimitApi {
+  /** The current state. Cheap and offline: it never waits on the network. */
+  state(): Promise<ProjectLimitState>
+  /** Claim this device's allowance from the server (lazily, at the limit moment). Never rejects
+   *  for a network or server failure — that is `ok: false` with the state as it stands. */
+  claim(): Promise<ClaimResult>
+  /** Fires with the new state whenever it changes. Main sends it to this machine's windows only
+   *  (never broadcast to relay peers). Returns unsubscribe. */
+  onChange(listener: (s: ProjectLimitState) => void): () => void
 }
 
 export type PhoneApprovalResult = {
@@ -4564,6 +4682,14 @@ export interface OpenLinkApi {
 }
 
 export interface NodeTerminalApi {
+  /** Optional for older hosts; null means this connection cannot describe the host's support. */
+  control?: {
+    capabilities(): Promise<import('./control-capabilities').ControlCapabilityReport | null>
+    /** Null means an older host; transport errors must return a refusal, never a legacy fallback. */
+    runLaunch?(nodeId: string, expectedCommand: string): Promise<import('./headless-launch').HostLaunchReply | null>
+    /** Owner action on the host. Missing support or a lost reply must never fall back to raw input. */
+    branchClaude?(nodeId: string, at?: import('./conversation-branch').ConversationBranchPosition): Promise<import('./conversation-branch').ConversationBranchReply>
+  }
   pty: PtyApi
   workspace: WorkspaceApi
   projectSettings: ProjectSettingsApi
@@ -4575,17 +4701,22 @@ export interface NodeTerminalApi {
   speech: SpeechApi
   ssh: SshApi
   sshProject: SshProjectApi
+  /** Optional browser bulk HTTP transfers; never available through relay/local fallback. */
+  remoteTransfers?: import('./remote-transfers').RemoteTransfersApi
   sshFs: SshFsApi
   git: GitApi
   clipboard: ClipboardApi
   shell: ShellApi
   fs: FsApi
   media: MediaApi
+  webPreview?: import('./web-preview').WebPreviewApi
+  ownerConfirmation?: import('./owner-confirmation').OwnerConfirmationApi
   browser: BrowserApi
   files: FilesApi
   updates: UpdateApi
   announcements: AnnouncementsApi
   license: LicenseApi
+  projectLimit: ProjectLimitApi
   contextLink: ContextLinkApi
   boardLog: BoardLogApi
   logs: LogApi
@@ -4593,6 +4724,7 @@ export interface NodeTerminalApi {
   githubControl: import('./github-issues').GitHubControlApi
   usage: UsageApi
   sessionMemory: SessionMemoryApi
+  developmentPreviews?: import('./development-preview').DevelopmentPreviewApi
   devPorts: import('./dev-ports').DevPortsApi
   /** "Open recent" — the newest agent conversations in this machine's CLI histories. */
   recentConversations: import('./recent-conversations').RecentConversationsApi
@@ -4732,6 +4864,11 @@ export interface NodeTerminalApi {
   onUnreadClear(listener: (nodeId: string) => void): () => void
   /** Fires on each normalized agent hook event (working/done/waiting/subagent/…). Returns unsubscribe. */
   onAgentStatus(listener: (e: NormalizedAgentEvent) => void): () => void
+  /** The core's per-node agent states as they stand now, read off its agent-status mirror (newest
+   *  `AGENT_STATUS_SNAPSHOT_MAX`; no `state` for an identity-only or restored entry). A relay tab asks
+   *  right after subscribing to `onAgentStatus`, so it does not start blank; a non-editor peer gets
+   *  the shared nodes only. Rejects on a core that predates the channel. */
+  agentStatusSnapshot(): Promise<AgentStatusSnapshotEntry[]>
   /** Report a node's Eco hibernation flag to the core (the renderer owns the flag; the core only
    *  mirrors it into the agent-status file so the phone can render SLEEPING). Fire-and-forget;
    *  called on every `setHibernated` change and replayed for the persisted set at boot. */

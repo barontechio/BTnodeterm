@@ -3,7 +3,7 @@
 // accepted client key. The jumps answer direct-tcpip (what `ssh -W` asks a bastion for) by dialing
 // the destination, so the whole chain is the real protocol end to end, on every OS the CI runs.
 
-import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from 'vitest'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -47,6 +47,8 @@ interface Peer {
   forwards: string[]
   /** Sessions allowed per connection (MaxSessions); Infinity = no limit. */
   limit: number
+  /** Observe real target command acceptance, after authentication and channel creation. */
+  onCommand?: (command: string) => void
 }
 
 function pubMatches(offered: { algo: string; data: Buffer }, pub: string): boolean {
@@ -87,6 +89,7 @@ function startPeer(name: string, acceptKey: string, isJump: boolean): Promise<Pe
         session.on('close', () => open--)
         session.on('exec', (a, _r, info) => {
           const ch = a()
+          peer.onCommand?.(info.command)
           if (info.command.startsWith('hang') || info.command.startsWith('hold')) return
           ch.write(`${name} ran: ${info.command}\n`)
           ch.exit(0)
@@ -171,6 +174,7 @@ beforeEach(() => {
     p.logins = 0
     p.forwards = []
     p.limit = Infinity
+    p.onCommand = undefined
   }
   config = {
     'target.test': { ...base(target.port, 'dev', 'id'), proxyJump: 'ops@jump1' },
@@ -223,14 +227,18 @@ describe('NativeMux over a ProxyJump chain', () => {
 
   it('a jump that drops ends the target\'s channels with 255', async () => {
     const m = mux()
+    const accepted = new Promise<void>((resolve) => {
+      target.onCommand = (command) => { if (command === 'hang') resolve() }
+    })
     const pending = m.exec(exec('hang'))
-    await new Promise((r) => setTimeout(r, 150))
+    // A fixed sleep can expire while the real jump/target handshake is still in flight.
+    // Bound this event wait by the test's existing deadline, and fail on premature exec exit.
+    await Promise.race([accepted, pending.then(() => { throw new Error('target command ended before jump drop') })])
     expect(m.check(CP())).toBe(true)
     for (const c of jump1.live) c.end()
     const d = await pending
     expect(d.code).toBe(255)
-    await new Promise((r) => setTimeout(r, 50))
-    expect(m.check(CP())).toBe(false)
+    await vi.waitFor(() => expect(m.check(CP())).toBe(false))
   })
 
   it('crosses a 2-hop chain in order, and ignores a LATER hop\'s own ProxyJump (as OpenSSH -J does)', async () => {

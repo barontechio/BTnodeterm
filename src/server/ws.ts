@@ -1,3 +1,4 @@
+import type { DevelopmentPreviewTransport } from './development-preview'
 // Authenticated WebSocket endpoint for the Server Edition.
 //
 // Attaches a `WebSocketServer({ noServer: true })` to an existing http.Server and
@@ -22,6 +23,7 @@ import { sameOriginRequest } from './origin'
 import { parseRpcMessage } from '../shared/rpc'
 import { presenceHub } from '../core/presence/hub'
 import { WS_CLIENT_FRAME_MAX } from '../shared/ws-frame'
+import { previewHost } from './web-preview'
 
 /**
  * Heartbeat period. Every WS_HEARTBEAT_MS the server pings each socket; a socket that answered
@@ -73,12 +75,18 @@ export interface WsServerOpts {
    * know about `ws`.
    */
   onClientGone?: (uiId: number) => void
+  /** Revoke owner leases immediately, before the socket close handshake completes. */
+  onClientRevoked?: (uiId: number) => void
+  /** Host-only cookie binding for bulk HTTP references; null for proxy-only authentication. */
+  onClientAuthenticated?: (uiId: number, cookieToken: string | null) => void
   /** TEST ONLY: shorten the heartbeat period. Production always uses WS_HEARTBEAT_MS. */
   heartbeatMs?: number
   /** Reverse-proxy SSO trust (issue #29) — same object the HTTP handler gets. */
   trustProxy?: TrustProxyConfig
   /** NODETERM_PUBLIC_ORIGIN — an `Origin` equal to it passes the same-origin check (see origin.ts). */
   publicOrigin?: string
+  previewOrigin?: string
+  developmentPreviews?: DevelopmentPreviewTransport
 }
 
 /**
@@ -108,7 +116,7 @@ function upgradeAllowed(
 }
 
 export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSocketServer {
-  const { platform, auth, onClientGone, heartbeatMs = WS_HEARTBEAT_MS, trustProxy, publicOrigin } = opts
+  const { platform, auth, onClientGone, heartbeatMs = WS_HEARTBEAT_MS, trustProxy, publicOrigin, previewOrigin } = opts
   const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD })
 
   // The session each cookie-authenticated socket rides on (S3). A socket used to be checked once at
@@ -116,6 +124,7 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
   // connected. Now a revoke closes the affected sockets at once, and the heartbeat re-checks the
   // rest every round (that is what catches the 30-day expiry, which emits nothing).
   const tokenOf = new Map<WebSocket, string>()
+  const uiIdOf = new WeakMap<WebSocket, number>()
   const signedOut = new WeakSet<WebSocket>()
   const endIfSignedOut = (ws: WebSocket): boolean => {
     const token = tokenOf.get(ws)
@@ -124,6 +133,8 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
     // Drop anything it sends from here on — the close handshake can take a moment, and a frame
     // that arrives in it must not reach dispatch.
     signedOut.add(ws)
+    const uiId = uiIdOf.get(ws)
+    if (uiId !== undefined) opts.onClientRevoked?.(uiId)
     ws.close(WS_CLOSE_SIGNED_OUT, 'signed out')
     return true
   }
@@ -174,12 +185,17 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
   server.on('close', () => clearInterval(heartbeat))
 
   server.on('upgrade', (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
+    if (opts.developmentPreviews?.ownsHost(req.headers.host ?? '')) {
+      socket.on('error', () => {})
+      void opts.developmentPreviews.upgrade(req, socket, head).catch(() => socket.destroy())
+      return
+    }
     // Only handle our path; a mismatched path is left for any other upgrade
     // listener (and, if none, the socket eventually times out / is destroyed by node).
     const pathname = new URL(req.url || '/', 'http://x').pathname
     if (pathname !== '/ws') return
 
-    const allowed = upgradeAllowed(req, auth, trustProxy, publicOrigin)
+    const allowed = previewOrigin && previewHost(req, previewOrigin) ? { ok: false as const } : upgradeAllowed(req, auth, trustProxy, publicOrigin)
     if (!allowed.ok) {
       // Guard the raw socket: writing to an already-dead peer emits 'error', and an
       // unhandled 'error' on a socket (EventEmitter) throws → crashes the process.
@@ -213,6 +229,8 @@ export function attachWsServer(server: http.Server, opts: WsServerOpts): WebSock
       },
       { owner: true }
     )
+    uiIdOf.set(ws, uiId)
+    opts.onClientAuthenticated?.(uiId, tokenOf.get(ws) ?? null)
     // Team presence: each authenticated socket is one peer. Joining AFTER attach means the hub's
     // `presence:sync` sendTo lands on a live sink; the browser bridge buffers it until the app
     // subscribes. The peer stays nameless ("Someone") until it sends `presence:hello`.

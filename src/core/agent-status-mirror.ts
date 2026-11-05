@@ -1039,6 +1039,12 @@ const inboxActionableListeners = new Set<(e: InboxEvent) => void>()
  * Subscribe to newly-appended actionable inbox events (approval/question post-dedup, done on edge).
  * Returns an unsubscribe. Additive side-channel — does not change the feed or any disk write.
  */
+/** Revalidate a captured actionable edge after asynchronous delivery preparation. */
+export function isInboxEventCurrent(event: InboxEvent): boolean {
+  return inboxEvents.some(e => e.id === event.id && e.nodeId === event.nodeId &&
+    e.sessionId === event.sessionId && e.kind === event.kind && !e.resolved && !e.interrupted)
+}
+
 export function onInboxActionable(cb: (e: InboxEvent) => void): () => void {
   inboxActionableListeners.add(cb)
   return () => inboxActionableListeners.delete(cb)
@@ -2268,6 +2274,15 @@ export function nodeState(nodeId: string): AgentState | undefined {
  */
 export function mirrorEntry(nodeId: string): MirrorEntry | undefined {
   return state.get(nodeId)
+}
+
+/**
+ * Every mirror entry, as a fresh array of `[nodeId, entry]` — the `agent:status-snapshot` a late
+ * relay tab starts from reads it (core/agent-status-snapshot.ts). Read-only by contract, like
+ * `mirrorEntry`: the array is a copy, the entries are the live ones.
+ */
+export function mirrorEntries(): ReadonlyArray<readonly [string, Readonly<MirrorEntry>]> {
+  return [...state]
 }
 
 /**

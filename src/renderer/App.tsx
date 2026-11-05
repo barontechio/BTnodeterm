@@ -3,9 +3,11 @@ import { ReactFlowProvider } from '@xyflow/react'
 import { Canvas } from './canvas/Canvas'
 import { PromptDialogHost } from './components/promptDialog'
 import { NodeIconDialogHost } from './components/NodeIconPicker'
+import { OwnerConfirmationHost } from './components/OwnerConfirmationHost'
+import { WorktreeRecoveryHost } from './components/WorktreeRecoveryHost'
 import { SessionProvider } from './session/session'
 import { localSession } from './session/localSession'
-import { useSettings } from './state/settings'
+import { useSettings, listenHostSettings } from './state/settings'
 import { useViewMode } from './state/viewMode'
 import { setWebglEnabled } from './terminal/webgl-budget'
 import { applyRendererMode } from './terminal/renderer-mode'
@@ -33,6 +35,7 @@ import {
   glassControlClearAlpha,
   glassFrostFloor,
   glassMinRatio,
+  glassRefractionOn,
   glassSurfaceAlpha,
   parseCssColor,
   resolveGlassSlider
@@ -42,6 +45,7 @@ import { GlassRefraction } from './components/GlassRefraction'
 import { isLiquidGlass } from './lib/appTheme'
 
 export default function App() {
+  useEffect(() => listenHostSettings(), [])
   // Apply the terminal-rendering setting to the two GPU coordinators, live. 'auto' is
   // per-terminal WebGL on every platform (see `resolveTerminalRenderer` for the history of the
   // macOS branch and the evidence that collapsed it). 'off' reclaims every context; 'shared'
@@ -126,6 +130,10 @@ export default function App() {
   const glassA11y = useGlassA11y()
   // Increase Contrast pins the WHOLE slider to Tinted — alpha, blur and refraction alike.
   const glassT = glassA11y.moreContrast ? 1 : glassSlider
+  // The rim refraction runs only left of the Readable tick (glassRefractionOn): from the tick to
+  // Tinted it was invisible and the costliest filter in the chain. Off ⇒ no `--glass-refract`
+  // and no filter element at all.
+  const glassRefract = liquidGlass && !glassA11y.reduceTransparency && glassRefractionOn(glassT)
   // The readable alpha depends only on the resolved theme, and computing it is ~16k contrast
   // evaluations plus a style recalc; it is measured once per theme, never per slider input.
   const [glassChrome, setGlassChrome] = useState<{
@@ -177,6 +185,7 @@ export default function App() {
       root.style.removeProperty('--glass-node-bg')
       root.style.removeProperty('--glass-node-squeeze')
       root.style.removeProperty('--glass-t')
+      root.style.removeProperty('--glass-refract')
       return
     }
     const { text, panel, rgb, readable, controlClear } = glassChrome
@@ -198,7 +207,9 @@ export default function App() {
     if (squeeze) root.style.setProperty('--glass-node-squeeze', squeeze)
     else root.style.removeProperty('--glass-node-squeeze')
     root.style.setProperty('--glass-t', glassT.toFixed(3))
-  }, [glassChrome, glassSlider, glassA11y, glassT])
+    if (glassRefract) root.style.setProperty('--glass-refract', 'url(#nt-refract)')
+    else root.style.removeProperty('--glass-refract')
+  }, [glassChrome, glassSlider, glassA11y, glassT, glassRefract])
 
   // Apply the UI scale as page zoom (issue #299 — 4K readability; the why-page-zoom write-up
   // lives in shared/ui-scale.ts). Gated on `hydrated` so boot doesn't flash-reset a scaled window
@@ -227,7 +238,9 @@ export default function App() {
         {/* The node-icon picker, opened from the node menu, a node header and the kanban card
             modal — one dialog for all three, driven by nodeIconDialog(). */}
         <NodeIconDialogHost />
-        {liquidGlass && !glassA11y.reduceTransparency && <GlassRefraction slider={glassT} />}
+        <OwnerConfirmationHost />
+        <WorktreeRecoveryHost />
+        {glassRefract && <GlassRefraction slider={glassT} />}
       </ReactFlowProvider>
     </SessionProvider>
   )
