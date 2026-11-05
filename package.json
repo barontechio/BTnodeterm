@@ -1,6 +1,6 @@
 {
   "name": "node-terminal",
-  "version": "0.5.0",
+  "version": "0.5.0-bt.1",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
@@ -34,7 +34,8 @@
     "dist:win": "npm run make-icon && npm run build && electron-builder --win --x64 --publish never -c.extraMetadata.nodeTermUpdates=disabled",
     "dist:win:release": "npm run make-icon && npm run build && electron-builder --win --x64 --publish never -c.extraMetadata.nodeTermUpdates=manual",
     "release": "npm run make-icon && npm run build && sh -c 'electron-builder --mac --arm64 --x64 --publish never; s=$?; npm run rebuild; exit $s'",
-    "postinstall": "node scripts/patch-node-pty.mjs && node scripts/patch-smart-whisper.mjs && electron-rebuild -f -w node-pty,smart-whisper && node scripts/stage-conpty-dll.mjs"
+    "postinstall": "node scripts/patch-node-pty.mjs && node scripts/patch-smart-whisper.mjs && electron-rebuild -f -w node-pty,smart-whisper && node scripts/stage-conpty-dll.mjs",
+    "server:package": "node scripts/package-server.mjs"
   },
   "build": {
     "appId": "com.nodeterm.app",
@@ -251,5 +252,6 @@
         "nanoid": "5.1.16"
       }
     }
-  }
+  },
+  "nodeTermUpdates": "disabled"
 }

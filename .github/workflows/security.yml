@@ -9,7 +9,8 @@ on:
   # merge commits, or every queued PR times out waiting for them.
   merge_group:
   pull_request:
-    branches: [main]
+    # Fork release-preparation PRs target the accepted integration branch.
+    branches: [main, feat/server-capability-parity]
   push:
     branches: [main]
   schedule:

@@ -10857,6 +10857,15 @@ Voice-to-text input captured via microphone, turned into terminal text via on-de
   faster again (0.22 s / 0.43 s, measured the same way) but needs a build change on every platform;
   that is a separate follow-up.
 
+## Fork Server candidate packaging
+
+`npm run server:package -- --output /absolute/private/artifacts` packages existing Server/renderer,
+session-host and Codex-relay build outputs with isolated production dependencies for the actual
+host OS/architecture/Node ABI. Build in a clean release checkout first; never reuse live/shared native
+modules or run Electron rebuild there. The manifest/checksums and an extracted-package smoke are
+release gates. Keep fork `nodeTermUpdates=disabled`, existing license checks and operator-owned data
+intact. See `docs/server-release-bt1.md`; public release/deployment is a separate decision.
+
 ## Packaging & auto-update
 
 Built with **electron-builder** (config in the `package.json` `build` block: appId
