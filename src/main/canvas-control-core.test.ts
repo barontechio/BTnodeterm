@@ -768,6 +768,9 @@ describe('parseControlRequest', () => {
       expect(body).toContain('current server run')
       expect(body).toMatch(/never[\s\S]*auto-adopted[\s\S]*relaunched[\s\S]*controlled at boot/)
       expect(body).toContain('before any partial mutation')
+      // The one exception to creator ownership, stated where an agent reads the rule.
+      expect(body).toMatch(/every endpoint must be your own node or a node\s+you opened during this server run/)
+      expect(body).toContain('`link` may also name your own node')
     }
   })
 

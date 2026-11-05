@@ -1682,8 +1682,8 @@ ${geometryGuidanceLines().join('\n')}
   user to confirm. Server Edition closes
   only nodes this caller opened during the current server run, without a dialog. Its other
   node-mutating verbs (link/group/rename/color/sticky update) likewise accept only current-run
-  creations (\`link\` may also name your own node), and refuse the whole request before any partial
-  mutation.
+  creations (\`link\` may also name your own node), and refuse the whole request
+  before any partial mutation.
 - \`send --node <id> --text "..."\` — deliver a message INTO an agent node the caller opened during
   this server run, in this project only. No confirm dialog; instead it is verified-only, gated by the project's
   agent-messaging switch (Settings → Agents, OFF by default — the settings verb's
