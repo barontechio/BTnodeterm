@@ -131,6 +131,9 @@ describe('Server packaging boundaries', () => {
     expect(fs.readdirSync(path.join(root, 'node_modules/node-pty/build/Release'))).toEqual(['pty.node'])
     expect(fs.readdirSync(path.join(root, 'node_modules/smart-whisper/build/Release'))).toEqual(['smart-whisper.node'])
     expect(nativeEnvironment(root).PATH.startsWith(path.dirname(process.execPath))).toBe(true)
+    vi.stubEnv('NODE_PATH', '/outside/shared/node_modules')
+    try { expect(nativeEnvironment(root)).not.toHaveProperty('NODE_PATH') }
+    finally { vi.unstubAllEnvs() }
   })
 
   it('produces identical archives despite input mtimes, creation order and staging paths', () => {

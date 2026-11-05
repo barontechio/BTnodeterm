@@ -93,7 +93,7 @@ export function nativeEnvironment(staging) {
   // npm run and Electron build shells can leak target/runtime/ignore-scripts flags.
   // Keep registry/auth configuration in the caller's HOME, never copy it into the package.
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !/^npm_/i.test(key) && !/^(?:ELECTRON_|GYP_|NODE_OPTIONS$|CFLAGS$|CXXFLAGS$|LDFLAGS$|CPATH$|LIBRARY_PATH$)/i.test(key)))
+    !/^npm_/i.test(key) && !/^(?:ELECTRON_|GYP_|NODE_OPTIONS$|NODE_PATH$|CFLAGS$|CXXFLAGS$|LDFLAGS$|CPATH$|LIBRARY_PATH$)/i.test(key)))
   return {
     ...env,
     PATH: `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ''}`,
@@ -111,7 +111,15 @@ export function installRuntime(staging, epoch) {
   for (const script of PATCHES) run(process.execPath, [path.join(staging, script)], staging, env)
   run('npm', ['rebuild', 'node-pty', 'smart-whisper', '--ignore-scripts=false', '--build-from-source'], staging, env)
   // Load the actual compiled module, not an upstream prebuild selected by a fallback.
-  run(process.execPath, ['-e', "require('./node_modules/node-pty/build/Release/pty.node'); require('node-pty'); require('ws'); require('ssh2'); require('smart-whisper')"], staging, env)
+  run(process.execPath, ['-e', `
+    const fs = require('node:fs'), path = require('node:path'), root = process.cwd() + path.sep;
+    for (const name of ['node-pty', 'ws', 'ssh2', 'smart-whisper']) {
+      if (!fs.realpathSync(require.resolve(name)).startsWith(root)) throw new Error('Dependency outside staging: ' + name);
+      require(name);
+    }
+    require('./node_modules/node-pty/build/Release/pty.node');
+    require('./node_modules/smart-whisper/build/Release/smart-whisper.node');
+  `], staging, env)
   // node-gyp's makefiles/config contain absolute staging paths; they are build-time
   // artifacts. Retain runtime binaries only so a different temp path does not leak in.
   for (const module of ['node-pty', 'smart-whisper']) {

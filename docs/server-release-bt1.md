@@ -25,13 +25,13 @@ The accepted source passes Linux 25,931 tests / 82 skips, Windows 1,107 / 31 ski
 
 ## Build and package
 
-Use a new checkout with its own dependency tree. The build host must satisfy package.json engines and have npm, GNU tar/gzip, a C/C++ toolchain, make and Python for node-pty. Never run Electron rebuild against another checkout or a live service's dependencies.
+Use a new checkout with its own dependency tree. The build host must satisfy package.json engines and have npm, GNU tar/gzip, a C/C++ toolchain, make and Python for node-pty and smart-whisper/whisper.cpp. Never run Electron rebuild against another checkout or a live service's dependencies.
 
 ```sh
 npm ci --ignore-scripts
 node scripts/patch-node-pty.mjs
 node scripts/patch-smart-whisper.mjs
-npm rebuild node-pty smart-whisper esbuild
+CFLAGS=-D_GNU_SOURCE npm rebuild node-pty smart-whisper esbuild
 npm run typecheck
 npm run build
 npm run server:build

@@ -16,14 +16,22 @@ assert(evidence !== root && !evidence.startsWith(root + path.sep), 'Evidence mus
 await fs.mkdir(evidence, { mode: 0o700 }) // Fail rather than reuse another smoke environment.
 const dirs = Object.fromEntries(['home', 'data', 'tmp', 'tmux', 'profile', 'config', 'cache'].map(k => [k, path.join(evidence, k)]))
 for (const dir of Object.values(dirs)) await fs.mkdir(dir, { mode: 0o700 })
-// Chromium's process-singleton socket must fit sockaddr_un even when evidence paths
-// are long. Give only the browser a fresh short private temp directory.
-const browserTmp = await fs.mkdtemp('/tmp/bt1-browser-')
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
 assert.equal(pkg.version, '0.5.0-bt.1')
 assert.equal(pkg.nodeTermUpdates, 'disabled')
 const require = createRequire(path.join(root, 'package.json'))
+for (const name of ['ws', 'node-pty', 'ssh2', 'smart-whisper']) {
+  const resolved = await fs.realpath(require.resolve(name))
+  assert(resolved.startsWith(root + path.sep), 'Dependency must resolve within extracted package: ' + name)
+}
+for (const binary of ['node-pty/build/Release/pty.node', 'smart-whisper/build/Release/smart-whisper.node']) {
+  assert((await fs.stat(path.join(root, 'node_modules', binary))).isFile(), 'Missing packaged native binary: ' + binary)
+}
 const WebSocket = require('ws')
+// Chromium's process-singleton socket must fit sockaddr_un even when evidence paths
+// are long. Give only the browser a fresh short private temp directory, after all
+// package validation that can reject before starting any processes.
+const browserTmp = await fs.mkdtemp('/tmp/bt1-browser-')
 const password = randomBytes(24).toString('hex')
 // Construct from an allowlist: never inherit account homes, hook endpoints, SSH agent,
 // proxy/auth tokens, NODE_OPTIONS, browser settings or application flags.
@@ -33,12 +41,16 @@ const env = { PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/
   NODETERM_DATA_DIR: dirs.data, NODETERM_HOST: '127.0.0.1', NODETERM_PORT: '0',
   NODETERM_SERVER_PASSWORD: password }
 let server, browser, ws, cdp, persistKey
+let totalBudgetExceeded = false
+const serverDiagnostics = { stderrBytes: 0, stderrLines: 0, warningLines: 0, errorLines: 0 }
 const runtimeErrors = []
 const result = { status: 'RUNNING', version: pkg.version, platform: process.platform,
   architecture: process.arch, node: process.version, nodeAbi: process.versions.modules,
   privateEnvironment: true, packageRoot: root,
   limits: 'Local extracted-package HTTP/WS and disposable Chromium UI smoke; no provider/OS/device push, production deployment, SSH target or Desktop certification.' }
-const watchdog = setTimeout(() => { server?.kill('SIGTERM'); browser?.kill('SIGTERM') }, 60000)
+// This is an explicit total budget; individual phase deadlines are upper bounds
+// within it. Report its expiry directly rather than attributing it to a later phase.
+const watchdog = setTimeout(() => { totalBudgetExceeded = true; server?.kill('SIGTERM'); browser?.kill('SIGTERM') }, 60000)
 watchdog.unref()
 async function stop(child) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return
@@ -54,7 +66,20 @@ try {
   let output = ''
   server.stdout.on('data', chunk => { output += chunk })
   // Store no raw boot logs: setup URLs and hook tokens are private even in a disposable run.
-  server.stderr.on('data', () => {})
+  let stderrTail = ''
+  const countDiagnostic = line => {
+    if (!line) return
+    serverDiagnostics.stderrLines++
+    if (/warn|degrad/i.test(line)) serverDiagnostics.warningLines++
+    if (/error|fail|refus|unavailable/i.test(line)) serverDiagnostics.errorLines++
+  }
+  server.stderr.on('data', chunk => {
+    serverDiagnostics.stderrBytes += chunk.length
+    const lines = (stderrTail + chunk.toString()).split('\n')
+    stderrTail = lines.pop()
+    for (const line of lines) countDiagnostic(line)
+  })
+  server.stderr.on('end', () => { countDiagnostic(stderrTail); stderrTail = '' })
   const port = await new Promise((resolve, reject) => {
     const deadline = setTimeout(() => reject(new Error('No package listener within 25s')), 25000)
     const poll = setInterval(() => {
@@ -194,6 +219,12 @@ try {
   }
   clearTimeout(watchdog)
   result.serverExit = { code: server?.exitCode, signal: server?.signalCode }
+  result.serverDiagnostics = serverDiagnostics
+  if (totalBudgetExceeded) {
+    result.status = 'FAIL'
+    result.error = 'Smoke exceeded the explicit total budget of 60 seconds'
+    process.exitCode = 1
+  }
   if (result.status === 'PASS' && server?.exitCode !== 0) {
     result.status = 'FAIL'
     result.error = 'Server did not shut down cleanly'
