@@ -14,7 +14,8 @@
 //
 // This file is the renderer's own fail-closed refusal of what cannot work; core re-checks the target.
 
-import type { ClaudeAccount } from '@shared/types'
+import { settleRestart, type RestartOutcome } from '../terminal/agent-restart'
+import type { ClaudeAccount, ClaudeSessionCopyResult } from '@shared/types'
 import { sshHostKey, type SshServer } from '@shared/ssh'
 
 /**
@@ -79,7 +80,7 @@ export function planClaudeAccountSwitch(
   }
 }
 
-/** The notice for a copy refusal. The pane still comes back (on the old account) either way. */
+/** A copy refusal is not a receipt for a resumed conversation. */
 export function copyRefusalText(reason: string, targetLabel: string): string {
   const why =
     reason === 'diverged'
@@ -89,7 +90,7 @@ export function copyRefusalText(reason: string, targetLabel: string): string {
         : reason === 'unknown-account'
           ? `${targetLabel} is no longer available`
           : 'the transcript could not be copied'
-  return `Could not move this conversation to ${targetLabel} — ${why}. It was resumed on its current account.`
+  return `Could not confirm the copy to ${targetLabel} — ${why}. A partial copy may remain. Check both accounts and the terminal before trying again.`
 }
 
 /** The `sshHostKey` of the host an SSH project's node runs on, or undefined for a local node (and
@@ -106,15 +107,15 @@ export function claudeSwitchHostKey(
  * bulk move (one summary for N nodes) share the choreography and differ only in what they say.
  */
 export type ClaudeSwitchOutcome =
-  | { kind: 'switched' }
+  | { kind: 'switched'; saveUnconfirmed?: boolean }
   | { kind: 'same-account' }
   | {
       kind: 'refused'
       reason: 'not-claude' | 'remote' | 'no-session' | 'unavailable' | 'no-connection' | 'not-attached'
     }
-  /** The CLI never quit (busy / not eligible at call time, or it did not exit in time). */
-  | { kind: 'not-restarted'; outcome: 'exit-timeout' | 'not-eligible' }
-  /** Quit and came back — on its ORIGINAL account, because the copy was refused. */
+  /** Restart did not complete; copy facts survive later failures. */
+  | { kind: 'not-restarted'; outcome: 'exit-timeout' | 'not-eligible'; copy?: 'not-requested' | 'unconfirmed' | 'confirmed' }
+  /** The renderer restart leg completed without an acknowledged copy. */
   | { kind: 'copy-failed'; reason: string }
 
 /** The single-switch notice (null = say nothing: a no-op same-account pick). */
@@ -124,7 +125,7 @@ export function switchOutcomeNotice(
 ): { kind: 'info' | 'error'; text: string } | null {
   switch (o.kind) {
     case 'switched':
-      return { kind: 'info', text: `Switched to ${targetLabel} — resuming the same conversation.` }
+      return { kind: o.saveUnconfirmed ? 'error' : 'info', text: `The conversation is available in ${targetLabel}, and an account update and restart were requested. Check that the terminal has resumed the right conversation.${o.saveUnconfirmed ? ' Saving the account selection was not confirmed.' : ''}` }
     case 'same-account':
       return null
     case 'copy-failed':
@@ -132,10 +133,12 @@ export function switchOutcomeNotice(
     case 'not-restarted':
       return {
         kind: 'error',
-        text:
-          o.outcome === 'not-eligible'
-            ? 'Switch skipped: this session is busy or not attached — try again once its turn is done.'
-            : 'Switch skipped: the agent did not quit in time. Nothing was changed.'
+        text: (o.copy === 'confirmed'
+          ? `The conversation is available in ${targetLabel}; that copy remains available. `
+          : o.copy === 'not-requested'
+            ? 'The copy was not requested. '
+            : 'The copy could not be confirmed; a partial copy may remain. ') +
+          'The terminal restart was not confirmed. Inspect the terminal before trying again.'
       }
     case 'refused':
       return {
@@ -205,19 +208,59 @@ export function startBulkSwitch<T>(
   return Promise.all(ids.map((id) => run(id).catch((): undefined => undefined)))
 }
 
-/** One line for a bulk move: what moved, what came back on its old account, what was skipped. */
+/** One line retaining exposure facts separately from restart and refusal outcomes. */
 export function summarizeBulkSwitch(
   outcomes: readonly ClaudeSwitchOutcome[],
   busySkipped: number,
   targetLabel: string
 ): { kind: 'info' | 'error'; text: string } {
-  const moved = outcomes.filter((o) => o.kind === 'switched').length
-  const stayed = outcomes.filter((o) => o.kind === 'copy-failed').length
-  const skipped =
-    busySkipped + outcomes.filter((o) => o.kind === 'not-restarted' || o.kind === 'refused').length
-  const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
-  const parts = [`Moved ${plural(moved, 'session', 'sessions')} to ${targetLabel}`]
-  if (stayed) parts.push(`${stayed} resumed on their old account (the conversation could not be copied)`)
-  if (skipped) parts.push(`${skipped} skipped (busy, not attached or without a conversation yet)`)
-  return { kind: stayed || skipped ? 'error' : 'info', text: `${parts.join(' · ')}.` }
+  const completed = outcomes.filter((o) => o.kind === 'switched').length
+  const retained = outcomes.filter((o) => o.kind === 'not-restarted' && o.copy === 'confirmed').length
+  const uncertain = outcomes.filter((o) => o.kind === 'copy-failed' ||
+    (o.kind === 'not-restarted' && o.copy !== 'confirmed' && o.copy !== 'not-requested')).length
+  const incomplete = outcomes.filter((o) => o.kind === 'not-restarted' && o.copy === 'not-requested').length
+  const unsaved = outcomes.filter((o) => o.kind === 'switched' && o.saveUnconfirmed).length
+  const refused = busySkipped + outcomes.filter((o) => o.kind === 'refused').length
+  const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
+  const parts: string[] = []
+  if (completed) parts.push(`${count(completed, 'conversation', 'conversations')} available in ${targetLabel}; account update and restart requested`)
+  if (retained) parts.push(`${count(retained, 'copy', 'copies')} available, restart incomplete`)
+  if (uncertain) parts.push(`${count(uncertain, 'copy', 'copies')} unconfirmed; partial copies may remain`)
+  if (incomplete) parts.push(`${count(incomplete, 'restart', 'restarts')} incomplete before copying`)
+  if (unsaved) parts.push(`${unsaved} account saves unconfirmed`)
+  if (refused) parts.push(`${count(refused, 'session', 'sessions')} skipped before switching`)
+  const check = retained || uncertain || incomplete || unsaved
+    ? ' Check the affected accounts and terminals before trying again.'
+    : completed ? ' Check that the terminals have resumed the right conversations.' : ''
+  return { kind: retained || uncertain || incomplete || refused || unsaved ? 'error' : 'info',
+    text: parts.length ? `${parts.join(' · ')}.${check}` : 'No account switches requested.' }
+
+}
+
+/** Existing quit/copy/recycle choreography, with copy facts retained across restart failure. */
+export async function runClaudeSwitch(deps: {
+  copy: () => Promise<ClaudeSessionCopyResult>
+  restart: (beforeRecycle: () => Promise<{ accountId: string | undefined } | undefined>) => Promise<RestartOutcome>
+  targetAccountId: string | undefined
+  markDirty: () => void
+}): Promise<ClaudeSwitchOutcome> {
+  let copy: 'not-requested' | 'unconfirmed' | 'confirmed' = 'not-requested'
+  let reason = 'failed'
+  const outcome = await settleRestart(() => deps.restart(async () => {
+    copy = 'unconfirmed'
+    const result = await deps.copy().catch((): ClaudeSessionCopyResult => ({ ok: false, reason: 'failed' }))
+    if (!result.ok) { reason = result.reason; return }
+    copy = 'confirmed'
+    return { accountId: deps.targetAccountId }
+  }))
+  // TypeScript cannot observe assignments made by the awaited callback.
+  const observed = copy as 'not-requested' | 'unconfirmed' | 'confirmed'
+  let saveUnconfirmed = false
+  if (observed === 'confirmed') {
+    try { deps.markDirty() } catch { saveUnconfirmed = true }
+  }
+  if (outcome !== 'restarted') return {
+    kind: 'not-restarted', outcome: outcome === 'host-unsupported' ? 'not-eligible' : outcome, copy: observed
+  }
+  return observed === 'confirmed' ? { kind: 'switched', ...(saveUnconfirmed ? { saveUnconfirmed } : {}) } : { kind: 'copy-failed', reason }
 }

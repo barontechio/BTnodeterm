@@ -11,6 +11,7 @@ export function useContextEnsure(
   useEffect(() => {
     if (agentId && hasUsage(agentId) && sessionId) {
       api.ensure(sessionId, cwd, accountId, nodeId, capabilityAgentId(agentId))
+      return api.watchRemote?.(nodeId)
     }
   }, [api, nodeId, agentId, sessionId, cwd, accountId])
 }

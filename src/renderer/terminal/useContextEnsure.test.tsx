@@ -43,3 +43,16 @@ it('does not ask for an unknown session or unsupported agent; keeps Claude routi
     expect(api.ensure).toHaveBeenCalledWith('s1', '/remote/repo', 'claude-account', 'canvas', 'claude')
   } finally { await act(async () => root.unmount()) }
 })
+
+it('owns optional continuous demand for exactly the mounted binding lifetime', async () => {
+  const release = vi.fn(), watchRemote = vi.fn(() => release)
+  const api = { ensure: vi.fn(), onUpdate: vi.fn(), watchRemote }
+  const root = createRoot(document.createElement('div'))
+  try {
+    await act(async () => root.render(<Probe api={api} />))
+    expect(watchRemote).toHaveBeenCalledWith('canvas')
+    await act(async () => root.render(<Probe api={api} sid="new-session" />))
+    expect(release).toHaveBeenCalledTimes(1); expect(watchRemote).toHaveBeenCalledTimes(2)
+  } finally { await act(async () => root.unmount()) }
+  expect(release).toHaveBeenCalledTimes(2)
+})

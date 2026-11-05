@@ -74,6 +74,79 @@ describe('planServerChange', () => {
     expect(plan.ropes.map((r) => r.id)).toEqual(['ctrl-1'])
   })
 
+  it('keeps the edges of a node a stale payload lacks, as it keeps the node (two-tab edge loss)', () => {
+    // MEASURED on the Server Edition with two browser tabs (2026-11-05, test/server/
+    // open-edge-loss.e2e.test.ts): the second tab's whole-workspace save, built before the
+    // factory's `open-agent` ops reached it, landed AFTER the factory's save and wrote the file
+    // without the new node and its rope/bridge; `publishPersisted` re-read that file and this
+    // payload arrived with the node and both edges MISSING. The node survives this merge (a node is
+    // never removed here; the file write that dropped it is about to be undone by this tab's next
+    // save), so its edges must survive with it. Reading them as "the server removed the edge" while
+    // keeping the node made the next autosave persist the node WITHOUT its edges — permanently.
+    const spawned = node('term-spawned')
+    const base = project([caller, first, spawned], {
+      ropes: [rope('ctrl-1', caller.id, first.id), rope('ctrl-2-ab12cd34', caller.id, spawned.id)],
+      bridges: [rope('link-2-ef56ab78', caller.id, spawned.id)]
+    })
+    const stale = project([caller, first], { ropes: [rope('ctrl-1', caller.id, first.id)], bridges: [] })
+
+    const plan = planServerChange({
+      base,
+      incoming: stale,
+      liveNodeIds: [caller.id, first.id, spawned.id],
+      liveRopes: [rope('ctrl-1', caller.id, first.id), rope('ctrl-2-ab12cd34', caller.id, spawned.id)],
+      liveBridges: [rope('link-2-ef56ab78', caller.id, spawned.id)]
+    })
+
+    expect(plan.added).toEqual([])
+    expect(plan.ropesChanged).toBe(false)
+    expect(plan.ropes.map((r) => r.id)).toEqual(['ctrl-1', 'ctrl-2-ab12cd34'])
+    expect(plan.bridgesChanged).toBe(false)
+    expect(plan.bridges.map((b) => b.id)).toEqual(['link-2-ef56ab78'])
+  })
+
+  it.each([
+    ['target', 'the source is kept'],
+    ['source', 'the target is kept']
+  ])('keeps an edge when the payload lacks its %s, though %s', (missing) => {
+    const stranger = node('term-stranger')
+    const edge = missing === 'target'
+      ? rope('ctrl-x', caller.id, stranger.id)
+      : rope('ctrl-x', stranger.id, caller.id)
+    const plan = planServerChange({
+      base: project([caller, stranger], { ropes: [edge], bridges: [] }),
+      incoming: project([caller], { ropes: [], bridges: [] }),
+      liveNodeIds: [caller.id, stranger.id],
+      liveRopes: [edge],
+      liveBridges: []
+    })
+
+    expect(plan.ropesChanged).toBe(false)
+    expect(plan.ropes.map((r) => r.id)).toEqual(['ctrl-x'])
+  })
+
+  it('still drops an edge the server removed between two nodes it kept', () => {
+    // The payload that says "edge removed" is one that still holds BOTH endpoints without it
+    // (an unlink, a cancelled wait). That rule is unchanged by the case above.
+    const base = project([caller, first], {
+      ropes: [rope('ctrl-1', caller.id, first.id)],
+      bridges: [rope('link-1', caller.id, first.id)]
+    })
+    const incoming = project([caller, first], { ropes: [], bridges: [rope('link-1', caller.id, first.id)] })
+
+    const plan = planServerChange({
+      base,
+      incoming,
+      liveNodeIds: [caller.id, first.id],
+      liveRopes: [rope('ctrl-1', caller.id, first.id)],
+      liveBridges: [rope('link-1', caller.id, first.id)]
+    })
+
+    expect(plan.ropesChanged).toBe(true)
+    expect(plan.ropes).toEqual([])
+    expect(plan.bridgesChanged).toBe(false)
+  })
+
   it('keeps a rope the canvas added and has not saved yet', () => {
     // Not in base ⇒ nobody but this canvas has ever seen it ⇒ the server's file cannot be evidence
     // that it is gone. Dropping it would delete an edge the user just drew.

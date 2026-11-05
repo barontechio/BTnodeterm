@@ -5,6 +5,7 @@ import { IPC } from "../shared/ipc";
 import { isNewProjectStorage } from "../shared/project-storage";
 import { platform } from "./platform";
 import { DEFAULT_SETTINGS, type Settings } from "../shared/types";
+import { stableStringify } from "../shared/canvas-mutations";
 
 /**
  * Merge a possibly-partial/legacy `Settings` object over `DEFAULT_SETTINGS`. A plain
@@ -150,9 +151,26 @@ export class SettingsStore {
   /** Persist a full settings snapshot. Public so startup migrations can use the exact same atomic
    *  FIFO writer as renderer IPC instead of reaching into the cache or duplicating disk semantics. */
   save(settings: Settings): Promise<void> {
-    const run = this.saveChain.then(() => this.saveNow(settings));
+    const requested = structuredClone(settings);
+    const run = this.saveChain.then(() => this.saveNow(requested));
     this.saveChain = run.catch(() => {});
     return run;
+  }
+
+  /** Short edits run against the latest durable cache in the same FIFO as all settings writes. */
+  update(edit: (current: Settings) => Settings): Promise<Settings> {
+    const run = this.saveChain.then(async () => {
+      const next = edit(structuredClone(this.cache));
+      if (stableStringify(next) !== stableStringify(this.cache)) await this.saveNow(next);
+      return structuredClone(this.cache);
+    });
+    this.saveChain = run.catch(() => {});
+    return run;
+  }
+
+  patch(patch: Partial<Settings>): Promise<Settings> {
+    const requested = structuredClone(patch);
+    return this.update((current) => ({ ...current, ...requested }));
   }
 
   registerIpc(): void {
@@ -160,10 +178,15 @@ export class SettingsStore {
     platform().handle(IPC.settingsSave, (settings: Settings) =>
       this.save(settings),
     );
+    platform().handleWithSender(IPC.settingsPatch, (id, patch: unknown) => {
+      if (!platform().isOwnerClient?.(id)) throw new Error("settings-owner-required");
+      if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("settings-invalid-patch");
+      return this.patch(patch as Partial<Settings>);
+    });
   }
 
   private async saveNow(settings: Settings): Promise<void> {
-    this.cache = mergeSettings(settings);
+    const committed = mergeSettings(settings);
     // Atomic write (temp + rename) so a mid-write crash can't corrupt settings.json. The temp
     // name is unique per call because nothing serializes this handler and its callers overlap:
     // on the desktop the renderer's coalesced timer save, the `beforeunload` flush that fires
@@ -178,14 +201,20 @@ export class SettingsStore {
     // propagates, so a failed save stays a failed save — and the listeners below still only run
     // on success. There is deliberately no sweep of orphans from killed processes as
     // provider-cookie does: an orphaned settings temp is config litter, not a live credential.
-    await writeFileAtomic(this.filePath, JSON.stringify(this.cache, null, 2), {
+    await writeFileAtomic(this.filePath, JSON.stringify(committed, null, 2), {
       mode: 0o600,
     });
+    this.cache = committed;
     for (const cb of this.listeners) {
       try {
         cb(this.cache);
       } catch {
         // A listener must never break a settings save (or its siblings).
+      }
+    }
+    for (const id of platform().clientIds()) {
+      if (platform().isOwnerClient?.(id) === true) {
+        try { platform().sendTo(id, IPC.settingsChanged, this.cache); } catch { /* the durable save already succeeded */ }
       }
     }
   }

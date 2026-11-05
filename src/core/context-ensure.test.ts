@@ -93,6 +93,17 @@ afterEach(() => {
 })
 
 describe('local rehydration, per agent', () => {
+  it('never replays or scans a local namesake for a known remote node without a working adapter', async () => {
+    writeClaudeTranscript()
+    claude.pathFor = () => '/already-tracked-local.jsonl'
+    for (const ensureRemote of [undefined, async () => null]) {
+      registerContextEnsureIpc({ tailFor, isRemoteNode: (id) => id === 'remote', ensureRemote })
+      await ensure({ nodeId: 'remote', agentId: 'claude' })
+    }
+    expect(claude.replay).not.toHaveBeenCalled(); expect(claude.tracked).toEqual([])
+    await ensure({ nodeId: 'local', agentId: 'claude' })
+    expect(claude.replay).toHaveBeenCalledWith(SID)
+  })
   it('replays a tracked session on each remount without resolving or tracking again', async () => {
     claude.pathFor = () => '/already-tracked.jsonl'
     registerContextEnsureIpc({ tailFor })

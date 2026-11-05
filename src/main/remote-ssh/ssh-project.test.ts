@@ -1774,6 +1774,7 @@ describe('SshProjectManager', () => {
         onStatus: vi.fn()
       })
       const first = mgr.connect('p1', conn) // blocked mid-connect
+      const firstRejected = expect(first).rejects.toThrow('cancelled')
       // Let the first attempt pass its (microtask-ish) setup so it spawns + registers conns before
       // we tear it down; otherwise disconnect() runs before the attempt has registered and finds
       // nothing to disconnect (a false pass that wouldn't exercise the inFlight fix).
@@ -1781,7 +1782,7 @@ describe('SshProjectManager', () => {
       await mgr.disconnect('p1') // tears the master down and (the fix) clears inFlight
       const second = mgr.connect('p1', conn) // reconnect while the old attempt is still queued
       releaseCheck!()
-      await Promise.all([first, second])
+      await Promise.all([firstRejected, second])
       expect(spawnMaster).toHaveBeenCalledTimes(2) // the second connect spawned a fresh master
       expect(mgr.refForProject('p1')).toBeTruthy()
     })
@@ -2268,11 +2269,12 @@ describe('SshProjectManager', () => {
         releaseAgent = r
       })
       const master = { kill: vi.fn(), on: vi.fn() }
+      const spawnMaster = vi.fn(() => master)
       const onIdle = vi.fn()
       const onStatus = vi.fn()
       const mgr = new SshProjectManager({
         userDataDir: '/ud',
-        spawnMaster: vi.fn(() => master),
+        spawnMaster,
         run: vi.fn(async () => ({ code: 0, stdout: '' })),
         runScp: vi.fn(async () => ({ code: 0 })),
         getHook: () => ({ port: 1, token: 't', version: '1' }),
@@ -2288,8 +2290,8 @@ describe('SshProjectManager', () => {
       expect(onIdle).toHaveBeenCalledTimes(1)
       releaseAgent()
       await expect(attempt).rejects.toThrow(/cancelled/)
-      // The just-spawned master was killed, nothing registered, and 'connected' never fired.
-      expect(master.kill).toHaveBeenCalled()
+      // The expired attempt is now fenced before spawn, rather than spawning only to kill it.
+      expect(spawnMaster).not.toHaveBeenCalled()
       expect(onStatus.mock.calls.map((c) => c[0].status)).not.toContain('connected')
     })
 
@@ -2433,6 +2435,7 @@ describe('SshProjectManager', () => {
       })
       const conn = { host: 'h', user: 'u' }
       const stale = mgr.connect('p1', conn) // parks inside setup's tunnel verification
+      const staleRejected = expect(stale).rejects.toThrow('cancelled')
       await new Promise((r) => setImmediate(r))
       await new Promise((r) => setImmediate(r))
       await mgr.disconnect('p1') // user tears the project down mid-setup
@@ -2440,7 +2443,7 @@ describe('SshProjectManager', () => {
       expect(live.hookEndpointPath).toMatch(/^\/home\/u\/\.nodeterm\/hook-endpoint-p1-[a-f0-9]{16}\.env$/)
       released = true
       releaseFirstSetup!()
-      await stale // settles without owning the entry
+      await staleRejected // cancelled continuation cannot publish a successful connection
       // The live entry survived the stale attempt: the endpoint is intact (a reuse connect
       // returns the cached entry - under the unguarded code the stale write set it to undefined,
       // which is the dead-RUNNING-badges failure). Status counts are not asserted: the live

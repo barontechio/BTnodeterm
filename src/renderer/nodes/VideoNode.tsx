@@ -1,3 +1,4 @@
+import { browserRemoteMedia, remoteTransferReference } from '../lib/remote-transfers'
 import { useEffect, useState } from 'react'
 import { Tooltip } from '../components/Tooltip'
 import { MaximizeButton } from './MaximizeButton'
@@ -31,6 +32,35 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
     setFetching(false)
     if (!filePath) return
     let alive = true
+    let allowedUrl = ''
+    let renewal: ReturnType<typeof setInterval> | undefined
+    const media = window.nodeTerminal.media
+    const transfers = window.nodeTerminal.remoteTransfers
+    const release = (url: string) => {
+      const reference = remoteTransferReference(url)
+      if (reference && transfers) void transfers.release(reference).catch(() => {})
+      else if (url) void media.release?.(url).catch(() => {})
+    }
+    const renew = (url: string) => {
+      const reference = remoteTransferReference(url)
+      return reference && transfers ? transfers.renew(reference) : media.renew?.(url) ?? Promise.resolve(true)
+    }
+    const accept = (url: string) => {
+      if (!alive) { release(url); return }
+      allowedUrl = url
+      setSrc(url)
+      if (media.renew || transfers) {
+        let renewing = false
+        renewal = setInterval(() => {
+          if (renewing) return
+          renewing = true
+          void renew(url).then((valid) => {
+            if (!valid && alive) { setSrc(''); setError('Playback access expired. Reopen this media file.'); clearInterval(renewal) }
+          }).catch(() => {}).finally(() => { renewing = false })
+        }, 60_000)
+      }
+    }
+    const cleanup = () => { alive = false; clearInterval(renewal); release(allowedUrl) }
     if (remote) {
       // Remote fetch can take a while for a large file — say what the wait is.
       const projectId = useProjects.getState().activeProjectId
@@ -39,12 +69,13 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
         return
       }
       setFetching(true)
-      window.nodeTerminal.media
-        .allowSsh(projectId, filePath)
-        .then((r) => {
-          if (!alive) return
+      const allowed = transfers
+        ? browserRemoteMedia(transfers, projectId, id, filePath).then(url => ({ok: true as const, url}))
+        : media.allowSsh(projectId, filePath)
+      allowed.then((r) => {
+          if (!alive) { if (r.ok) release(r.url); return }
           setFetching(false)
-          if (r.ok) setSrc(r.url)
+          if (r.ok) accept(r.url)
           else setError(r.error)
         })
         .catch(() => {
@@ -52,25 +83,19 @@ export default function VideoNode({ id, data, selected }: NodeProps<CanvasNode>)
           setFetching(false)
           setError('Couldn’t load this media file.')
         })
-      return () => {
-        alive = false
-      }
+      return cleanup
     }
     window.nodeTerminal.media
-      .allow(filePath)
-      .then((url) => {
-        if (alive) setSrc(url)
-      })
+      .allow(filePath, { projectId: useProjects.getState().activeProjectId ?? '', nodeId: id })
+      .then(accept)
       .catch(() => {
         if (alive) setError('Couldn’t load this media file.')
       })
-    return () => {
-      alive = false
-    }
+    return cleanup
     // activeProjectId is read at effect time on purpose: the node lives inside its project's
     // canvas, so the active project when the node mounts IS its project.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, remote])
+  }, [filePath, remote, id])
 
   return (
     <>

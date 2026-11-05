@@ -28,6 +28,7 @@ const { screen, capture, sendChatPrompt, session } = vi.hoisted(() => {
   const session = {
     source: 'local',
     api: {
+      context: { ensure: vi.fn() },
       chat: { readTranscript: async () => ({ messages: [], found: true, olderCursor: null, unmatchedResults: [] }) },
       pty: { capture, sendChatPrompt, sendText: vi.fn() }
     }

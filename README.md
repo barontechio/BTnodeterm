@@ -198,7 +198,8 @@ Grab the latest build from **[nodeterm.dev](https://nodeterm.dev)** — the down
 detects your platform. Everything is also listed at
 [nodeterm.dev/releases](https://nodeterm.dev/releases):
 
-- **macOS** — `.dmg` for Apple Silicon and Intel (auto-updates), or **Homebrew**:
+- **macOS 12 Monterey or newer** — `.dmg` for Apple Silicon and Intel (auto-updates), or
+  **Homebrew**:
 
   ```bash
   brew install --cask nodeterm
@@ -224,6 +225,8 @@ detects your platform. Everything is also listed at
   [report what breaks](https://github.com/eneskirca/nodeterm/issues).
 - **iOS** — **nodeterm mobile** on the
   [App Store](https://apps.apple.com/app/nodeterm/id6790581233).
+- **Android** — **nodeterm mobile** on
+  [Google Play](https://play.google.com/store/apps/details?id=com.nodeterm.android).
 
 **Trying it out?** Removal is one script — it stops every process nodeterm started, reverts
 the status-hook/skill entries it merged into your agent CLIs' config (your own hooks and
@@ -247,7 +250,7 @@ your logo goes in this grid and on [nodeterm.dev](https://nodeterm.dev), and you
 requests go first.
 
 <p align="center">
-  <b>0 of 10 spots taken</b> · <a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04">Become a Founding Sponsor →</a>
+  <b>1 of 10 spots taken</b> · <a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04">Become a Founding Sponsor →</a>
 </p>
 
 <!-- Taking a spot: replace one open cell (in order, top-left first) with
@@ -258,7 +261,7 @@ requests go first.
      renewing). If a sponsor cancels, raise the limit by one to reopen their spot. -->
 <table>
   <tr>
-    <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
+    <td align="center" width="20%"><a href="https://locomotive.agency/"><img src="docs/assets/sponsors/locomotive.png" alt="LOCOMOTIVE Agency" width="136" /></a></td>
     <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
     <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
     <td align="center" width="20%"><a href="https://buy.stripe.com/3cI6oJfveehDeIL90w7EQ04"><img src="docs/assets/sponsors/open-spot.svg" alt="Open Founding Sponsor spot" width="136" /></a></td>
@@ -278,8 +281,8 @@ support@nodeterm.dev — and a ⭐ helps too.
 
 ## 🛠 Build from source
 
-Requires Node.js 20+ on macOS or Linux (tmux recommended — it's what makes sessions
-survive restarts). A source checkout does **not** carry the bundled tmux: run
+Requires Node.js 20+ on **macOS 12 Monterey or newer** or Linux (tmux recommended — it's
+what makes sessions survive restarts). A source checkout does **not** carry the bundled tmux: run
 `node scripts/build-tmux.mjs` once on macOS to build it into `resources/bin/tmux` (the
 release job does this automatically), or just install tmux yourself. On **Windows**, run
 `bootstrap-windows.bat` from a fresh checkout first — it checks for Node, the Visual Studio
@@ -310,6 +313,14 @@ npm run dist:linux # AppImage + .deb + .rpm into dist/ (on a Linux host; .rpm ne
 npm run dist:win   # unsigned NSIS installer + zip into dist/ (on a Windows host)
 npm run server:dev # build + run the browser Server Edition (needs Node 22 + tmux)
 ```
+
+**Minimum macOS is 12 (Monterey), for the app and for building it.** Both floors belong to
+the toolchain, not to nodeterm: Electron 42 ships binaries for Monterey and up, so the `.dmg`
+does not launch on Big Sur, and the `esbuild` binary that Vite and the Server Edition build
+use is compiled with Go 1.25, which dropped macOS 11 — on Big Sur `npm install` dies in
+esbuild's postinstall with `dyld: Symbol not found: _SecTrustCopyCertificateChain`, and
+nothing downstream (`electron-vite`, `server:dev`) exists. An older Mac can still use nodeterm
+by running the [Server Edition](./docs/SERVER.md) on a Linux host and opening it in a browser.
 
 ## ⌨️ Keyboard shortcuts
 

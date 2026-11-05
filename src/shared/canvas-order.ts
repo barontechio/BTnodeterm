@@ -190,6 +190,8 @@ function isBoardOrderOp(m: CanvasMutation): boolean {
  *  the re-creation gate (`hasPendingRemove`) holds back everything EXCEPT a remove. */
 export const isRemoveOp = isRemove
 
+export type CanvasBatchDecision = 'full' | 'layout' | 'drop'
+
 export interface CanvasOrder {
   /**
    * Stamp a mutation we are ABOUT to cast with our causal position (`seen`) — rule 4.
@@ -215,6 +217,9 @@ export interface CanvasOrder {
    */
   accept(m: SceneMutation, projectId?: string): boolean
   accept(m: CanvasMutation, projectId: string): boolean
+  /** Host batch only, after whole-envelope validation. A pending local node edit keeps its
+   * non-layout fields but cannot suppress a newer host membership/layout transition. */
+  acceptBatch(m: CanvasMutation, projectId: string): CanvasBatchDecision
   /**
    * True while one of OUR remove-class casts (`remove` / `edge-remove`) for `key` (a `mutationKey`)
    * is unacked — THE RE-CREATION GATE.
@@ -288,6 +293,9 @@ export function createCanvasOrder(
    * late ack is APPLIED rather than dropped, if the total order still says it wins.
    */
   const superseded = new Set<string>()
+  /** A layout-only batch kept local content intact; do not replay an older ACK over a newer
+   * still-pending local title/text edit. The final ACK repairs with the latest canonical value. */
+  const layoutSuperseded = new Set<string>()
   /**
    * RULE 4 — nodes a `remove` has taken off the canvas, and the `seq` that remove was ordered at.
    * An upsert whose sender had not yet applied that remove (`seen` below it) was produced in
@@ -367,6 +375,104 @@ export function createCanvasOrder(
     return true
   }
 
+  function decide(m: CanvasMutation, projectId: string | undefined, batch: boolean): CanvasBatchDecision {
+    const id = mutationKey(m, projectId ?? '')
+    const seq = m.seq ?? 0
+    const highest = seen.get(id) ?? 0
+    // `seq` 0 means an unstamped mutation (no reflector in the path) — never treat it as stale.
+    const current = seq === 0 || seq > highest
+    if (seq > highest) seen.set(id, seq)
+    // After a reset, the first STAMPED seq says which reconnect it was: at or below our position,
+    // the core restarted and its counter began again, so our position is that seq (kept, it would
+    // make every cast read "never stale" until the new counter caught up); above it, the same core
+    // carried on and the position simply rises below.
+    if (rebase && seq > 0) {
+      rebase = false
+      if (seq <= lastSeq) lastSeq = seq
+    }
+    // Our causal position for the mutations WE cast next (rule 4). Advanced for EVERYTHING we
+    // process — our own echo included, and a straggler too: both prove the order has reached at
+    // least that far, and "what did this client know" says nothing about who sent it.
+    if (seq > lastSeq) lastSeq = seq
+
+    // Rule 4's bookkeeping, before any verdict below reads it. Only a CURRENT mutation may move
+    // it: a straggler describes a state the total order has already left behind.
+    const stale = supersededByRemove(m, id)
+    if (current) {
+      if (isRemove(m)) noteRemoved(id, seq)
+      else if (!stale) removed.delete(id) // a deliberate re-creation: this node is alive again
+    }
+
+    if (m.src && m.src === src) {
+      const p = pending.get(id)
+      // Rule 3: our optimistic value was overwritten by a peer while this cast was in flight (the
+      // TTL had lapsed, so rule 2 no longer held it off). If this echo still wins the total order,
+      // it is a REPAIR, not a rubber-band — apply it and land where every other client already is.
+      // Rule 4 forecloses that: a value the delete superseded lost on every OTHER client, so
+      // replaying it here would resurrect — on this canvas alone — a node nobody else has.
+      const repair = superseded.has(id) && current && !stale
+      const layoutRepair = layoutSuperseded.has(id)
+      let settled = false
+      // Rule 1: otherwise our own echo is just an ack — consume it, apply nothing.
+      if (p && --p.count <= 0) {
+        pending.delete(id)
+        superseded.delete(id) // every cast of ours is accounted for; the node is settled
+        layoutSuperseded.delete(id)
+        settled = true
+      }
+      // The re-creation gate: this remove is now in our `seen` (above), so a re-creation of the
+      // key stamped from here on carries it. Matched against our casts in the order we made them:
+      // this echo is the one for the FIRST cast of this key still recorded, and every cast recorded
+      // before it has had its echo lost (FIFO) — a remove among them will never be acked, so its
+      // gate is released too. An echo we have no record of (straggling in after a reset) releases
+      // nothing, so it cannot push a later remove's count below one; nor does the echo of a cast
+      // the capped record forgot (`forgotten`), which would otherwise match a LATER cast of its key.
+      const lost = forgotten.get(id)
+      if (lost) {
+        if (lost <= 1) forgotten.delete(id)
+        else forgotten.set(id, lost - 1)
+      } else {
+        const at = casts.findIndex((c) => c.key === id)
+        if (at !== -1) {
+          for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
+          forgotten.clear()
+        }
+      }
+      // …with one exception: the echo of our LAST order op for a board list (every cast of ours
+      // for that list now acked) is APPLIED. An order op lists only the ids its sender knew, so
+      // items teammates added concurrently sit unlisted, in each replica's arrival order, until the
+      // winning order op sorts them (kanban-ops `reorder`). Every other replica applies that op;
+      // its sender, dropping its own echo, was the one that kept its arrival order and diverged
+      // (D5). It lists what this board already shows, so it moves nothing else. Not while a later
+      // cast of ours is in flight: that one wins, and applying this one first would flicker.
+      return (repair && (!layoutRepair || settled)) || (settled && current && isBoardOrderOp(m)) ? 'full' : 'drop'
+    }
+    // A straggler: a mutation the total order has already superseded on this client (applied, or
+    // deliberately dropped). Applying it would move the node BACKWARDS out of the total order.
+    if (!current) return 'drop'
+    // Rule 4: cast in ignorance of the delete — a stale frame, not a decision to bring the node
+    // back. (A re-creation carries `seen` at or past the remove and never reaches here.)
+    if (stale) return 'drop'
+    // Rule 2: an edit of ours for this node is still in flight, so it is later in the total order
+    // than this one and will win everywhere. Keep ours; the peers will land on it.
+    //
+    // NEVER for a `remove`. Rule 2 rests on our unacked mutation winning everywhere, and under
+    // rule 4 it does not: every other client is about to drop it for being older than this
+    // delete. Holding the remove off here is the one way to end up disagreeing with them.
+    if (!isRemove(m) && suppressing(id)) {
+      if (!batch || m.op !== 'upsert') return 'drop'
+      // The host topology wins now; late canonical ACKs still repair the pending title/text.
+      superseded.add(id)
+      layoutSuperseded.add(id)
+      return 'layout'
+    }
+    // Applying a peer's mutation over an unacked cast of ours (the TTL lapsed — `suppressing`
+    // just said so, but the entry is still there): remember that our value is gone, so the late
+    // ack can repair it (rule 3).
+    if (pending.has(id)) { superseded.add(id); layoutSuperseded.delete(id) }
+    return 'full'
+  }
+
   return {
     stamp<M extends CanvasMutation>(m: M): M & MutationStamp {
       // `lastSeq` 0 = we have applied nothing from the reflector yet, which is also the value an
@@ -402,96 +508,15 @@ export function createCanvasOrder(
       // node once more and an older echo of ours must not be replayed over it. (This one's own echo
       // will be dropped as the ack it is; it carries what we already show.)
       superseded.delete(id)
+      layoutSuperseded.delete(id)
     },
 
     accept(m: CanvasMutation, projectId?: string) {
-      const id = mutationKey(m, projectId ?? '')
-      const seq = m.seq ?? 0
-      const highest = seen.get(id) ?? 0
-      // `seq` 0 means an unstamped mutation (no reflector in the path) — never treat it as stale.
-      const current = seq === 0 || seq > highest
-      if (seq > highest) seen.set(id, seq)
-      // After a reset, the first STAMPED seq says which reconnect it was: at or below our position,
-      // the core restarted and its counter began again, so our position is that seq (kept, it would
-      // make every cast read "never stale" until the new counter caught up); above it, the same core
-      // carried on and the position simply rises below.
-      if (rebase && seq > 0) {
-        rebase = false
-        if (seq <= lastSeq) lastSeq = seq
-      }
-      // Our causal position for the mutations WE cast next (rule 4). Advanced for EVERYTHING we
-      // process — our own echo included, and a straggler too: both prove the order has reached at
-      // least that far, and "what did this client know" says nothing about who sent it.
-      if (seq > lastSeq) lastSeq = seq
+      return decide(m, projectId, false) === 'full'
+    },
 
-      // Rule 4's bookkeeping, before any verdict below reads it. Only a CURRENT mutation may move
-      // it: a straggler describes a state the total order has already left behind.
-      const stale = supersededByRemove(m, id)
-      if (current) {
-        if (isRemove(m)) noteRemoved(id, seq)
-        else if (!stale) removed.delete(id) // a deliberate re-creation: this node is alive again
-      }
-
-      if (m.src && m.src === src) {
-        const p = pending.get(id)
-        // Rule 3: our optimistic value was overwritten by a peer while this cast was in flight (the
-        // TTL had lapsed, so rule 2 no longer held it off). If this echo still wins the total order,
-        // it is a REPAIR, not a rubber-band — apply it and land where every other client already is.
-        // Rule 4 forecloses that: a value the delete superseded lost on every OTHER client, so
-        // replaying it here would resurrect — on this canvas alone — a node nobody else has.
-        const repair = superseded.has(id) && current && !stale
-        let settled = false
-        // Rule 1: otherwise our own echo is just an ack — consume it, apply nothing.
-        if (p && --p.count <= 0) {
-          pending.delete(id)
-          superseded.delete(id) // every cast of ours is accounted for; the node is settled
-          settled = true
-        }
-        // The re-creation gate: this remove is now in our `seen` (above), so a re-creation of the
-        // key stamped from here on carries it. Matched against our casts in the order we made them:
-        // this echo is the one for the FIRST cast of this key still recorded, and every cast recorded
-        // before it has had its echo lost (FIFO) — a remove among them will never be acked, so its
-        // gate is released too. An echo we have no record of (straggling in after a reset) releases
-        // nothing, so it cannot push a later remove's count below one; nor does the echo of a cast
-        // the capped record forgot (`forgotten`), which would otherwise match a LATER cast of its key.
-        const lost = forgotten.get(id)
-        if (lost) {
-          if (lost <= 1) forgotten.delete(id)
-          else forgotten.set(id, lost - 1)
-        } else {
-          const at = casts.findIndex((c) => c.key === id)
-          if (at !== -1) {
-            for (const c of casts.splice(0, at + 1)) if (c.remove) releaseRemove(c.key)
-            forgotten.clear()
-          }
-        }
-        // …with one exception: the echo of our LAST order op for a board list (every cast of ours
-        // for that list now acked) is APPLIED. An order op lists only the ids its sender knew, so
-        // items teammates added concurrently sit unlisted, in each replica's arrival order, until the
-        // winning order op sorts them (kanban-ops `reorder`). Every other replica applies that op;
-        // its sender, dropping its own echo, was the one that kept its arrival order and diverged
-        // (D5). It lists what this board already shows, so it moves nothing else. Not while a later
-        // cast of ours is in flight: that one wins, and applying this one first would flicker.
-        return repair || (settled && current && isBoardOrderOp(m))
-      }
-      // A straggler: a mutation the total order has already superseded on this client (applied, or
-      // deliberately dropped). Applying it would move the node BACKWARDS out of the total order.
-      if (!current) return false
-      // Rule 4: cast in ignorance of the delete — a stale frame, not a decision to bring the node
-      // back. (A re-creation carries `seen` at or past the remove and never reaches here.)
-      if (stale) return false
-      // Rule 2: an edit of ours for this node is still in flight, so it is later in the total order
-      // than this one and will win everywhere. Keep ours; the peers will land on it.
-      //
-      // NEVER for a `remove`. Rule 2 rests on our unacked mutation winning everywhere, and under
-      // rule 4 it does not: every other client is about to drop it for being older than this
-      // delete. Holding the remove off here is the one way to end up disagreeing with them.
-      if (!isRemove(m) && suppressing(id)) return false
-      // Applying a peer's mutation over an unacked cast of ours (the TTL lapsed — `suppressing`
-      // just said so, but the entry is still there): remember that our value is gone, so the late
-      // ack can repair it (rule 3).
-      if (pending.has(id)) superseded.add(id)
-      return true
+    acceptBatch(m: CanvasMutation, projectId: string) {
+      return decide(m, projectId, true)
     },
 
     hasPendingRemove(key) {
@@ -506,6 +531,7 @@ export function createCanvasOrder(
       seen.clear()
       pending.clear()
       superseded.clear()
+      layoutSuperseded.clear()
       pendingRemoves.clear()
       pendingRemoveTotal = 0
       casts.length = 0

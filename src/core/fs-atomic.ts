@@ -46,7 +46,7 @@
 //     caller, and retrying only delays a clearer error. `ENOSPC` will not improve by waiting.
 //   - It does not swallow the final failure. The last error is thrown with its original code.
 
-import { promises as fs, renameSync } from 'fs'
+import { promises as fs, renameSync, lstatSync, constants as fsConstants } from 'fs'
 import { randomUUID } from 'crypto'
 import path from 'path'
 import { sleep } from '../shared/sleep'
@@ -78,9 +78,10 @@ function codeOf(e: unknown): string {
  * platform — and branching would mean the behaviour under test on a developer's Mac was not the
  * behaviour shipped to a user on Windows.
  */
-export async function renameAtomic(tmp: string, target: string): Promise<void> {
+export async function renameAtomic(tmp: string, target: string, assertDispatch?: () => void): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
+      assertDispatch?.()
       await fs.rename(tmp, target)
       return
     } catch (e) {
@@ -373,7 +374,7 @@ export function tempNameFor(target: string, opts: TempNameOptions = {}): string 
 export async function writeFileAtomic(
   target: string,
   data: string,
-  opts: { mode?: number } = {}
+  opts: { mode?: number; flush?: boolean; assertDispatch?: () => void } = {}
 ): Promise<void> {
   const tmp = tempNameFor(target)
   try {
@@ -381,10 +382,73 @@ export async function writeFileAtomic(
     // so this never fires in normal operation — its job is to refuse a symlink an attacker
     // pre-planted at the (now guessable-in-principle) temp path, so a publish can never be
     // redirected to write through it. On the expected fresh path it is a plain exclusive create.
-    await fs.writeFile(tmp, data, { encoding: 'utf-8', flag: 'wx', ...opts })
-    await renameAtomic(tmp, target)
+    const { assertDispatch, ...fileOptions } = opts
+    assertDispatch?.()
+    await fs.writeFile(tmp, data, { encoding: 'utf-8', flag: 'wx', ...fileOptions })
+    await renameAtomic(tmp, target, assertDispatch)
   } catch (e) {
     await fs.rm(tmp, { force: true }).catch(() => {})
     throw e
   }
+}
+
+/** A write-ahead record must reach the filesystem before its external effect may start.
+ * Flush the file before publication and acknowledge the parent directory after rename.
+ * Unsupported directory flushes refuse before publishing. A later flush failure is an uncertain
+ * publication: the new file can already exist, so callers must stop and reload before proceeding.
+ * This strengthens acknowledgement only; it is not an inter-process lock or an effect permit.
+ */
+export async function writeFileDurableAtomic(target: string, data: string, opts: { mode?: number; assertDispatch?: () => void } = {}): Promise<void> {
+  opts.assertDispatch?.()
+  const directory = await fs.open(path.dirname(target), 'r')
+  try {
+    opts.assertDispatch?.()
+    await directory.sync()
+    await writeFileAtomic(target, data, { ...opts, flush: true })
+    await directory.sync()
+  } finally { await directory.close() }
+}
+
+
+/** Acknowledge bytes already published by an ordinary atomic writer. Recovery calls this under
+ * its existing store FIFO before recording completion. No rewrite, symlink following or retry;
+ * failed/unsupported flushes remain uncertain. It is not a lock against external writers. */
+export async function syncFileDurable(target: string, expectedContent?: string): Promise<() => void> {
+  const flags = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+  const parent = path.dirname(target)
+  const directory = await fs.open(parent, flags)
+  let file: Awaited<ReturnType<typeof fs.open>> | undefined
+  try {
+    file = await fs.open(target, flags)
+    const original = await file.stat({ bigint: true }); const parentStat = await directory.stat({ bigint: true })
+    if (!original.isFile() || original.ino === 0n || !parentStat.isDirectory() || parentStat.ino === 0n)
+      throw new Error('durable-sync-unverifiable-file')
+    const current = async () => {
+      const named = await fs.lstat(target, { bigint: true }); const namedParent = await fs.lstat(parent, { bigint: true })
+      if (!named.isFile() || named.dev !== original.dev || named.ino !== original.ino || named.size !== original.size ||
+        named.mtimeNs !== original.mtimeNs || named.ctimeNs !== original.ctimeNs || !namedParent.isDirectory() ||
+        namedParent.dev !== parentStat.dev || namedParent.ino !== parentStat.ino)
+        throw new Error('durable-sync-file-changed')
+    }
+    await current()
+    if (expectedContent !== undefined) {
+      const expected = Buffer.from(expectedContent, 'utf8')
+      if (original.size !== BigInt(expected.length)) throw new Error('durable-sync-content-changed')
+      const actual = Buffer.alloc(expected.length + 1)
+      const read = await file.read(actual, 0, actual.length, 0)
+      if (read.bytesRead !== expected.length || !actual.subarray(0, read.bytesRead).equals(expected))
+        throw new Error('durable-sync-content-changed')
+      await current()
+    }
+    await file.sync(); await directory.sync(); await current()
+    // A later authority publication must still refer to the exact acknowledged files. This
+    // receipt does not authorize writes; its caller retains the original host permit and FIFO.
+    return () => {
+      const named = lstatSync(target, { bigint: true }); const namedParent = lstatSync(parent, { bigint: true })
+      if (!named.isFile() || named.dev !== original.dev || named.ino !== original.ino || named.size !== original.size ||
+        named.mtimeNs !== original.mtimeNs || named.ctimeNs !== original.ctimeNs || !namedParent.isDirectory() ||
+        namedParent.dev !== parentStat.dev || namedParent.ino !== parentStat.ino)
+        throw new Error('durable-sync-file-changed')
+    }
+  } finally { try { await file?.close() } finally { await directory.close() } }
 }

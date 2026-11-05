@@ -5,6 +5,8 @@ import { createRemoteContextEnsure } from '../core/remote-context-ensure'
 import { isKnownRemoteCodexAccount } from '../core/remote-ssh/codex-home'
 import { createRemoteCodexContext, type RemoteCodexContextTarget } from '../core/remote-ssh/codex-context'
 import { subagentReplay } from '../core/subagent-replay'
+import { SettingsControl } from '../core/settings-control'
+import { registerAgentStatusSnapshotIpc } from '../core/agent-status-snapshot'
 import { grokHomeDir, grokSessionDir, grokSessionsDir } from '../core/agents/grok-paths'
 import { join, resolve, posix } from 'path'
 import { startSessionNameSweep, displayNodeTitle } from '../core/session-name-sweep'
@@ -143,8 +145,20 @@ import {
   registerProjectSetupHandlers,
   type ProjectSetupHandlerDeps
 } from '../core/project-setup-handlers'
-import { registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
+import { HeadlessNodeFactory } from '../core/headless-node-factory'
+import { useHostTeamPlanner } from '../core/team-control-route'
+import { hostGroupedOpenRoute } from '../core/group-control-route'
+import { registerHostLaunchIpc } from '../core/host-launch-ipc'
+import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
+import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
+import { isRemoteWorkspaceNode } from '../core/remote-node-routing'
+import { initWorktreeRecovery, type WorktreeRecoveryRuntime } from '../core/worktree-recovery'
+import { WorktreeRecoveryService } from '../core/worktree-recovery-service'
+import { registerWorktreeRecoveryIpc } from '../core/worktree-recovery-ipc'
 import { registerWorktreeSharedPathsHandlers } from '../core/worktree-shared-paths-handlers'
+import { makeWorktreeControlBackend } from '../core/worktree-control-backend'
+import { isRemoteSessionNode } from '../shared/worktree'
 import { makeProjectSpawnOverrides } from '../core/project-spawn-overrides'
 import { makeLocalSetupRunner } from '../core/project-setup-runner-local'
 import { makeSshSetupRunner } from './remote-ssh/ssh-setup-runner'
@@ -169,22 +183,17 @@ import {
   MODEL_GATEWAY_SECRET_FILE,
   ModelGatewayCredentialService
 } from '../core/model-gateway-credentials'
-import {
-  claudeAccountEnv,
-  generateCommitMessage,
-  generateGroupName,
-  generateTerminalName
-} from '../core/commit-message'
+import { generateCommitMessage } from '../core/commit-message'
+import { registerNamingIpc } from '../core/naming-ipc'
 import { initUpdater, type UpdaterHandle } from './updater'
 import { requestRendererFlush } from './renderer-flush'
-import { fetchCheck } from '../core/check'
+import { configureCheck, fetchCheck, fetchPopupImage } from '../core/check'
 import {
   hookServer,
   OPEN_PROJECT_CONTROL_REFUSAL,
-  REPORT_ISSUE_CONTROL_REFUSAL,
   GITHUB_READ_CONTROL_REFUSAL
 } from '../core/agents/hook-server'
-import { reportIssue } from '../core/github/report-issue-service'
+import { reportIssueFromControl } from '../core/github/control-report-issue'
 import { ReportLedgerStore } from '../core/github/report-ledger'
 import { projectCapabilityGrantedFor } from '../shared/project-capability-consent'
 import { askpassServer, ensureAskpassScript } from './remote-ssh/ssh-askpass'
@@ -311,6 +320,7 @@ import { agentAccountColor } from '../shared/agents/account-color'
 import { canChat, capabilityAgentId } from '../shared/agents/config'
 import {
   setRemoteTranscriptReader,
+  transcriptPresence,
   TITLE_TAIL_BYTES,
   SESSION_ID_RE
 } from '../core/transcript-reader'
@@ -356,6 +366,7 @@ import { contextLinkShimPath, initContextLink, setNodeTranscript } from '../core
 import { wireClaudePaneOrigin } from '../core/agents/claude-pane-origin'
 import { transcriptPathOf } from '../core/context-link-core'
 import { initCanvasControl, canvasControlShimPath } from './canvas-control'
+import { registerControlCapabilities, controlCapabilitiesReply } from '../core/control-capabilities'
 import { DRY_RUN_VERBS, dryRunRequested, dryRunRefusal } from '../shared/control-verbs'
 import { browserFlagRefusal, issueFlagRefusal } from '../core/canvas-control-core'
 import { afterPrFlagRefusal } from '../shared/pr-wait'
@@ -364,7 +375,8 @@ import { geometryArgsRefusal } from '../shared/geometry-verbs'
 import { CONTROL_REQUEST_TIMEOUT_MS } from '../shared/control-confirm'
 import { createControlForwarder, type ControlForwardReply } from './control-forward'
 import { claimOpenedBrowser } from './browser-open-claim'
-import { initTranscriptIndex, searchTranscripts } from '../core/transcript-index'
+import { registerTranscriptSearchIpc } from '../core/transcript-search-ipc'
+import { registerBoardCommentDeliveryIpc } from '../core/agents/board-comment-ipc'
 import { initTelemetry } from './telemetry'
 import { initClaudeUsage } from './claude-usage'
 import {
@@ -375,17 +387,19 @@ import {
 } from './window-state'
 import { remoteCodexUsageTargets } from '../core/usage/remote-codex-usage'
 import { remoteUsageTargets } from '../core/usage/remote-claude-usage'
-import { initLicense, isPremium, getStoredEntitlement } from '../core/license'
+import { initLicense, isPremium, getStoredEntitlement, setLicenseNetworkConsent } from '../core/license'
+import { initProjectLimit } from '../core/project-limit'
+import { readMachineHashResult } from '../core/machine-id'
 import { WhisperModelStore } from '../core/speech/whisper-models'
 import { SpeechService } from '../core/speech/speech-service'
 import { registerSpeechIpc } from '../core/speech/register-ipc'
 import { initClaudeAccounts } from './claude-accounts'
-import { initCodexAccounts } from './codex-accounts'
+import { initCodexAccounts, forgetCodexAccountOwner } from './codex-accounts'
 import { claudeCliCaps, registerClaudeCliIpc, type ClaudeCliCaps } from '../core/claude-cli'
 import type { CodexCliCaps } from '../shared/types'
-import { registerGrokCliIpc } from '../core/grok-cli'
+import { grokCliCaps, registerGrokCliIpc } from '../core/grok-cli'
 import { registerCursorCliIpc } from '../core/cursor-cli'
-import { refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
+import { codexIdentityCaps, refreshCodexIdentityCaps, registerCodexIdentityIpc } from '../core/codex-identity-caps'
 import { codexCliCaps, registerCodexCliIpc } from '../core/codex-cli'
 import { registerWallpaperIpc, setWallpaperImageOps, setWallpaperMediaUrl } from '../core/wallpaper'
 import { nativeImageWallpaperOps } from './wallpaper-native-image'
@@ -443,7 +457,7 @@ import { isJoinCode } from '../core/relay/join-code'
 import { connectHostedTeam, removeHostedBookmark } from './remote/hosted-join'
 import { BookmarkStore, publicBookmark } from './remote/relay-bookmarks'
 import { loadOrCreatePeerKeyPair } from './remote/peer-identity'
-import { initSshProject, onSshProjectStatus } from './remote-ssh/ssh-project'
+import { initSshProject, onSshProjectStatus, forgetSshPassphraseOwner } from './remote-ssh/ssh-project'
 import { resyncProjectAgents, RESYNC_TRANSCRIPT_TAIL_BYTES } from './remote-ssh/agent-resync'
 import { setGitRemoteResolver, type GitRemoteRef } from '../core/remote-ssh/remote-git'
 import { SshFs, sshAppendArgs, sshTailArgs, sshSizeArgs, sshWriteArgs } from './ssh-fs'
@@ -455,6 +469,7 @@ import {
   writeAgentHtml
 } from './media-protocol'
 import { initPlatform, platform } from '../core/platform'
+import { OwnerConfirmationBroker, registerOwnerConfirmationIpc } from '../core/owner-confirmation'
 import { electronPlatform } from './platform-electron'
 import { registerPeerSink, unregisterPeerSink, wirePeerRegistry } from './peer-registry'
 import { WEBGL_CONTEXT_CAP_DESKTOP } from '../shared/webgl'
@@ -487,6 +502,11 @@ if (NT_MULTI && process.platform === 'darwin') app.commandLine.appendSwitch('use
 // .dispatch / .cast — see platform-electron.ts). `platform()` only exposes the CorePlatform half.
 const corePlatform = electronPlatform()
 initPlatform(corePlatform)
+const ownerConfirmations = new OwnerConfirmationBroker(corePlatform)
+let branchOwners: ReturnType<typeof registerConversationBranchIpc> | undefined
+let worktreeRecoveryOwners: ReturnType<typeof registerWorktreeRecoveryIpc> | undefined
+let worktreeRecoveryRuntime: WorktreeRecoveryRuntime | null = null
+registerOwnerConfirmationIpc(corePlatform, ownerConfirmations)
 
 const settingsStore = new SettingsStore()
 // ⌘M / ⌘W are registry commands (`node.toggleMarkdown` / `node.close`), so what the window
@@ -570,6 +590,7 @@ const clearRendererKeyState = (): void => {
 }
 const sshStore = new SshStore()
 const ptyManager = new PtyManager()
+let coreTeams: HeadlessNodeFactory | null = null
 // Dictation: local whisper.cpp models live under userData, one dir per install (same convention
 // as the tmux config / scrollback-store). onProgress pushes { id, pct } to the renderer the same
 // way agent-status events do (sendToMain — resolves the live window at send time).
@@ -606,6 +627,7 @@ let sshProjectManager: ReturnType<typeof initSshProject> | undefined
 // workspace store's `onPersist`, the license callback and the quit handler read it at call time (the
 // boot workspace load's `onPersist` runs before the assignment — a later `const` would be a TDZ throw).
 let watchLinks: WatchLinkService | null = null
+let licenseClient: ReturnType<typeof initLicense> | undefined
 
 // The standalone Codex relay bundle (`out/main/codex-relay.js`, built by scripts/build-codex-relay.mjs
 // after electron-vite build), uploaded to a Linux host for managed Codex accounts. Read once, beside
@@ -761,6 +783,7 @@ registerProjectLaunchInfoHandlers(corePlatform, workspaceStore, projectTrustStor
 // wherever their stores happen to be constructed.
 ptyManager.setProjectSpawnOverrides(
   makeProjectSpawnOverrides({
+    captureSettings: (projectId) => workspaceStore.captureProjectSpawnSettings(projectId),
     readSettings: (projectId) => workspaceStore.readProjectSettings(projectId),
     targetInfo: (projectId) => workspaceStore.projectTargetInfo(projectId),
     trust: projectTrustStore,
@@ -1350,7 +1373,15 @@ function createWindow(): BrowserWindow {
   presenceHub.join(presenceId, 'desktop')
   // The GitHub board's subscriptions, released on every way this page can go: closed, crashed,
   // or replaced by a reload (which reuses this webContents id with nothing subscribed).
-  releaseOnRendererDeparture(win, win.webContents, () => dropGitHubClient?.(presenceId))
+  releaseOnRendererDeparture(win, win.webContents, () => {
+    workspaceStore.forgetClient(presenceId)
+    ownerConfirmations.forgetClient(presenceId)
+    branchOwners?.forget(presenceId)
+    worktreeRecoveryOwners?.forget(presenceId)
+    forgetCodexAccountOwner(presenceId)
+    forgetSshPassphraseOwner(presenceId)
+    dropGitHubClient?.(presenceId)
+  })
   win.on('closed', () => {
     presenceHub.leave(presenceId)
     // This webContents is a pty SUBSCRIBER (co-attach: one pty, N subscribers, keyed by the
@@ -1815,39 +1846,10 @@ app.whenReady().then(async () => {
     if (nodeId) pushBrowserLeases(revokeBrowserNode(nodeId, browserRevocation, { userStopped: false }))
   })
 
-  // The naming agent runs LOCALLY on captured output, so it needs a cwd that exists on THIS
-  // machine. An SSH-project node's `data.cwd` is a path on the REMOTE host — spawning there fails
-  // (ENOENT) and the ✦ button silently did nothing. The cwd carries no meaning for naming (the
-  // terminal output is in the prompt), so a remote node falls back to '' → runAgent's os.homedir().
-  const localNamingCwd = (keys: string[], cwd: string): string =>
-    keys.some((k) => ptyManager.sshRemoteForNode(k)) ? '' : cwd
-
-  // The naming agent runs under the NODE's managed Claude account (same resolution as the pty
-  // spawn: a known, non-pending local account whose dir exists), else the system `~/.claude`.
-  // Without this every ✦ request went out as the system login — which may be logged out or
-  // expired even while the node's own account works fine.
-  const namingEnv = (accountId?: string): NodeJS.ProcessEnv | undefined => {
-    if (!accountId) return undefined
-    const acct = settingsStore.get().claudeAccounts.find((a) => a.id === accountId)
-    if (!acct || acct.pending || acct.host) return undefined
-    const dir = claudeConfigDirFor(accountId)
-    return existsSync(dir) ? claudeAccountEnv(process.env, dir) : undefined
-  }
-
-  corePlatform.handle(
-    IPC.ptyGenerateName,
-    async (persistKey: string, cwd: string, accountId?: string) =>
-      generateTerminalName(
-        await ptyManager.captureSession(persistKey),
-        localNamingCwd([persistKey], cwd),
-        settingsStore.get(),
-        namingEnv(accountId)
-      )
-  )
-
-  corePlatform.handle(IPC.ptyGenerateGroupName, async (memberKeys: string[], cwd: string) => {
-    const contents = await Promise.all(memberKeys.map((k) => ptyManager.captureSession(k)))
-    return generateGroupName(contents, localNamingCwd(memberKeys, cwd), settingsStore.get())
+  registerNamingIpc({
+    captureSession: (k) => ptyManager.captureSession(k),
+    sshRemoteForNode: (k) => ptyManager.sshRemoteForNode(k),
+    getSettings: () => settingsStore.get()
   })
 
   corePlatform.handle(IPC.ptyCapture, (persistKey: string, full?: boolean) =>
@@ -2054,7 +2056,15 @@ app.whenReady().then(async () => {
     if (target) void shell.openExternal(target)
   })
 
+  // The open-project count rides /v1/check only while the Settings → Privacy telemetry toggle is
+  // on, and only once the workspace index is known (core/check.ts). Both read per call.
+  configureCheck({
+    openProjects: () => workspaceStore.openProjectCount(),
+    telemetryEnabled: () => settingsStore.get().telemetryEnabled
+  })
   ipcMain.handle(IPC.announcementsFetch, async () => (await fetchCheck()).messages)
+  ipcMain.handle(IPC.announcementsPopups, async () => (await fetchCheck()).popups)
+  ipcMain.handle(IPC.announcementsPopupImage, (_e, sha256: string) => fetchPopupImage(String(sha256)))
   ipcMain.handle(IPC.appUpdatePolicy, async () => (await fetchCheck()).update)
 
   // Writable base dir for app-managed files (e.g. default git worktree location). On the platform:
@@ -2306,15 +2316,14 @@ app.whenReady().then(async () => {
     const { reply } = await deliverFromControl(raw, messagingDeps)
     return reply
   })
-  // A board comment that @mentions a session (the comment composer's send). Raw ipcMain on purpose —
-  // invisible to relay peers (platform-electron.ts, invariant 4c) — and guarded to the live main
-  // window, because a <webview> guest is a webContents in this process too and this handler types
-  // into a pane. Everything else (the mention↔target check, scope, ownership, switch, flow, the
+  // A board comment that @mentions a session (the comment composer's send), refused to relay peers
+  // by the host-only channel policy and guarded to the live main
+  // window through the shared owner-only registrar, because a <webview> guest is a webContents
+  // in this process too and this handler types into a pane. Everything else (the mention↔target check, scope, ownership, switch, flow, the
   // envelope, the queue) is `deliverBoardCommentFromUi`, over the SAME deps the agent verbs use.
-  ipcMain.handle(IPC.agentBoardCommentDeliver, async (event, raw: unknown) => {
-    if (getMainWindow()?.webContents.id !== event.sender.id)
-      return { ok: false, error: 'board comments are delivered only from the main window.' }
-    return deliverBoardCommentFromUi(raw, messagingDeps)
+  registerBoardCommentDeliveryIpc(corePlatform, {
+    eligibleOwner: (senderId) => getMainWindow()?.webContents.id === senderId,
+    deliver: (raw) => deliverBoardCommentFromUi(raw, messagingDeps)
   })
 
   // Station-failure notices (src/core/agents/station-notice.ts): when a station an agent opened
@@ -2323,14 +2332,20 @@ app.whenReady().then(async () => {
   // (the station's `openedBy` plus that agent's rope to it), never from the renderer; the canvas
   // leg (board-log line + chip) needs no switch, the pane leg is the messaging service above with
   // every one of its gates, the per-project `agentMessaging` switch included.
+  // Shared with `report-outcome --notify-opener` (#1356): same recipient, same delivery.
+  const stationOpener = {
+    recipientFor: (id: string) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    deliver: (notice: Parameters<typeof deliverStationNotice>[0]) =>
+      deliverStationNotice(notice, messagingDeps)
+  }
   const stationNotices = new StationNoticeMonitor({
     now: () => Date.now(),
-    recipientFor: (id) => stationRecipient(workspaceStore.persistedCanvases(), id),
+    recipientFor: stationOpener.recipientFor,
     // The mirror's correlated, unanswered question — the one fact that says a station is really
     // waiting on a human (station-notice.ts: permission prompts are not a trigger).
     pendingQuestionOf: (id) => mirrorEntry(id)?.pendingQuestion?.toolUseId,
     appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
-    deliver: (notice) => deliverStationNotice(notice, messagingDeps),
+    deliver: stationOpener.deliver,
     publish: (views) => sendToMain(IPC.stationNoticeChanged, views),
     // The memoized index scan, not `getNode` (which re-parses a project file per call): the sweep
     // asks this for every node it tracks.
@@ -2402,6 +2417,11 @@ app.whenReady().then(async () => {
   if (hookStartupWarning) {
     for (const f of [deliveryQueueFile, stationOutcomesFile, stationHandoversFile]) f.standDown()
   }
+  const worktreeRecovery = await initWorktreeRecovery(corePlatform.userDataDir, ptyManager, () => hookStartupWarning === null && !quitting, workspaceStore)
+  worktreeRecoveryRuntime = worktreeRecovery
+  const worktreeRecoveryService = worktreeRecovery ? new WorktreeRecoveryService({ journal: worktreeRecovery.journal, pty: ptyManager, git: gitService,
+    ...(worktreeRecovery.canvasAdmission ? { repair: { workspace: workspaceStore, admission: worktreeRecovery.canvasAdmission, dispatch: worktreeRecovery.dispatch, confirmations: ownerConfirmations } } : {}) }) : null
+  worktreeRecoveryOwners = registerWorktreeRecoveryIpc(corePlatform, () => worktreeRecoveryService)
   // ---- Node identity (src/core/agents/node-auth-secret.ts) ------------------------------------
   // One secret does two jobs: it arms the hook server's per-node capability (closing the "shared
   // bearer can name any sibling node" hole) and it signs the codex thread → node records the hook
@@ -2952,7 +2972,7 @@ app.whenReady().then(async () => {
   // which need the raw transcript_path the NormalizedAgentEvent intentionally drops.
   const subagentTail = createSubagentTail(({ toolUseId, chunk }) => {
     subagentReplay.touch(toolUseId) // a streaming subagent is alive: keep it in the reload replay
-    if (!win.isDestroyed()) win.webContents.send(IPC.agentSubagentActivity, { toolUseId, chunk })
+    corePlatform.broadcast(IPC.agentSubagentActivity, { toolUseId, chunk })
   })
   // Claude's two subagent signal paths merged into one card per child (native SubagentStart/Stop
   // win once a session sends them — core/claude-subagent-lifecycle.ts). Every normalized event
@@ -2982,7 +3002,7 @@ app.whenReady().then(async () => {
     for (const [nid, sid] of nodeContextSession) if (sid === sessionId) nodeId = nid
     if (!nodeId) return
     const ev = recordQuestionResult(nodeId, sessionId, toolUseId)
-    if (ev) sendToMain(IPC.agentStatus, ev)
+    if (ev) corePlatform.broadcast(IPC.agentStatus, ev)
   }
   /**
    * The transcript recorded an interrupt marker (Esc / Ctrl+C). Claude sends no hook for an
@@ -3015,7 +3035,7 @@ app.whenReady().then(async () => {
     // Through the lifecycle like every other event: in a session that sends native hooks the card
     // is keyed by the child's agent_id, and this tool-keyed end is re-keyed onto it (idempotent).
     for (const out of claudeSubagents.apply(taskDoneEvent)) {
-      sendToMain(IPC.agentStatus, out)
+      corePlatform.broadcast(IPC.agentStatus, out)
       recordAgentEvent(out)
     }
     subagentTail.finish(n.toolUseId)
@@ -3026,14 +3046,16 @@ app.whenReady().then(async () => {
   const cursorSubagents = createCursorSubagentTracker({
     tail: subagentTail,
     emit: (ev) => {
-      sendToMain(IPC.agentStatus, ev)
+      corePlatform.broadcast(IPC.agentStatus, ev)
       recordAgentEvent(ev)
     }
   })
   // Every context tail pushes through here, so an agent's meter reaches the renderer, the Notch HUD
-  // and the phone's context ring identically whichever CLI produced the numbers.
+  // and the phone's context ring identically whichever CLI produced the numbers. `broadcast` is the
+  // main window (sendToMain) plus every non-quiet relay peer. A joined team tab does not subscribe
+  // `context:update`, so its meter stays empty (docs/hosted-team-relay.md, follow-ups).
   const pushContextUpdate = (payload: unknown): void => {
-    if (!win.isDestroyed()) win.webContents.send(IPC.contextUpdate, payload)
+    corePlatform.broadcast(IPC.contextUpdate, payload)
     // Feed the macOS Notch HUD the model name (keyed by sessionId; no-op off/non-darwin).
     notchHudOnContextUpdate(payload as Parameters<typeof notchHudOnContextUpdate>[0])
     // Feed the mirror's per-node context ring (mobile-usage-inbox). The context tail keys by
@@ -3121,7 +3143,7 @@ app.whenReady().then(async () => {
     onTrack: (nodeId, sessionId) => { nodeContextSession.set(nodeId, sessionId) },
     onClear: (nodeId, sessionId) => {
       notchHudOnContextUpdate({ nodeId, sessionId, cleared: true })
-      if (!win.isDestroyed()) win.webContents.send(IPC.contextUpdate, { nodeId, sessionId, cleared: true,
+      corePlatform.broadcast(IPC.contextUpdate, { nodeId, sessionId, cleared: true,
         usedTokens: 0, windowTokens: 0, usedPercent: 0, model: null, updatedAt: Date.now() })
     }
   })
@@ -3364,8 +3386,8 @@ app.whenReady().then(async () => {
   // "Open recent": this machine's agent histories (both shells register it — core/recent-conversations.ts).
   registerRecentConversationsIpc()
 
-  initTranscriptIndex(() => settingsStore.get().claudeAccounts ?? [])
-  corePlatform.handle(IPC.transcriptSearch, (query: string) => searchTranscripts(query))
+  const stopTranscriptSearch = registerTranscriptSearchIpc(corePlatform, () => settingsStore.get().claudeAccounts ?? [])
+  app.once('will-quit', () => { void stopTranscriptSearch() })
   // Populate the context meter without a live hook event: the renderer calls this on mount (the
   // continuing session may be idle after a restart). The routing — which agent's locator, which
   // agent's tail, local or remote — lives in core so the Server Edition serves it too; this shell
@@ -3471,7 +3493,11 @@ app.whenReady().then(async () => {
       // A station that starts a DIFFERENT session drops the report its old one made — before the
       // renderer hears the event, so no `--after-success` can fire on it in between.
       stationOutcomes.onAgentEvent(enriched)
-      sendToMain(IPC.agentStatus, enriched)
+      coreTeams?.onAgentEvent(enriched)
+      // The main window and every non-quiet relay peer: a joined team tab keeps the host's agent
+      // status in its own session store (a scoped guest hears only its project's nodes —
+      // filterScopedEvent).
+      corePlatform.broadcast(IPC.agentStatus, enriched)
       // Feed the macOS Notch HUD its prompt (ev.task on newTurn) + subagent grouping (no-op off/non-darwin).
       notchHudOnAgentEvent(enriched)
       // Agent messaging taps the SAME stream: the sender's newTurn resets its fan-out budget, and
@@ -3524,6 +3550,8 @@ app.whenReady().then(async () => {
   // (phone Inbox archives the card) and re-sends an 'end' live-update so the paired phone dismisses
   // its lingering DONE Live Activity. Fire-and-forget; the mirror no-ops with no unresolved done.
   corePlatform.handle(IPC.agentSubagentSnapshot, () => subagentReplay.snapshot())
+  // The host's per-node agent states off the mirror, for a relay tab that joins late (bug D).
+  registerAgentStatusSnapshotIpc(corePlatform)
   corePlatform.handle(IPC.agentAckDone, (nodeId: string) => {
     ackDone(nodeId)
   })
@@ -4541,65 +4569,76 @@ app.whenReady().then(async () => {
    *     answer — read per call off the store, exactly as messaging's switch is, so revoking it
    *     stops the next report rather than the one after a restart.
    */
-  const handleReportIssueVerb = async (
-    nodeId: string,
-    args: Record<string, string>,
-    verified: boolean
-  ): Promise<{ ok: boolean; message?: string; error?: string }> => {
-    const refuse = (error: string) => ({ ok: false, error, message: error })
-    if (!verified) return refuse(REPORT_ISSUE_CONTROL_REFUSAL)
-    const projectId = projectIdOfNode(nodeId)
-    // Unresolved caller ⇒ fail closed, the same rule the project gates above follow: we cannot
-    // name the repository a report belongs to, and guessing one is the failure mode this whole
-    // feature is shaped around.
-    if (!projectId) {
-      return refuse(
-        'report-no-project: this node is not in a saved project, so there is no repository to ' +
-        'report to. Do not retry.'
-      )
-    }
-    return reportIssue(
-      {
+  const handleReportIssueVerb = (nodeId: string, args: Record<string, string>, verified: boolean) =>
+    reportIssueFromControl({ nodeId, args, verified }, {
+      projectIdsForNode: (id) => workspaceStore.projectIdsForNode(id),
+      service: {
         contextForProject: async (id) => {
           const context = await github.controller.contextForProject(id)
           return { repository: context.repository, client: context.client }
         },
-        granted: () =>
-          projectCapabilityGrantedFor(
-            workspaceStore.capabilityProjectFor(projectId),
-            'agentIssueReporting',
-            settingsStore.get()
-          ),
-        loadLedger: (id) => reportLedger.load(id),
-        saveLedger: (id, ledger) => reportLedger.save(id, ledger),
+        granted: (id) => projectCapabilityGrantedFor(workspaceStore.capabilityProjectFor(id), 'agentIssueReporting', settingsStore.get()),
+        loadLedger: (id) => reportLedger.load(id), saveLedger: (id, ledger) => reportLedger.save(id, ledger),
         env: { version: app.getVersion(), os: process.platform, edition: 'desktop' }
-      },
-      {
-        projectId,
-        dryRun: dryRunRequested(args),
-        input: {
-          kind: args.kind ?? '',
-          title: args.title ?? '',
-          detail: args.body ?? '',
-          ...(args.output ? { excerpt: args.output } : {}),
-          ...(args.agent ? { agent: args.agent } : {})
-        }
       }
-    ).then((result) =>
-      result.ok
-        ? {
-            ok: true,
-            message: result.action === 'dry-run' && result.preview
-              ? `${result.message}\n\n${result.preview}`
-              : result.message
-          }
-        : { ok: false, error: result.error, message: result.message }
-    )
-  }
+    })
+  coreTeams = new HeadlessNodeFactory({
+    controlScope: 'project', workspaceStore, ptyManager, releaseHeadlessAfterWork: true,
+    settings: () => settingsStore.get(), cliCaps: claudeCliCaps, grokCaps: grokCliCaps, codexCaps: codexCliCaps,
+    codexSharedIdentity: () => codexIdentityCaps().then((caps) => caps.shared),
+    stateOf: nodeState, agentIdOf: (id) => mirrorEntry(id)?.agentId, sessionOf: (id) => mirrorEntry(id)?.sessionId,
+    stateVerified: (id) => { const entry = mirrorEntry(id); return entry?.stateVerified === true && !entry.restored && !entry.idleInferred && !!entry.sessionId },
+    contextShimPath: contextLinkShimPath,
+    projectLaunchInfo: (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id),
+    requestAgentsTrust: (id) => makeProjectTrustRequester(projectSetupService, projectSetupDeps)(id, 'agents'),
+    worktrees: makeWorktreeControlBackend(workspaceStore, gitService, projectSetupService,
+      (id) => readProjectLaunchInfo(workspaceStore, projectTrustStore, id)),
+    outcomeOf: (id) => stationOutcomes.get(id), handedOver: (id) => stationHandovers.isHandedOver(id),
+    handoverOf: (id) => stationHandovers.list().find((record) => record.nodeId === id),
+    publishProject: (project) => sendToMain(IPC.workspaceServerChange, project)
+  })
+  registerHostLaunchIpc(corePlatform, (id, command) => coreTeams ? coreTeams.runFromOwner(id, command) :
+    Promise.resolve({ ok: false, started: false, error: 'Host launch scheduler is stopped.' }))
+  const nodeBranches = new ConfirmedNodeBranch({ workspace: workspaceStore, pty: ptyManager,
+    confirmations: ownerConfirmations, settings: () => settingsStore.get(), scope: () => 'project',
+    ownsSpawn: (source, target) => coreTeams?.ownsSpawn(source, target) === true,
+    handedOver: (id) => stationHandovers.isHandedOver(id), stopped: () => !coreTeams,
+    runtime: (id) => { const entry = mirrorEntry(id); return { agentId: entry?.agentId, sessionId: entry?.sessionId,
+      state: entry?.state, verified: entry?.stateVerified === true && !entry.restored && !entry.idleInferred } },
+    originalAvailable: async (id, accountId) => await transcriptPresence(id, accountId) === 'present',
+    resumeOriginal: (...args) => coreTeams ? coreTeams.resumeClaudeOriginal(...args) : Promise.resolve({ ok: false, error: 'Host control stopped.' }),
+    resumeOriginalFromOwner: (...args) => coreTeams ? coreTeams.resumeClaudeOriginalFromOwner(...args) : Promise.resolve({ ok: false, error: 'Host control stopped.' }),
+    onInputDispatched: (id, at) => { stationHandovers.markHandedOver(id, at); stationOutcomes.withdrawBefore(id, at) }
+  })
+  branchOwners = registerConversationBranchIpc(corePlatform, (id, owner, at) => nodeBranches.runFromOwner(id, owner, at))
+  const readControlCapabilities = registerControlCapabilities('desktop', () => true)
+  const settingsControl = new SettingsControl({ workspace: workspaceStore, settings: settingsStore,
+    confirmations: ownerConfirmations, runtime: (id) => ({ agentId: mirrorEntry(id)?.agentId, sessionId: mirrorEntry(id)?.sessionId }),
+    publish: (project) => sendToMain(IPC.workspaceServerChange, project) })
   hookServer.setControlHandler(async ({ verb, nodeId, args, verified, onLateAnswer }) => {
     // When the request ARRIVED — before a `write` / `run` typed anything. The hand-over tracker
     // stamps the new work with it, so a turn the typed text starts is always later.
     const requestAt = Date.now()
+    if (verb === 'capabilities') return controlCapabilitiesReply(readControlCapabilities(), args, verified)
+    // Visual batches never travel the user's project/camera or fall back after an uncertain reply.
+    if (verb === 'groups' && coreTeams) return coreTeams.groups(nodeId, args, verified)
+    if (coreTeams && ['ungroup', 'move', 'resize', 'place', 'arrange', 'align'].includes(verb)) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const holders = workspace.projects.filter((project) => project.nodes.some((node) => node.id === nodeId))
+      if (holders.length === 1 && !holders[0].ssh && holders[0].nodes.some((node) => node.dynamicGroup !== undefined)) {
+        return coreTeams.geometry(verb as import('../shared/geometry-command').GeometryControlVerb, nodeId, args)
+      }
+    }
+    if (coreTeams && (args.group || args.reservation !== undefined) && ['open-terminal', 'open-agent', 'open-claude'].includes(verb)) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const route = hostGroupedOpenRoute({ verb, args, workspace, sourceNodeId: nodeId, hostPlatform: process.platform })
+      if (route === 'unsupported-shell') return { ok: false, error: 'open-reservation-unsupported-shell: host slot launches require a local POSIX headless backend' }
+      if (route === 'host') {
+        return verb === 'open-terminal' ? coreTeams.openTerminal(nodeId, args, verified) :
+          coreTeams.openAgent(nodeId, verb === 'open-claude' ? { ...args, agent: 'claude' } : args, verified)
+      }
+    }
+    if (verb === 'branch') return nodeBranches.run(nodeId, args, verified)
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a
     // verb that cannot dry-run must REFUSE rather than silently perform: a `close --dry-run`
@@ -4646,7 +4685,8 @@ app.whenReady().then(async () => {
           store: stationOutcomes,
           now: () => Date.now(),
           projectIdOfNode,
-          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry)
+          appendBoardLog: (projectId, entry) => appendBoardLogVia(boardLogRouter, projectId, entry),
+          opener: stationOpener
         }
       )
     }
@@ -4656,6 +4696,33 @@ app.whenReady().then(async () => {
     if (verb === 'browser') return handleBrowserVerb(nodeId, args, verified)
     // Answered in MAIN for the same reasons as `browser`; see handleReportIssueVerb.
     if (verb === 'report-issue') return handleReportIssueVerb(nodeId, args, verified)
+    if (verb === 'settings' && args.set !== undefined) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const projects = workspace.projects.filter((p) => p.nodes.some((n) => n.id === nodeId))
+      if (projects.length === 1 && !projects[0].ssh && !isRemoteSessionNode(projects[0].nodes.find((n) => n.id === nodeId)) &&
+        (args.project === undefined || args.project === projects[0].id)) return settingsControl.run(nodeId, args, verified)
+    }
+    if (coreTeams && (verb === 'open-worktree' || verb === 'close-worktree') && args.project === undefined &&
+      !(verb === 'close-worktree' && args.mode === 'remove')) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const projects = workspace.projects.filter((p) => p.nodes.some((n) => n.id === nodeId))
+      if (projects.length === 1 && !projects[0].ssh && !isRemoteSessionNode(projects[0].nodes.find((n) => n.id === nodeId))) {
+        return coreTeams.worktree(verb, nodeId, args, verified)
+      }
+    }
+    if (coreTeams && (verb === 'spawn-team' || verb === 'verify')) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      if (useHostTeamPlanner({ verb, sourceNodeId: nodeId, args, workspace, settings: settingsStore.get(),
+        hostPlatform: process.platform, agentIdOf: (id) => mirrorEntry(id)?.agentId })) {
+        return coreTeams.orchestrate(verb, nodeId, args, verified)
+      }
+    }
+    if (coreTeams && verb === 'run' && workspaceStore.getNode(args.node)?.pendingLaunch?.executor === 'server') {
+      const sourceProjects = workspaceStore.projectIdsForNode(nodeId)
+      const targetProjects = workspaceStore.projectIdsForNode(args.node)
+      if (sourceProjects.length === 1 && targetProjects.length === 1 && sourceProjects[0] === targetProjects[0] &&
+        (args.project === undefined || args.project === sourceProjects[0])) return coreTeams.run(nodeId, args, verified)
+    }
     // ── `open-project` + `--project` targeting, gated in MAIN before anything is forwarded
     // (issue #338 PR 1). The renderer never sees an invalid cwd or an unauthorized `--project`.
     // The verb itself is verified-only at the hook-server route (requiresVerified) — by the time
@@ -4789,7 +4856,8 @@ app.whenReady().then(async () => {
   // These three deps are the whole of what `src/core` cannot answer for itself. Fail-open
   // throughout — a failed remote read renders as "no transcript yet", never as an error.
   initContextLink(ptyManager, {
-    isRemoteNode: (nodeId) => !!ptyManager.sshRemoteForNode(nodeId),
+    isRemoteNode: (nodeId) => isRemoteWorkspaceNode(workspaceStore, ptyManager, nodeId),
+    captureRemoteTerminal: async (nodeId) => ptyManager.sshRemoteForNode(nodeId) ? ptyManager.captureSession(nodeId) : '',
     readRemoteFile: async (nodeId, filePath, maxBytes) => {
       const rt = ptyManager.sshRemoteForNode(nodeId)
       if (!rt) return null
@@ -4876,9 +4944,32 @@ app.whenReady().then(async () => {
     buildMirrorUsage(usageService.snapshot(), settingsStore.get().claudeAccounts ?? [], Date.now())
   )
   initTelemetry(() => settingsStore.get())
+  // The free-tier open-project limit (core/project-limit.ts). Its state goes to THIS machine's
+  // window only: sendToMain, never platform().broadcast, which also fans out to every relay peer
+  // (the state carries this host's Pro and DO_NOT_TRACK facts). The Server Edition does not run it.
+  // Its first check read waits for the boot workspace load, the one the delivery queue waits on: read
+  // before the index is loaded, the open-project count is unknown and would not ride that read.
+  const projectLimit = initProjectLimit({
+    openProjects: () => workspaceStore.openProjectCount(),
+    machineHash: readMachineHashResult,
+    notify: (s) => sendToMain(IPC.projectLimitChanged, s),
+    ready: bootWorkspaceLoad
+  })
+  settingsStore.onChange(() => projectLimit.pushIfChanged())
+  // DO_NOT_TRACK consent for license and allowance calls (docs/project-limit.md): Settings →
+  // Privacy, read on every gated call so revoking it applies at once. Installed BEFORE initLicense,
+  // whose launch refresh runs immediately. Only `licenseNetworkGate()` callers read it — never
+  // telemetry or the check feed. (Giving consent does not trigger a refresh: license.ts exposes
+  // none, so the next license call is the 6 h refresh, an activate or an upgrade; a claim reads the
+  // gate itself.)
+  setLicenseNetworkConsent(() => settingsStore.get().licenseNetworkConsent === true)
   // A license change (activate, refresh, a lapsed token replaced) re-arms every live link the API
   // refused: a link host whose 7-day entitlement expired under it stops minting until then (R41).
-  initLicense(() => watchLinks?.onEntitlementChanged())
+  // It can also change Pro for the project limit, which nothing else would tell the renderer.
+  licenseClient = initLicense(() => {
+    watchLinks?.onEntitlementChanged()
+    projectLimit.pushIfChanged()
+  })
   // Lazy getter: sshProjectManager is created just below, so a remote account op (which only runs
   // after the user has connected an SSH project) always sees the live manager.
   initClaudeAccounts(() => sshProjectManager)
@@ -5565,6 +5656,11 @@ app.on('before-quit', (e) => {
   destroyNotchHud()
   backgroundTray?.destroy()
   backgroundTray = undefined
+  coreTeams?.stop()
+  coreTeams = null
+  ownerConfirmations.dispose()
+  branchOwners?.dispose()
+  worktreeRecoveryOwners?.dispose()
   // Electron releases power assertions at exit anyway; disposing keeps the hold/release log
   // honest. Clearing the ref too keeps a hook edge that lands during the quit flush (the pty
   // teardown window below) from re-holding an assertion nothing will ever release.
@@ -5627,7 +5723,9 @@ app.on('before-quit', (e) => {
     requestRendererFlush(getMainWindow()?.webContents, ipcMain).then(() => remoteWorkspaceIO.flush()),
     remoteWorkspaceIO.flush(),
     ptyManager.killAll(),
-    watchLinksStopped
+    watchLinksStopped,
+    licenseClient?.dispose(),
+    worktreeRecoveryRuntime?.idle()
   ])
   void Promise.race([flush, new Promise((r) => setTimeout(r, 1500))])
     // Then let whisper go. A dictation still transcribing when Electron tears down the main

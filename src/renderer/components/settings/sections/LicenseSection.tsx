@@ -102,6 +102,24 @@ export function LicenseSection({
   onNavigate: (id: SettingsSectionId) => void
 }): React.JSX.Element {
   const ent = useEntitlement()
+  const [hostAvailable, setHostAvailable] = useState(!isBrowserRuntime())
+  const [hostMessage, setHostMessage] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  useEffect(() => {
+    const read = window.nodeTerminal.license.capabilities
+    if (!read) {
+      if (isBrowserRuntime()) setHostMessage('This server does not support license administration.')
+      return
+    }
+    let live = true
+    void read().then((capability) => {
+      if (!live) return
+      setHostAvailable(capability?.enabled === true)
+      setHostMessage(capability?.enabled ? 'This license belongs to the server installation.' :
+        capability ? 'Server licensing is disabled. Enable NODETERM_SERVER_LICENSE on the host.' : 'This server does not support license administration.')
+    }).catch(() => { if (live) setHostMessage('Could not check license availability. Reconnect and try again.') })
+    return () => { live = false }
+  }, [])
   const [licenseKey, setLicenseKey] = useState('')
   const [upgrading, setUpgrading] = useState(false)
   const [releasing, setReleasing] = useState(false)
@@ -170,6 +188,8 @@ export function LicenseSection({
       searchEntries={ENTRIES}
     >
       <SearchableRow {...ROWS.license}>
+        {hostMessage && <p className="text-sm text-muted">{hostMessage}</p>}
+        {actionError && <p role="alert" className="text-sm text-muted">{actionError}</p>}
         {ent.isPremium ? (
           <div className="space-y-3">
             <ProCompare />
@@ -234,9 +254,11 @@ export function LicenseSection({
             ) : null}
             <Button
               variant="primary"
+              disabled={!hostAvailable}
               onClick={() => {
                 setUpgrading(true)
-                void ent.upgrade()
+                setActionError(null)
+                void ent.upgrade().catch((error) => { setUpgrading(false); setActionError(error instanceof Error ? error.message : String(error)) })
               }}
             >
               Upgrade to Pro — $10/mo
@@ -262,8 +284,9 @@ export function LicenseSection({
                   }
                 />
                 <Button
+                  disabled={!hostAvailable || !licenseKey.trim()}
                   onClick={() => {
-                    if (licenseKey.trim()) void ent.activate(licenseKey.trim())
+                    if (hostAvailable && licenseKey.trim()) { setActionError(null); void ent.activate(licenseKey.trim()).catch((error) => setActionError(error instanceof Error ? error.message : String(error))) }
                   }}
                 >
                   Activate

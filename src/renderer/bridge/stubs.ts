@@ -23,10 +23,10 @@ import {
   type ClaudeUsage,
   type ClipboardWriteOptions,
   type NodeTerminalApi,
-  type NotifyPayload,
   type UpdatePolicy
 } from '../../shared/types'
 import { E_UNSUPPORTED } from '../../shared/rpc'
+import { INACTIVE_PROJECT_LIMIT, type ClaimResult, type ProjectLimitState } from '../../shared/project-limit'
 import { isMacPlatform } from '../../shared/platform-utils'
 import { effectiveBindings, terminalShortcutPolicy } from '../lib/keybindingOverrides'
 import type { ContextElement } from '../lib/keyContext'
@@ -131,6 +131,7 @@ export function buildStubApi(): Omit<
   | 'canvas'
   | 'dialog'
   | 'onAgentStatus'
+  | 'agentStatusSnapshot'
   | 'onSubagentActivity'
   | 'onUnreadClear'
   | 'answerPermission'
@@ -148,6 +149,7 @@ export function buildStubApi(): Omit<
   | 'speech'
 > {
   const api = {
+    control: { capabilities: async () => null },
     ssh: {
       list: U('ssh.list'),
       save: U('ssh.save'),
@@ -269,7 +271,10 @@ export function buildStubApi(): Omit<
       prepareQuit: noop
     },
     announcements: {
-      fetch: () => Promise.resolve([])
+      fetch: () => Promise.resolve([]),
+      // The Server Edition does not read the check feed, so there is never a popup to show.
+      popups: () => Promise.resolve([]),
+      popupImage: () => Promise.resolve(null)
     },
     license: {
       upgrade: U('license.upgrade'),
@@ -281,6 +286,18 @@ export function buildStubApi(): Omit<
       // reject rather than answer a fabricated "0 devices" — the same degrade as getStatus above.
       detail: U('license.detail'),
       releaseOthers: U('license.releaseOthers'),
+      onChange: noopUnsub
+    },
+    projectLimit: {
+      // The Server Edition has no open-project gate (docs/project-limit.md), so it answers the
+      // dormant state and every open stays synchronous. Resolved, not rejected: unlike
+      // `license.getStatus`, this is read on the open path, and "inactive" is the true answer here
+      // rather than "unknown". `claim` answers `disabled` (this shell never talks to the license
+      // server) for the same reason: a refusal `ClaimResult` names, where an E_UNSUPPORTED throw is
+      // outside the contract.
+      state: (): Promise<ProjectLimitState> => Promise.resolve(INACTIVE_PROJECT_LIMIT),
+      claim: (): Promise<ClaimResult> =>
+        Promise.resolve({ ok: false, error: 'disabled', state: INACTIVE_PROJECT_LIMIT }),
       onChange: noopUnsub
     },
     contextLink: {
@@ -631,17 +648,8 @@ export function buildStubApi(): Omit<
     // is disabled with this reason on the Server Edition (AppearanceSection's browser branch).
     setUiZoomFactor: noop,
     getPathForFile: (): string => '',
-    notify: async (payload: NotifyPayload): Promise<'shown' | 'failed' | 'skipped'> => {
-      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-        try {
-          new Notification(payload.title, { body: payload.body })
-          return 'shown'
-        } catch {
-          return 'skipped'
-        }
-      }
-      return 'skipped'
-    },
+    // Offline/unbound APIs must never display notices on behalf of a live owner.
+    notify: async () => 'skipped',
     openNotificationSettings: pnoop,
     onFocusNode: noopUnsub,
     // Server Edition v1: the memory-pressure levers run HOST-side only (the session reaper, driven
@@ -689,9 +697,8 @@ export function buildStubApi(): Omit<
         ok: false as const,
         error: 'Agent messaging is only available in the desktop app. Do not retry.'
       }),
-      // A board comment typed here — in a browser tab, or in a relay tab onto another machine — is
-      // display-only on purpose: it never types into a pane. The typed outcome lets the comment row
-      // say so instead of showing nothing.
+      // Safe default for relay/unsupported hosts. The Server owner bridge overrides this method
+      // with the authenticated host entrance; a relay tab retains this named refusal.
       deliverBoardComment: async () => ({
         ok: false as const,
         error: 'Board comments reach agents only in the desktop app.',
@@ -761,6 +768,7 @@ export function buildStubApi(): Omit<
     | 'canvas'
     | 'dialog'
     | 'onAgentStatus'
+    | 'agentStatusSnapshot'
     | 'onSubagentActivity'
     | 'onUnreadClear'
     | 'answerPermission'

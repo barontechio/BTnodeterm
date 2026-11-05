@@ -72,17 +72,27 @@ function mergeEdges(
   base: readonly EdgeRef[],
   incoming: readonly EdgeRef[],
   live: readonly EdgeRef[],
-  nodeIds: ReadonlySet<string>
+  nodeIds: ReadonlySet<string>,
+  incomingNodeIds: ReadonlySet<string>
 ): { edges: EdgeRef[]; changed: boolean } {
   const baseIds = new Set(base.map((e) => e.id))
   const incomingIds = new Set(incoming.map((e) => e.id))
   const liveIds = new Set(live.map((e) => e.id))
 
-  // In base but NOT in the file the server just wrote ⇒ the server removed it (it closed a node,
-  // or dropped a rope). Everything else the canvas holds stays: an edge live but not in base is a
-  // local addition nobody else has seen yet, and an edge in both base and incoming that the canvas
-  // no longer holds is a local DELETION — re-adding it would undo the user's edit.
-  const kept = live.filter((e) => !(baseIds.has(e.id) && !incomingIds.has(e.id)))
+  // In base but NOT in the file the server just wrote ⇒ the server removed it (it dropped a rope,
+  // unlinked two nodes) — but only when the file still holds BOTH endpoints. A payload that lacks
+  // the NODE says nothing about that node's edges: this merge never removes a node (the canvas
+  // keeps it, and its next save writes it back), so its edges must stay with it. MEASURED with two
+  // Server Edition tabs (2026-11-05): a tab's stale whole save overwrote the factory's `open-agent`
+  // write, `publishPersisted` re-read that file, and the payload arrived without the new node and
+  // its rope/bridge. Reading the edges as removed while keeping the node made the next autosave
+  // persist the node WITHOUT its edges — the "node present, edges gone" canvas the field reported.
+  // Everything else the canvas holds stays: an edge live but not in base is a local addition nobody
+  // else has seen yet, and an edge in both base and incoming that the canvas no longer holds is a
+  // local DELETION — re-adding it would undo the user's edit.
+  const serverRemoved = (e: EdgeRef): boolean =>
+    baseIds.has(e.id) && !incomingIds.has(e.id) && incomingNodeIds.has(e.source) && incomingNodeIds.has(e.target)
+  const kept = live.filter((e) => !serverRemoved(e))
   // In the file but not in base ⇒ the server added it. Skip any id the canvas somehow already
   // holds: a duplicate React Flow edge id renders as one edge and breaks the next removal.
   const additions = incoming.filter((e) => !baseIds.has(e.id) && !liveIds.has(e.id))
@@ -115,12 +125,14 @@ export function planServerChange(input: ServerChangeInput): ServerChangePlan {
   const nodeIds = new Set(live)
   for (const n of added) nodeIds.add(n.id)
 
-  const ropes = mergeEdges(base?.ropes ?? [], incoming.ropes ?? [], input.liveRopes, nodeIds)
+  const incomingNodeIds = new Set(incoming.nodes.map((n) => n.id))
+  const ropes = mergeEdges(base?.ropes ?? [], incoming.ropes ?? [], input.liveRopes, nodeIds, incomingNodeIds)
   const bridges = mergeEdges(
     base?.bridges ?? [],
     incoming.bridges ?? [],
     input.liveBridges,
-    nodeIds
+    nodeIds,
+    incomingNodeIds
   )
 
   return {

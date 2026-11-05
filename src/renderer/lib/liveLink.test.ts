@@ -76,7 +76,7 @@ const link = (over: Partial<WatchLinkView> = {}): WatchLinkView => ({
 const viewer = (id: string) => ({ viewerId: id, name: null, joinedAt: 0, waiting: false, controlling: false, typing: false })
 
 const RELAY_SENTENCE = 'Live links are created on the machine that runs this terminal.'
-const R43 = 'Live links need a Pro license on this server — not available in the Server Edition yet'
+const R43 = 'Live links require licensing to be enabled in this server’s host configuration.'
 const ALL_ERRORS: CreateWatchLinkError[] = [
   'not-entitled',
   'limit-machine',

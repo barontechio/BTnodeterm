@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 /**
- * STRUCTURAL pins for "arrange inside a group". The rules themselves are pure and tested where
+ * Remaining UI wiring pins for "arrange inside a group". Command behavior is tested through
+ * `shared/geometry-command.test.ts`. The transforms are pure and tested where
  * they live (`state/workspace.layout.test.ts`); what cannot be tested there is that Canvas.tsx —
  * a React component with no unit seam — reaches them from all three surfaces through ONE
  * transform. A frame menu that packs with `arrangeGroupChildren` while the `arrange --group` verb
@@ -28,8 +29,7 @@ function between(start: string, end: string): string {
 
 describe('arrange inside a group (source pins)', () => {
   const action = between('const arrangeGroupAction = useCallback(', '\n  /** Report a refusal')
-  const verb = between("          case 'arrange':\n", "\n          case 'link': {")
-  const groupBranch = verb.slice(verb.indexOf("if (verb === 'arrange' && args.group)"), verb.indexOf('const ids ='))
+
 
   it('the menu/palette action is arrangeGroupChildren, decided BEFORE the write', () => {
     // The same-array verdict is read off nodesRef first: a flag set inside the setNodes updater is
@@ -69,23 +69,7 @@ describe('arrange inside a group (source pins)', () => {
     expect(palette).not.toContain('disabled')
   })
 
-  it('arrange --group runs the SAME transform and refusal, and writes only on a change', () => {
-    expect(groupBranch).toContain('groupArrangeRefusal(live, gid, groupLayout, edges)')
-    expect(groupBranch).toContain('arrangeGroupChildren(live, gid,')
-    expect(groupBranch).toContain('GROUP_ARRANGE_LAYOUTS.find(')
-    // No second packing or fitting implementation in the branch.
-    expect(groupBranch).not.toMatch(/\barrangeNodes\(|fitGroupToChildren\(|fitAncestorChain\(/)
-    const write = groupBranch.slice(groupBranch.indexOf('if (next !== live)'))
-    // `commitCtlNodes` is the one write for on- and off-screen projects (it marks dirty itself).
-    expect(write).toMatch(/^if \(next !== live\) commitCtlNodes\(next\)/)
-    // Off screen the lineage ropes are the owning project's, never the live canvas's.
-    // A stored file may predate the wait mark, so it is re-marked as a load would.
-    expect(groupBranch).toContain('offCanvas ? markLegacyWaitRopes(offCanvas.project.ropes ?? [])')
-    // The rope id rides along — it is what tells a wait from an opener.
-    expect(groupBranch).toContain('({ id: e.id, source: e.source, target: e.target })')
-    // A refusal names the verb and never reports ok.
-    expect(groupBranch).toContain('reply({ ok: false, error: `arrange: ${refusal}` })')
-  })
+
 
   // Desktop main never runs `parseControlRequest` (the Server Edition's parser), so the shape gate
   // has to be called in its control handler too — without it `--group` with `--nodes`, an unknown
@@ -101,20 +85,9 @@ describe('arrange inside a group (source pins)', () => {
     expect(gate).toBeLessThan(handler.indexOf("'window unavailable'"))
   })
 
-  it('the renderer belt runs the same gate before either form reads its flags', () => {
-    const gate = verb.indexOf("verb === 'arrange' ? arrangeArgsRefusal(args) : null")
-    expect(gate).toBeGreaterThan(-1)
-    expect(verb.slice(gate, gate + 200)).toContain('reply({ ok: false, error: shapeRefusal })')
-    // Before the --group branch: its `?? 'grid'` then only ever answers an ABSENT --layout.
-    expect(gate).toBeLessThan(verb.indexOf("if (verb === 'arrange' && args.group)"))
-    expect(gate).toBeLessThan(verb.indexOf('GROUP_ARRANGE_LAYOUTS.find('))
-  })
 
-  it('the --nodes form re-fits the ancestor chain too, not just the one frame', () => {
-    const nodesForm = verb.slice(verb.indexOf('const ids ='))
-    expect(nodesForm).toContain('fitAncestorChain(next, container, snapGridNow())')
-    expect(nodesForm).not.toContain('fitGroupToChildren(')
-  })
+
+
 
   it('Tidy canvas is tidyCanvas over the ropes WITH their ids, and a no-op writes nothing', () => {
     const tidy = between('const arrangeAllNodes = useCallback(', '\n  // Whether the lineage tidy')
@@ -127,11 +100,5 @@ describe('arrange inside a group (source pins)', () => {
     expect(edges).toContain('({ id: e.id, source: e.source, target: e.target })')
   })
 
-  it('arrange --group top runs the same Tidy canvas (or its bands) and writes only on a change', () => {
-    const top = groupBranch.slice(groupBranch.indexOf('if (isTopLevelGroupArg(gid))'), groupBranch.indexOf('const groupLayout'))
-    expect(top).toContain("TOP_ARRANGE_LAYOUTS.find((l) => l === args.layout) ?? 'tidy'")
-    expect(top).toContain("topLayout === 'lineage' ? arrangeByLineage(live, edges, { gap }) : tidyCanvas(live, edges, { gap })")
-    expect(top).toContain('if (next !== live) commitCtlNodes(next)')
-    expect(top).not.toMatch(/\barrangeNodes\(/)
-  })
+
 })

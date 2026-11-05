@@ -14,8 +14,10 @@ describe('maximize mode ends on a user gesture', () => {
   it('handleNodesChange ends it only for gestures that moved the node', () => {
     const start = SRC.indexOf('const handleNodesChange: typeof onNodesChange = useCallback(')
     const body = SRC.slice(start, SRC.indexOf('\n  )\n', start))
+    // Baseline bookkeeping may precede the setter, but a match must not cross the branch's
+    // closing brace and accidentally accept a setter that runs for an empty `ended` set.
     expect(body).toMatch(
-      /onNodesChange\(snapped\)[\s\S]*const ended = movedGestureEnds\(managed, resizingIdsRef\.current\)\s*if \(ended\.size\) setNodes\(\(ns\) => endMaximizeOnUserGeometry\(ns, ended\)\)/
+      /onNodesChange\(snapped\)[\s\S]*const ended = movedGestureEnds\(managed, resizingIdsRef\.current\)\s*if \(ended\.size\) \{[^{}]*setNodes\(\(ns\) => \{\s*const finished = endMaximizeOnUserGeometry\(ns, ended\)\s*const result = reconcileDynamicFlowNodes\(finished, \[\.\.\.ended\], snapGridNow\(\)\)/
     )
     expect(SRC).toMatch(/const resizingIdsRef = useRef\(new Set<string>\(\)\)/)
     expect(body).toMatch(/\[onNodesChange, setNodes, markDirty, ephParentPosition\]/)

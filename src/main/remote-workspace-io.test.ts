@@ -150,3 +150,27 @@ describe('flush', () => {
     expect(fs.writeText).not.toHaveBeenCalled()
   })
 })
+
+
+describe('destination replacement', () => {
+  it('never writes a queued old snapshot to the replacement host or directory', async () => {
+    for (const replacement of [
+      { ...ref, conn: { ...ref.conn, host: 'other' } },
+      { ...ref, conn: { ...ref.conn, port: 2222 } },
+      { ...ref, remoteCwd: '/other' }
+    ]) {
+      const { fs, sshFs } = fakeFs(); const dropped: string[] = []
+      let current: typeof ref & { remoteCwd?: string } = ref
+      const io = makeRemoteWorkspaceIO(() => current, sshFs, (id) => dropped.push(id))
+      expect(await io.write('p1', ssh, 'first')).toBe(true)
+      expect(await io.write('p1', ssh, 'stale')).toBe(true)
+      current = replacement
+      await io.flush()
+      expect(fs.writeText).toHaveBeenCalledTimes(1)
+      expect(dropped).toEqual(['p1'])
+      expect(await io.read('p1', ssh)).toEqual({ status: 'error' })
+      expect(await io.writeSettings!('p1', ssh, '{}')).toBe(false)
+      expect(fs.readTextChecked).not.toHaveBeenCalled()
+    }
+  })
+})

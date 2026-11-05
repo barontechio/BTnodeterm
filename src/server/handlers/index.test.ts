@@ -211,10 +211,10 @@ describe('registerCoreHandlers (managed Claude accounts, #313)', () => {
     expect(fs.existsSync(added.configDir)).toBe(false)
   })
 
-  it('a ctx projectId still takes the local path — this shell has no SSH manager', async () => {
-    const added = (await call(IPC.claudeAccountsAdd, { projectId: 'p1' })) as { configDir: string }
-    expect(added.configDir).toBe(path.join(repo, 'claude-accounts', path.basename(added.configDir)))
-    expect(fs.existsSync(added.configDir)).toBe(true)
+  it('refuses an unavailable SSH account context without touching local accounts', async () => {
+    const before = fs.readdirSync(repo)
+    await expect(call(IPC.claudeAccountsAdd, { projectId: 'p1' })).rejects.toThrow('E_HANDLER')
+    expect(fs.readdirSync(repo)).toEqual(before)
   })
 
   // The long-poll cannot be driven to completion in a unit test, so prove REGISTRATION instead: a

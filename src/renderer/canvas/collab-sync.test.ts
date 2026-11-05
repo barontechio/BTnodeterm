@@ -7,7 +7,7 @@ import {
   sessionForProject,
   resetSessionsForTest,
 } from '../session/session'
-import { canvasSyncTarget, EVERY_PROJECT, followGoverned, NO_PROJECTS, provesPeer, shouldPublish } from './collab-sync'
+import { canvasSyncTarget, EVERY_PROJECT, followGoverned, NO_PROJECTS, provesPeer, renderedSceneIsCurrent, shouldPublish } from './collab-sync'
 
 const localApi = { marker: 'local' } as unknown as NodeTerminalApi
 const relayApi = { marker: 'relay' } as unknown as NodeTerminalApi
@@ -197,5 +197,35 @@ describe('followGoverned (the governed set Canvas gates on, per core)', () => {
     await flush()
     expect(seen).toEqual([])
     expect(a.subscribed()).toBe(false)
+  })
+})
+
+describe('renderedSceneIsCurrent (the publish effect must not diff a torn render)', () => {
+  // MEASURED 2026-11-05 (test/server/open-edge-loss.e2e.test.ts, two Server Edition tabs on an
+  // open-agent burst): the factory's node upsert and its two edge upserts arrive as separate frames;
+  // each handler moves its ref synchronously and ADOPTS the refs as the publisher's baseline, but a
+  // render then committed with the new `nodes` and the OLD edge arrays (bridges 0 rendered / 1 in the
+  // ref, ropes 0 / 1). The publish effect diffed that snapshot against the adopted baseline and cast
+  // `edge-remove` for a rope and a bridge that existed on every canvas; the other tab applied them
+  // and its next save deleted them from disk — the "node present, edges gone" canvas of the field.
+  const nodes = [{ id: 'a' }]
+  const bridges = [{ id: 'link-1', source: 'a', target: 'b' }]
+  const ropes = [{ id: 'ctrl-1', source: 'a', target: 'b' }]
+
+  it('is current when every rendered array is the array the refs hold', () => {
+    expect(renderedSceneIsCurrent({ nodes, bridges, ropes }, { nodes, bridges, ropes })).toBe(true)
+  })
+
+  it('is torn when an edge array rendered behind its ref (a peer op moved the ref first)', () => {
+    expect(renderedSceneIsCurrent({ nodes, bridges: [], ropes }, { nodes, bridges, ropes })).toBe(false)
+    expect(renderedSceneIsCurrent({ nodes, bridges, ropes: [] }, { nodes, bridges, ropes })).toBe(false)
+  })
+
+  it('is torn when the nodes rendered behind their ref (a switch window, or a pending node op)', () => {
+    expect(renderedSceneIsCurrent({ nodes: [], bridges, ropes }, { nodes, bridges, ropes })).toBe(false)
+  })
+
+  it('compares by identity, never by content: a same-content copy is a render the refs have moved past', () => {
+    expect(renderedSceneIsCurrent({ nodes, bridges: [...bridges], ropes }, { nodes, bridges, ropes })).toBe(false)
   })
 })

@@ -99,8 +99,8 @@ describe('http layer', () => {
   it('serves static with CSP rewrite on index.html and blocks traversal', async () => {
     const cookie = await setupAndLogin()
     const html = await (await fetch(`${base}/`, { headers: { cookie } })).text()
-    // S6: same-origin only — a same-origin ws:/wss: URL is covered by 'self' (CSP3).
-    expect(html).toContain(`connect-src 'self';`)
+    // Only same-origin and the fixed relay origin, never unrestricted WebSocket schemes.
+    expect(html).toContain(`connect-src 'self' wss://relay.nodeterm.dev;`)
     expect(html).not.toContain('ws: wss:')
     const js = await fetch(`${base}/app.js`, { headers: { cookie } })
     expect(js.headers.get('content-type')).toContain('javascript')
@@ -235,7 +235,7 @@ describe('http layer', () => {
       )
       const res = await rawGet('/', { cookie, 'accept-encoding': 'gzip' })
       expect(res.headers['content-encoding']).toBe('gzip')
-      expect(zlib.gunzipSync(res.body).toString('utf8')).toContain(`connect-src 'self';`)
+      expect(zlib.gunzipSync(res.body).toString('utf8')).toContain(`connect-src 'self' wss://relay.nodeterm.dev;`)
     })
 
     it('re-compresses after the file changes on disk (a rebuild must not serve stale bytes)', async () => {

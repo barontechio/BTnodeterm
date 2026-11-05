@@ -3,7 +3,8 @@
 // calls and the reply — so every decision that does not need React is unit-testable here, the
 // same reasoning as controlRouting.ts / pendingLaunch.ts.
 import { oneLine } from '@shared/one-line'
-import { rootPositionWith } from '@shared/root-position'
+import { rootPositionWith, rootPositionIn, type PlacedNode } from '@shared/root-position'
+export { rootPositionIn, type PlacedNode } from '@shared/root-position'
 import { sourceIsControlCapable } from './controlRouting'
 
 /** The little these helpers need to know about a project. */
@@ -282,31 +283,9 @@ export function armForColdOpen<
   }
 }
 
-/** A node as either the serialized store or the live canvas holds it — enough for placement. */
-export interface PlacedNode {
-  id?: string
-  parentId?: string
-  position: { x: number; y: number }
-  size?: { width: number; height: number }
-  width?: number | null
-  height?: number | null
-}
-
 const placedW = (n: PlacedNode): number => n.size?.width ?? (n.width as number) ?? 0
 const placedH = (n: PlacedNode): number => n.size?.height ?? (n.height as number) ?? 0
 
-/**
- * A stored node's ROOT-space position (a group child's stored position is frame-relative), over
- * the shared parent walk in `@shared/root-position`.
- */
-export function rootPositionIn(
-  nodes: readonly PlacedNode[],
-  node: PlacedNode
-): { x: number; y: number } {
-  const byId = new Map<string, PlacedNode>()
-  for (const n of nodes) if (n.id) byId.set(n.id, n)
-  return rootPositionWith(node, (id) => byId.get(id))
-}
 
 /**
  * Where a node opened INTO another project lands (spec §2.2): centered below the lowest existing

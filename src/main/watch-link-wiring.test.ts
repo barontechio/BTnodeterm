@@ -49,7 +49,9 @@ describe('live-link wiring', () => {
     expect(s).toMatch(/const bootWorkspaceLoad = workspaceStore\.load\(\{ sideline: false \}\)/)
     expect(s).toMatch(/workspaceReady: \(\) => bootWorkspaceLoad/)
     expect(s).toMatch(/entitlement: getStoredEntitlement/)
-    expect(s).toMatch(/initLicense\(\(\) => watchLinks\?\.onEntitlementChanged\(\)\)/)
+    // The license callback is a block since it also re-sends the project-limit state
+    // (project-limit-wiring.test.ts pins that half); a license change must still re-arm the links.
+    expect(s).toMatch(/initLicense\(\(\) => \{[^}]*\bwatchLinks\?\.onEntitlementChanged\(\)[^}]*\}\)/)
     // A node in a HOST's tmux is watched on its host, or not at all — an SSH project's node AND a
     // remote-tmux node in a local project (final review, Minor 4): core's ONE rule, fed the shell's own
     // records — the SSH project, every persisted copy's binding with its project's server, the masters.
@@ -89,11 +91,13 @@ describe('live-link wiring', () => {
     expect(firstPass).toMatch(/Promise\.allSettled\(\[[^\]]*watchLinksStopped/)
   })
 
-  it('the Server Edition registers the service UNSUPPORTED with no entitlement (R43), and never inits it on a data dir it does not own', () => {
+  it('the Server Edition requires explicit host licensing and never hosts on a data dir it does not own', () => {
     const s = read(SERVER)
     const block = blockAfter(s, 'watchLinks = createWatchLinkService({', '  ')
-    expect(block).toMatch(/entitlement: \(\) => null/)
-    expect(block).toMatch(/unsupported: true/)
+    expect(s).toContain('enabled: config.licenseEnabled === true && !otherServerHere')
+    expect(s).toContain('onChanged: () => { watchLinks?.onEntitlementChanged() }')
+    expect(block).toContain('entitlement: () => config.licenseEnabled && !otherServerHere ? getStoredEntitlement() : null')
+    expect(block).toContain('unsupported: config.licenseEnabled !== true || otherServerHere')
     expect(block).toMatch(/detach: \(id\) => \{\s*dropUiClient\(id\)\s*platform\.detach\(id\)/)
     expect(s).toMatch(/if \(otherServerHere\) \{\s*console\.error\('Live links: NOT started — another nodeterm server owns this data directory\.'\)\s*\} else void watchLinks\.init\(\)/)
     // Both close paths stop the hosts after hosting ends and before the pty layer goes — bounded

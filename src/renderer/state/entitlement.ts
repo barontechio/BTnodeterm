@@ -6,6 +6,12 @@ interface EntitlementState {
   status: LicenseStatus
   /** True when an active Pro entitlement is present — features gate on this. */
   isPremium: boolean
+  /** Capability of the owner Server API, distinct from paid entitlement. */
+  serverLicenseEnabled: boolean
+  /** True once a real license status has arrived (the first `hydrate()` or main's broadcast).
+   *  Until then `isPremium` is only the default `false`, not an answer — wait on this before
+   *  deciding something a Pro user must never see. */
+  known: boolean
   /** Team seat cap (premium → max(3, N), premium-no-field → 3 = Pro's free seats, free/inactive
    *  → 0). Mirrors `status.seats` so the Team seats section can select it directly. */
   seats: number
@@ -37,8 +43,7 @@ interface EntitlementState {
   deactivate(): Promise<void>
   /** Read the key + device usage (token-authorized). Replaces `detail` wholesale — it is the one
    *  call that states every field.
-   *  **REJECTS on the Server Edition** (`E_UNSUPPORTED` from the bridge stub — there is no license
-   *  layer in `src/server`), and neither this nor `releaseOthers` catches it. A caller that fires
+   *  **REJECTS on older or disabled Server hosts**, and neither this nor `releaseOthers` catches it. A caller that fires
    *  this on mount must `.catch(…)`, or it is an unhandled rejection on every browser session. */
   loadDetail(): Promise<void>
   /**
@@ -50,7 +55,7 @@ interface EntitlementState {
    * `detail` is left exactly as it was: that code is about the call, not the license, so only the
    * caller — which knows a release was attempted — can say anything true about it.
    *
-   * Rejects on the Server Edition exactly like `loadDetail` — see there.
+   * Rejects on older or disabled Server hosts exactly like `loadDetail` — see there.
    */
   releaseOthers(): Promise<string | null>
 }
@@ -74,15 +79,19 @@ const EMPTY_DETAIL: LicenseDetail = {
 
 export const useEntitlement = create<EntitlementState>((set, get) => {
   const apply = (status: LicenseStatus) =>
-    set({ status, isPremium: status.active, seats: status.seats })
+    set({ status, isPremium: status.active, seats: status.seats, known: true })
   // Live updates from the main process (launch refresh, offline grace).
   window.nodeTerminal.license.onChange(apply)
   return {
     status: EMPTY,
     isPremium: false,
+    serverLicenseEnabled: false,
+    known: false,
     seats: 0,
     detail: null,
     async hydrate() {
+      const capability = await window.nodeTerminal.license.capabilities?.()
+      set({ serverLicenseEnabled: capability?.enabled === true })
       apply(await window.nodeTerminal.license.getStatus())
     },
     async upgrade(target) {

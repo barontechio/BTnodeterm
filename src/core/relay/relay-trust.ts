@@ -114,6 +114,9 @@ export interface TrustGateOptions {
   onOpen: () => void
   /** Where a mutual approval is pinned. Absent = pin nothing (the session still opens). */
   pins?: PinStore
+  /** Browser joins require durable identity/pin before exposing any trusted frame pipe. */
+  requirePin?: boolean
+  onPinFailure?(): void
   /**
    * Latch the LOCAL confirm at construction (and send it to the peer) — for a key this end already
    * trusts. It never touches the REMOTE half: the peer's human (or the peer's own pin) must still
@@ -156,9 +159,11 @@ export function createTrustGate(opts: TrustGateOptions): TrustGate {
       // bound into it), then open. A failed write must not strand a session both humans confirmed —
       // it only means the next connect asks for the SAS again, which is the safe direction.
       try {
+        if (opts.requirePin && !opts.pins) throw new Error('durable pin required')
         await opts.pins?.record(pinned)
       } catch {
-        // Persisting the pin is best-effort; consent for THIS session is already mutual.
+        if (opts.requirePin) { opts.onPinFailure?.(); return }
+        // Historical native sessions keep their best-effort persistence behavior.
       }
       opened = true
       opts.onOpen()

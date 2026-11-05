@@ -11,6 +11,7 @@ import { Switch } from '@renderer/ui/Switch'
 import { useSettings } from '../../../state/settings'
 import { isWindowsPlatform } from '@shared/platform-utils'
 import { isBrowserRuntime } from '../../../bridge/runtime'
+import { useSshHostStatus } from '../../../lib/useSshHostStatus'
 
 const ROWS = {
   servers: {
@@ -33,6 +34,7 @@ function showsWindowsAgentRow(): boolean {
 const ENTRIES = showsWindowsAgentRow() ? Object.values(ROWS) : [ROWS.servers]
 
 export function SshSection({ isActive }: { isActive: boolean }): React.JSX.Element {
+  const hostStatus = useSshHostStatus()
   const sshServers = useSshServers((s) => s.servers)
   const agentAddKeys = useSettings((s) => s.settings.windowsSshAgentAddKeys)
   const updateSettings = useSettings((s) => s.update)
@@ -98,7 +100,7 @@ export function SshSection({ isActive }: { isActive: boolean }): React.JSX.Eleme
    * without testing anything, and disconnecting afterwards would drop that project's terminals.
    */
   const testConnection = async (): Promise<void> => {
-    if (!sshDraft || saveDisabled || testing) return
+    if (!sshDraft || saveDisabled || testing || !hostStatus.available) return
     const connectionId = `ssh-settings-test-${sshDraft.id}`
     setTesting(true)
     setTestMsg(`Connecting to ${sshDraft.label}…`)
@@ -129,6 +131,7 @@ export function SshSection({ isActive }: { isActive: boolean }): React.JSX.Eleme
     >
       <SearchableRow {...ROWS.servers}>
         <div className="space-y-4">
+          {hostStatus.message && <p className="text-sm text-muted">{hostStatus.message}</p>}
           {sshServers.map((server) => (
             <div
               key={server.id}
