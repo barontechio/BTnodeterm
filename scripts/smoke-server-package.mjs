@@ -16,6 +16,9 @@ assert(evidence !== root && !evidence.startsWith(root + path.sep), 'Evidence mus
 await fs.mkdir(evidence, { mode: 0o700 }) // Fail rather than reuse another smoke environment.
 const dirs = Object.fromEntries(['home', 'data', 'tmp', 'tmux', 'profile', 'config', 'cache'].map(k => [k, path.join(evidence, k)]))
 for (const dir of Object.values(dirs)) await fs.mkdir(dir, { mode: 0o700 })
+// Chromium's process-singleton socket must fit sockaddr_un even when evidence paths
+// are long. Give only the browser a fresh short private temp directory.
+const browserTmp = await fs.mkdtemp('/tmp/bt1-browser-')
 const pkg = JSON.parse(await fs.readFile(path.join(root, 'package.json'), 'utf8'))
 assert.equal(pkg.version, '0.5.0-bt.1')
 assert.equal(pkg.nodeTermUpdates, 'disabled')
@@ -127,7 +130,7 @@ try {
   const chromium = process.env.NODETERM_TEST_CHROMIUM || '/root/.cache/ms-playwright/chromium-1228/chrome-linux/chrome'
   browser = spawn(chromium, ['--headless', '--no-sandbox', '--disable-gpu', '--disable-background-networking',
     '--user-data-dir=' + dirs.profile, '--remote-debugging-address=127.0.0.1', '--remote-debugging-port=0', 'about:blank'],
-  { env, stdio: ['ignore', 'ignore', 'pipe'] })
+  { env: { ...env, TMPDIR: browserTmp, TMP: browserTmp, TEMP: browserTmp }, stdio: ['ignore', 'ignore', 'pipe'] })
   const endpoint = await new Promise((resolve, reject) => {
     let text = ''
     const timer = setTimeout(() => reject(new Error('Chromium startup timeout')), 10000)
@@ -182,6 +185,7 @@ try {
 } finally {
   cdp?.terminate(); ws?.terminate()
   await stop(browser)
+  await fs.rm(browserTmp, { recursive: true, force: true })
   await stop(server)
   // A failure before the destroy cast may leave this one session alive. The private
   // TMUX_TMPDIR plus exact random session name keeps cleanup outside the live namespace.
