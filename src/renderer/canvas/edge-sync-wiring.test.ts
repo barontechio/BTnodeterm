@@ -61,3 +61,30 @@ describe('the guard refusal message', () => {
     expect(src).toMatch(/stamped\.op === 'upsert'\) setSyncNote/)
   })
 })
+
+describe('the publish effect refuses a torn render', () => {
+  // The effect publishes the RENDERED `nodes` / `linkEdges` / `controlEdges`; the baseline it diffs
+  // against was adopted from the REFS, which a peer op or a load moves synchronously ahead of the
+  // render. It must ask `renderedSceneIsCurrent` and publish nothing (nor adopt) from a render that
+  // lags the refs — the matching render follows (collab-sync.test.ts says what it cost).
+  const effect = src.slice(src.indexOf('// Publish on every settled node change.'), src.indexOf('// Receiving side: apply an incoming mutation.'))
+  it('is wired', () => {
+    expect(effect).toContain('pub.publish(states')
+    const check = effect.indexOf('renderedSceneIsCurrent(')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(effect.indexOf('pub.adopt(states)'))
+    expect(check).toBeLessThan(effect.indexOf('pub.publish(states'))
+    expect(effect.slice(check, effect.indexOf('pub.adopt(states)'))).toMatch(/return/)
+  })
+})
+
+describe('the dangling-edge prunes', () => {
+  // The verdict lives in pruneDanglingEdges, whose behaviour pruneDanglingEdges.test.tsx pins with
+  // real React. These pin that both effects use it instead of judging inside a functional update.
+  const ropePrune = src.slice(src.indexOf('// Prune ropes whose endpoints were deleted'), src.indexOf('// The RENDERED epoch, not the ref'))
+  const linkPrune = src.slice(src.indexOf('// Pruning is separate from publication'), src.indexOf('// The app-level unread count'))
+  it('both effects go through the one helper', () => {
+    expect(ropePrune).toContain('pruneDanglingEdges(nodesRef, controlEdgesRef, setControlEdges)')
+    expect(linkPrune).toContain('pruneDanglingEdges(nodesRef, linkEdgesRef, setLinkEdges)')
+  })
+})

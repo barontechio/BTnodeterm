@@ -178,6 +178,20 @@ reconciliation must preserve that distinction before any attempted remote write.
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
+An owner tab's whole save is rebased onto the host's copy (`shared/workspace-save-merge.ts`) from
+that client's baseline, which moves only when a save lands. A node or edge id both sides hold and the
+baseline lacks is the host's own item, adopted through an op or a server-change: refusing it failed
+that save and every later one until a reload after any `open-agent`. The host's copy stays for that
+save, because the tab's copy may predate it. `baselineAfterSave` then builds that item's base so a
+difference can only mean the tab changed something: a key the tab lacks stays out (an op never carries
+`shell` or `ssh.extraArgs`, and absence must not read as deletion), and exec fields, a launch and a
+`reader` take the tab's own value. A launch claim and a one-way `reader` land at once: a claimant reads
+a landed save as durable, and a lost reader widens who may read. Only a project id can really collide,
+and that is still refused. A child left under a frame this save removed moves up instead of refusing,
+as removing a frame moves its children. The costs: until the tab's next save, which comes only with
+its next edit, a change to an adopted node is live but not on disk; and a tab whose copy still lags
+the host at that save writes its older title or position.
+
 Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
 `settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
 `settings:changed` pushes follow successful atomic persistence. `SettingsWriteQueue` overlays
@@ -810,6 +824,25 @@ Persistence has two layers:
   `markUnmirrored` was the smaller diff and was rejected: it needs the same shadow state anyway,
   and it only closes the one failure path that happens to report back. The set is runtime-only,
   bounded by the ids deleted this run, and pruned for projects that leave the index.
+  **A render behind the edge refs is not published from** (2026-11-05, measured with TWO Server
+  Edition tabs on an `open-agent` burst; `test/server/open-edge-loss.e2e.test.ts`
+  is the opt-in reproduction). The factory's node upsert and its two edge upserts arrive as separate
+  frames; each handler moves its ref synchronously and adopts the refs as the publisher's baseline,
+  and a render then commits with the new `nodes` but the OLD edge arrays. Three places read that
+  torn render and each lost a persisted edge for good: the publish effect diffed it against the
+  adopted baseline and cast `edge-remove` for a rope and a bridge every canvas held
+  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render; neither it nor the prune below
+  can see a render that moved the ref BACK, which review reproduced in isolation and not in the app);
+  the rope prune paired the
+  rendered node set with the LATEST ropes and pruned the new rope as dangling (`pruneDanglingEdges`
+  now decides in the effect, over the refs, and removes only the ids it saw: judging inside a
+  functional update drops an add queued behind it, before `nodesRef` has moved); and
+  `planServerChange` read an edge "in base,
+  not in the file" as removed even when the file lacked the edge's NODE too — the stale payload a
+  tab's whole save had just produced — while never removing the node (an edge is now dropped only
+  when the file still holds both endpoints). The other tab applied the casts and its next whole save
+  wrote the node without its edges. The three fixes are renderer-side, so the deployed v0.4.5
+  renderer has all three; its server also still overwrites on a tab save (no `mergeWorkspaceSave`).
   **Neither surface may name a device for an adopted node** (`adoptedClause`,
   `renderer/lib/externalChange.ts`): nothing at that layer knows the source — a stale own mirror
   and a phone append are indistinguishable there — so the copy names the project FILE and offers

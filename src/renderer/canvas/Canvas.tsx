@@ -246,6 +246,7 @@ import {
   mergeIncomingNodes
 } from '../lib/externalChange'
 import { planServerChange } from '../lib/serverChange'
+import { pruneDanglingEdges } from './pruneDanglingEdges'
 import {
   CONTENT_ADD_ITEMS,
   agentEntriesToMenuItems,
@@ -752,7 +753,7 @@ import {
   type WorktreeAttachTarget
 } from '../lib/worktreeCreate'
 import {
-  WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, markLegacyWaitRopes, missingDepRopes, pruneRopes,
+  WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, markLegacyWaitRopes, missingDepRopes,
   ropeInfoOf, ropeVisual, waitRopeId
 } from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'
@@ -929,8 +930,7 @@ import {
   NO_PROJECTS,
   provesPeer,
   shouldPublish,
-  type GovernedProjects
-} from './collab-sync'
+  type GovernedProjects, renderedSceneIsCurrent } from './collab-sync'
 import {
   applyCanvasMutation,
   applyMutationToFlow,
@@ -4639,6 +4639,18 @@ export function Canvas() {
   useEffect(() => {
     const pub = publisherRef.current
     if (!pub) return
+    // A render whose nodes or edges lag the refs is TORN: a peer's op, a load or a server change
+    // moved a ref synchronously and its setter has not rendered yet. Diffed against the baseline
+    // those handlers adopted from the refs, the edges this render has not shown yet read as
+    // REMOVED, and the effect cast `edge-remove` for a rope and a bridge every canvas held
+    // (measured 2026-11-05, two Server Edition tabs on an open-agent burst — collab-sync.ts says
+    // what it cost). The matching render follows; publish (or adopt) from that one.
+    if (
+      !renderedSceneIsCurrent(
+        { nodes, bridges: linkEdges, ropes: controlEdges },
+        { nodes: nodesRef.current, bridges: linkEdgesRef.current, ropes: controlEdgesRef.current }
+      )
+    ) return
     const states = publishableLater(nodes, { bridges: linkEdges, ropes: controlEdges })
     if (loadingRef.current) {
       pub.adopt(states)
@@ -5309,13 +5321,10 @@ export function Canvas() {
     [onLinkEdgesChange]
   )
 
-  // Prune ropes whose endpoints were deleted (mirrors the context-link pruning below).
+  // Prune ropes whose endpoints were deleted (mirrors the context-link pruning below). This effect
+  // runs on every drag FRAME (`nodes` identity); most canvases have no ropes, and that costs nothing.
   useEffect(() => {
-    // Nothing to prune → don't build the id set. This effect runs on every drag FRAME (`nodes`
-    // identity), and most canvases have no ropes at all.
-    if (!controlEdgesRef.current.length) return
-    const ids = new Set(nodes.map((n) => n.id))
-    setControlEdges((es) => pruneRopes(es, ids))
+    pruneDanglingEdges(nodesRef, controlEdgesRef, setControlEdges)
   }, [nodes])
 
   // The RENDERED epoch, not the ref: in a project switch's window the ref already names the incoming
@@ -5330,9 +5339,7 @@ export function Canvas() {
 
   // Pruning is separate from publication: node geometry changes must not postpone link writes.
   useEffect(() => {
-    const ids = new Set(nodes.map((n) => n.id))
-    const valid = linkEdges.filter((e) => ids.has(e.source) && ids.has(e.target))
-    if (valid.length !== linkEdges.length) setLinkEdges(valid)
+    pruneDanglingEdges(nodesRef, linkEdgesRef, setLinkEdges)
   }, [linkEdges, nodes, setLinkEdges])
 
   // The app-level unread count (macOS Dock badge, Windows taskbar overlay, tray), across all
