@@ -28,16 +28,17 @@ for (const binary of ['node-pty/build/Release/pty.node', 'smart-whisper/build/Re
   assert((await fs.stat(path.join(root, 'node_modules', binary))).isFile(), 'Missing packaged native binary: ' + binary)
 }
 const WebSocket = require('ws')
-// Chromium's process-singleton socket must fit sockaddr_un even when evidence paths
-// are long. Give only the browser a fresh short private temp directory, after all
+// Chromium and tmux sockets must fit sockaddr_un even when evidence paths are
+// long. Give both fresh short private temp directories, after all
 // package validation that can reject before starting any processes.
 const browserTmp = await fs.mkdtemp('/tmp/bt1-browser-')
+const tmuxTmp = await fs.mkdtemp('/tmp/bt1-tmux-')
 const password = randomBytes(24).toString('hex')
 // Construct from an allowlist: never inherit account homes, hook endpoints, SSH agent,
 // proxy/auth tokens, NODE_OPTIONS, browser settings or application flags.
 const env = { PATH: path.dirname(process.execPath) + ':/usr/local/bin:/usr/bin:/bin', LANG: 'C.UTF-8', SHELL: '/bin/sh',
   HOME: dirs.home, USERPROFILE: dirs.home, TMPDIR: dirs.tmp, TMP: dirs.tmp, TEMP: dirs.tmp,
-  XDG_CONFIG_HOME: dirs.config, XDG_CACHE_HOME: dirs.cache, TMUX_TMPDIR: dirs.tmux,
+  XDG_CONFIG_HOME: dirs.config, XDG_CACHE_HOME: dirs.cache, TMUX_TMPDIR: tmuxTmp,
   NODETERM_DATA_DIR: dirs.data, NODETERM_HOST: '127.0.0.1', NODETERM_PORT: '0',
   NODETERM_SERVER_PASSWORD: password }
 let server, browser, ws, cdp, persistKey
@@ -217,6 +218,7 @@ try {
   if (persistKey) {
     try { execFileSync('tmux', ['-L', 'node-terminal', 'kill-session', '-t', '=nt-' + persistKey], { env, stdio: 'ignore', timeout: 5000 }) } catch {}
   }
+  await fs.rm(tmuxTmp, { recursive: true, force: true })
   clearTimeout(watchdog)
   result.serverExit = { code: server?.exitCode, signal: server?.signalCode }
   result.serverDiagnostics = serverDiagnostics
