@@ -82,6 +82,20 @@ Desktop releases synthetic clients after the operation while preserving the pers
 SSH, Windows and non-headless agents keep their existing Desktop adapter. Missing selected
 accounts and prompt files hold the saved task instead of substituting credentials or a brief.
 
+Host `open-agent` and the `open-claude` alias share prompt-file launch semantics with teams:
+validate a readable regular absolute host path, compose it through the shared launch assembler,
+and retain `pendingLaunch.promptFile` so immediate, deferred and owner retry paths check it again.
+At actual delivery read through the bounded descriptor reader and stage a private launch-prompt
+copy before PTY attachment; the caller's original path may disappear during attachment. Only the
+delivered command names the copy: claims, pending commands and deduplication retain the original.
+The copied text is nonempty, NUL-free and at most 120 KiB. Read/write failures retain the task.
+Deferred file launches use the same echo-verified path. Keep copies for the normal launch-prompt
+TTL because submitted input does not prove the shell has consumed them. The shared POSIX assembler
+guards cat failure before invoking the agent and confines its prompt variable to a subshell.
+Reject simultaneous literal/file prompts. With `--issue`, the file is the complete brief and must
+name the issue itself. Open dry runs perform the same input/target checks without saving nodes
+or dispatching input; CLI availability and actual launch success still need runtime verification.
+
 `core/worktree-control.ts` is the local host create/unbind service. It shares the create/bind
 sequence with Desktop UI (`shared/worktree-create.ts`), uses Git's actual worktree list, and
 rechecks source/group/path claims under the workspace queue before binding. Preparation shares

@@ -52,6 +52,17 @@ describe.skipIf(process.platform === 'win32')('generated CLI through a real Serv
       const env = { ...process.env, NODETERM_CANVAS_CONTROL: '1', NODETERM_NODE_ID: 'source', NODETERM_HOOK_ENDPOINT: hookServer.endpointFilePath() }
       const cli = async (...args: string[]) => (await run('/bin/sh', [shim, ...args], { env, timeout: 15_000, maxBuffer: 1024 * 1024 })).stdout
       expect(await cli('capabilities')).toContain('server canvas control: enabled')
+      const brief = path.join(root, 'team-brief.md')
+      fs.writeFileSync(brief, '# Runtime brief\nPreserve structure')
+      const nodesBefore = (await store.load()).projects.find((p) => p.id === 'p')!.nodes
+      expect(await cli('spawn-team', '--team', JSON.stringify([{ agent: 'codex', promptFile: brief }]), '--dry-run'))
+        .toContain('Nothing was opened')
+      expect(await cli('open-agent', '--agent', 'codex', '--prompt-file', brief, '--dry-run'))
+        .toContain('Nothing was opened')
+      expect(await cli('open-claude', '--prompt-file', brief, '--dry-run')).toContain('Nothing was opened')
+      await expect(cli('open-agent', '--agent', 'codex', '--prompt-file', `${brief}-missing`, '--dry-run'))
+        .rejects.toMatchObject({ stderr: expect.stringContaining('readable regular file') })
+      expect((await store.load()).projects.find((p) => p.id === 'p')!.nodes).toEqual(nodesBefore)
       expect(await cli('place', '--nodes', 'source', '--x', '48', '--y', '96')).toContain('placed')
       const saved = (await store.load()).projects.find((p) => p.id === 'p')!
       expect(saved.nodes[0].position).toEqual({ x: 48, y: 96 })

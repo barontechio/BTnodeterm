@@ -66,7 +66,7 @@ const SERVER_LIMITATIONS: Partial<Record<ServerControlVerb, string>> = {
   board: 'Reads only the caller project; creator scope shows the caller and its created cards.',
   'open-project': 'Only an exact, already registered local project can be opened.',
   'open-terminal': 'Local persistent sessions only; the host validates supported launch flags.',
-  'open-agent': 'Local persistent sessions only; the host validates supported launch flags.',
+  'open-agent': 'Local persistent sessions only; --prompt-file requires absolute readable host text (1–122880 bytes), retained until launch. --dry-run validates without creating nodes.',
   rename: 'Changes canvas metadata; does not type a rename command into the session.',
   close: 'Cannot close the caller; busy sessions require an explicit force in project scope.',
   run: 'Local retained launches only.',

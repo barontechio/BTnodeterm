@@ -36,11 +36,11 @@ describe('createAgentNode launchIntent', () => {
     })
   })
 
-  it('holds a prompt file by path while the POSIX line keeps its `$(cat …)` form', () => {
+  it('holds a prompt file by path while the POSIX line guards its read before launch', () => {
     const n = createAgentNode(
       'claude', 0, '/repo', undefined, undefined, undefined, undefined, undefined, undefined, undefined, '/tmp/brief.md'
     )
-    expect(n.data.initialCommand).toBe(`claude "$(cat '/tmp/brief.md')"`)
+    expect(n.data.initialCommand).toBe(`( nt_launch_prompt=$(cat '/tmp/brief.md') && claude "$nt_launch_prompt" )`)
     expect(n.data.launchIntent).toEqual({
       command: n.data.initialCommand,
       intent: { kind: 'agent', action: 'start', agentId: 'claude' },

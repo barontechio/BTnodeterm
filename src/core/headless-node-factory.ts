@@ -22,7 +22,10 @@ import { codexHomeForAccount } from './codex-accounts-core'
 import { agentAccountColor } from '../shared/agents/account-color'
 import { parseTeamSpec } from '../shared/team-spec'
 import { planIndependentTeam, planVerification, type PlannedTeamRole } from '../shared/team-plan'
-import { launchPromptFor } from '../shared/prompt-spill'
+import { flattenPrompt, launchPromptFor } from '../shared/prompt-spill'
+import { LAUNCH_PROMPT_FILE_PREFIX } from '../shared/launch-prompt'
+import { shellSingleQuote } from '../shared/shell-quote'
+import { readPromptFileBounded } from './launch-intent-execute'
 import { arrangeNodes, fitAncestorChain as fitGeometryAncestors } from '../shared/canvas-geometry'
 import { coldGroupCwd, coldResolveGroup, groupSlot, groupSizeFor } from '../shared/cold-open'
 import { placeBelowSource } from '../shared/placement'
@@ -70,7 +73,7 @@ import {
   type AgentId,
   type BuiltinAgentId
 } from '../shared/agents/config'
-import { assembleLaunchCommand, assembleResumeCommand } from '../shared/agents/launch'
+import { assembleLaunchCommand, assembleResumeCommand, promptFilePathError } from '../shared/agents/launch'
 import { isClaudeBranchSessionId } from './claude-branch'
 import { isConversationBranchPosition, type ConversationBranchPosition } from '../shared/conversation-branch'
 import type { NodeExecutionKind, NodeExecutionOptions, NodeExecutionPermit } from './node-execution'
@@ -268,8 +271,8 @@ export interface OpenLaunchFailure {
 /**
  * The `open-*` failure reply (#925). Each failed node is named with its own reason, grouped, so a
  * caller can tell a failure Run now may get past from one it repeats: `line-too-long` fails the
- * same way on every attempt, and this edition has no `--prompt-file` (the open flag allowlist),
- * so the only way past it is a shorter prompt or command. "Do not repeat the open request" holds
+ * same way on every attempt; use a prompt file for a new agent launch or shorten the command.
+ * "Do not repeat the open request" holds
  * for every reason: the nodes are persisted, so the same request would open duplicates.
  */
 export function launchFailedError(
@@ -558,9 +561,27 @@ function ptyOptions(project: Project, node: CanvasNodeState): PtyCreateOptions {
   return localNodePtyOptions(project, node, { cols: TERMINAL_COLS, rows: TERMINAL_ROWS })
 }
 
+// Leave room below Linux's per-argument ceiling; briefs travel as one CLI argument.
+const HOST_PROMPT_FILE_MAX_BYTES = 120 * 1024
+
+function validateLaunchPrompt(text: string): string {
+  if (!text || text.includes('\0') || Buffer.byteLength(text, 'utf8') > HOST_PROMPT_FILE_MAX_BYTES) {
+    throw new Error('prompt file must be nonempty text without NUL bytes, at most 122880 bytes')
+  }
+  return text
+}
+
+async function readLaunchPrompt(file: string): Promise<string> {
+  return validateLaunchPrompt(await readPromptFileBounded(file, HOST_PROMPT_FILE_MAX_BYTES))
+}
+
 async function promptReadable(file: string | undefined): Promise<boolean> {
   if (!file) return true
-  try { await fs.access(file, fs.constants.R_OK); return (await fs.stat(file)).isFile() } catch { return false }
+  try {
+    await fs.access(file, fs.constants.R_OK)
+    const stat = await fs.stat(file)
+    return stat.isFile() && stat.size > 0 && stat.size <= HOST_PROMPT_FILE_MAX_BYTES
+  } catch { return false }
 }
 
 function launchIdentity(project: Project, node: CanvasNodeState): string {
@@ -739,6 +760,20 @@ export class HeadlessNodeFactory {
     if (!(await promptReadable(node.pendingLaunch?.promptFile))) return { outcome: 'failed', reason: 'prompt-file-missing' }
     if (!(await this.accountReady(node))) return { outcome: 'failed', reason: 'account-unavailable' }
     if (current && !current()) return { outcome: 'failed', reason: 'cancelled' }
+    // Read at actual launch, before any PTY work, into a private copy that the caller's source
+    // file cannot invalidate during attachment/settling. Keep the original command for held-task
+    // recovery and the delivery ledger; only the command sent to the shell names the snapshot.
+    const promptFile = node.pendingLaunch?.promptFile
+    if (promptFile) {
+      try {
+        const text = await readLaunchPrompt(promptFile)
+        const read = `$(cat ${shellSingleQuote(promptFile)})`
+        if (!command.includes(read)) return { outcome: 'failed', reason: 'prompt-file-missing' }
+        const snapshot = await saveUpload(platform().userDataDir, `${LAUNCH_PROMPT_FILE_PREFIX}snapshot.md`, Buffer.from(text, 'utf8').toString('base64'))
+        if (!snapshot) return { outcome: 'failed', reason: 'prompt-file-missing' }
+        command = command.replace(read, () => `$(cat ${shellSingleQuote(snapshot)})`)
+      } catch { return { outcome: 'failed', reason: 'prompt-file-missing' } }
+    }
     const pty = this.deps.ptyManager
     try { return await launchHeadless(
       {
@@ -1944,7 +1979,8 @@ export class HeadlessNodeFactory {
             const home = role.agent === 'claude' ? claudeConfigDirFor(id) : codexHomeForAccount(platform().userDataDir, id)
             if (!(await fs.stat(home)).isDirectory()) throw new Error('account home unavailable')
           }
-          if (role.promptFile && !(await fs.stat(role.promptFile)).isFile()) throw new Error(`prompt file unavailable: ${role.promptFile}`)
+          if (role.promptFile) await readLaunchPrompt(role.promptFile)
+          if (role.prompt !== undefined) validateLaunchPrompt(flattenPrompt(role.prompt))
         }
       } catch (error) { return { ok: false, error: `${verb}-input-refused: ${String(error)}` } }
       if (dryRunRequested(args)) return { ok: true, message: `Dry run: would open ${roles.length} team member(s) in ${args.label || 'Team'}. Nothing was opened.`,
@@ -2160,12 +2196,14 @@ export class HeadlessNodeFactory {
         // `run-now` (#925) is a no-op, since a server open already delivers immediately; only its
         // pairing with `--after` is refused, just below.
         verb === 'open-terminal'
-          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now', 'group'])
+          ? new Set(['count', 'cwd', 'cmd', 'after', 'after-success', 'success-deadline', 'project', 'run-now', 'group', 'dry-run'])
           : new Set([
               'agent',
               'count',
               'cwd',
               'prompt',
+              'prompt-file',
+              'dry-run',
               'after',
               'after-success',
               'success-deadline',
@@ -2262,6 +2300,17 @@ export class HeadlessNodeFactory {
         issueRef = issue.ref
       }
 
+      const promptFile = verb === 'open-agent' && args['prompt-file'] !== undefined
+        ? args['prompt-file'].trim() : undefined
+      if (promptFile !== undefined) {
+        if (args.prompt !== undefined) return { ok: false, error: 'open-agent: pass either --prompt or --prompt-file, not both' }
+        const invalid = promptFilePathError(promptFile)
+        if (invalid || !path.isAbsolute(promptFile)) return { ok: false, error: `open-agent: --prompt-file ${invalid || 'must be an absolute host path'}` }
+        try { await readLaunchPrompt(promptFile) } catch {
+          return { ok: false, error: 'open-agent: --prompt-file must name a readable regular file on this host containing nonempty text without NUL bytes (1–122880 bytes)' }
+        }
+      }
+
       const settings = this.deps.settings()
       const nodeSize = terminalSize(settings)
       const caps = verb === 'open-agent' ? await this.deps.cliCaps() : null
@@ -2296,6 +2345,11 @@ export class HeadlessNodeFactory {
       const bridges = [...(target.bridges ?? [])]
       const startIndex = target.nodes.length
       const cwd = args.cwd || groupCwd || (target.id === source.project.id ? source.node.cwd : undefined) || target.cwd
+      if (dryRunRequested(args)) return {
+        ok: true,
+        message: `Dry run: would open ${count} ${verb === 'open-agent' ? `${agentId} session` : 'terminal'}(s). Nothing was opened.`,
+        result: { dryRun: true, count, cwd, after, ...(promptFile ? { promptFile } : {}) }
+      }
       // Snapshot dependency state at the arm boundary. A `working` state is already positive
       // evidence that this fresh process made it through its boot composer; a later `done` may
       // release it. An unknown/waiting fresh spawn needs a working event after this snapshot.
@@ -2339,7 +2393,8 @@ export class HeadlessNodeFactory {
             {
               agentId: agentId as AgentId,
               // An issue-bound session's first prompt is the REFERENCE line, never the issue's text.
-              initialPrompt: issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt,
+              initialPrompt: promptFile ? undefined : issueRef ? issueLaunchPrompt(issueRef, args.prompt) : args.prompt,
+              promptFile,
               permissionMode,
               sessionId: mintedSessionId,
               sessionIdFlagSupported,
@@ -2362,6 +2417,7 @@ export class HeadlessNodeFactory {
           ? {
               after,
               command,
+              ...(promptFile ? { promptFile } : {}),
               executor: 'server' as const,
               attempted: !mustWait,
               ...(!mustWait ? { manualOnly: true } : {}),
@@ -2668,7 +2724,7 @@ export class HeadlessNodeFactory {
             if (!stillValid.value) continue
           }
           if (!isLaunchShell(await this.deps.ptyManager.paneCommand(node.id).catch(() => null))) continue
-          const delivered = this.strictArms.has(node.id) ?
+          const delivered = this.strictArms.has(node.id) || !!pending.promptFile ?
             (await this.launch(project, node, command)).outcome === 'delivered' :
             (await this.deps.ptyManager.sendText(node.id, command).catch(() => false)) === true
           if (!delivered) continue
