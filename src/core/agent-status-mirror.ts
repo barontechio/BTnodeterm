@@ -1039,6 +1039,12 @@ const inboxActionableListeners = new Set<(e: InboxEvent) => void>()
  * Subscribe to newly-appended actionable inbox events (approval/question post-dedup, done on edge).
  * Returns an unsubscribe. Additive side-channel — does not change the feed or any disk write.
  */
+/** Revalidate a captured actionable edge after asynchronous delivery preparation. */
+export function isInboxEventCurrent(event: InboxEvent): boolean {
+  return inboxEvents.some(e => e.id === event.id && e.nodeId === event.nodeId &&
+    e.sessionId === event.sessionId && e.kind === event.kind && !e.resolved && !e.interrupted)
+}
+
 export function onInboxActionable(cb: (e: InboxEvent) => void): () => void {
   inboxActionableListeners.add(cb)
   return () => inboxActionableListeners.delete(cb)

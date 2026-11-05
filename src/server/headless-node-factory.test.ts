@@ -1,5 +1,8 @@
 import { FakeHeadlessPty as FakePty } from '../core/test-headless-pty'
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import * as uploads from '../core/uploads'
+import * as launchIntent from '../core/launch-intent-execute'
 import { StationHandoverTracker } from '../core/station-handover'
 import os from 'node:os'
 import path from 'node:path'
@@ -114,7 +117,8 @@ describe('HeadlessNodeFactory', () => {
 
   beforeEach(async () => {
     settingsOverride = {}
-    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-headless-factory-'))
+    // Replacement metacharacters in a real data path must stay literal in snapshot commands.
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nodeterm-headless-$&-factory-'))
     projectDir = path.join(dataDir, 'project')
     fs.mkdirSync(projectDir, { recursive: true })
     resetPlatformForTests()
@@ -2268,7 +2272,7 @@ describe('HeadlessNodeFactory', () => {
     expect(reply.result).toMatchObject({ failed: [id], deliveredIds: [], reasons: { [id]: 'cancelled' } })
   })
 
-  it('line-too-long says Run now fails the same way and to shorten the prompt: --prompt-file is not a flag here (#925)', async () => {
+  it('line-too-long says Run now fails the same way and to shorten the prompt (#925)', async () => {
     // A canonical-mode tty drops everything past its cap, so the echo never matches the command.
     const write = pty.writeHeadless.bind(pty)
     vi.spyOn(pty, 'writeHeadless').mockImplementation((key, data) =>
@@ -2312,11 +2316,131 @@ describe('HeadlessNodeFactory', () => {
     expect(node?.pendingLaunch).toMatchObject({ manualOnly: true })
   })
 
-  it('--prompt-file is not an open-agent flag on the Server Edition (the reply above relies on it)', async () => {
-    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': '/tmp/brief.md' }, true)
-    expect(reply.ok).toBe(false)
-    expect(reply.error).toMatch(/prompt-file/)
+  it.skipIf(process.platform === 'win32')('delivers a multiline prompt file as one literal argument without putting its contents on the launch line', async () => {
+    const file = path.join(projectDir, "brief's file.md")
+    const brief = '# Task\n  Preserve indentation\n' + 'detail '.repeat(400) + '\n$(exit 42) `exit 43` "quoted"'
+    fs.writeFileSync(file, brief)
+    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': file }, true)
+    expect(reply.ok, reply.error).toBe(true)
+    expect(pty.sends).toHaveLength(1)
+    const command = pty.sends[0].text
+    const snapshots = path.join(dataDir, 'launch-prompts')
+    const snapshotDir = path.join(snapshots, fs.readdirSync(snapshots)[0])
+    const snapshot = path.join(snapshotDir, 'nodeterm-prompt-snapshot.md')
+    expect(fs.statSync(snapshotDir).mode & 0o777).toBe(0o700)
+    expect(fs.statSync(snapshot).mode & 0o777).toBe(0o600)
+    expect(Buffer.byteLength(command)).toBeLessThan(MAX_LAUNCH_LINE_BYTES)
+    expect(execFileSync('/bin/sh', ['-c', `claude() { printf '%s' "$1"; }; ${command}`], { encoding: 'utf8' })).toBe(brief)
+    // Delivery uses a private snapshot, so losing the caller's file cannot lose the brief.
+    fs.unlinkSync(file)
+    expect(execFileSync('/bin/sh', ['-c', `claude() { printf '%s' "$1"; }; ${command}`], { encoding: 'utf8' })).toBe(brief)
+    // Even a missing private copy must never start an empty agent.
+    const guarded = command.replace(/snapshot\.md/, 'snapshot-missing.md')
+    expect(() => execFileSync('/bin/sh', ['-c', `claude() { printf agent-started; }; ${guarded}`], { stdio: 'pipe' })).toThrow()
+  })
+
+  it.skipIf(process.platform === 'win32')('delivers the captured brief if the original file disappears during PTY creation', async () => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'MANDATORY BRIEF')
+    pty.beforeCreate = async () => { fs.unlinkSync(file) }
+    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': file }, true)
+    expect(reply.ok, reply.error).toBe(true)
+    expect(pty.sends).toHaveLength(1)
+    expect(execFileSync('/bin/sh', ['-c', `claude() { printf '%s' "$1"; }; ${pty.sends[0].text}`], { encoding: 'utf8' })).toBe('MANDATORY BRIEF')
+  })
+
+  it('validates prompt file inputs before any canvas write or session creation', async () => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'task')
+    const empty = path.join(projectDir, 'empty.md'); fs.writeFileSync(empty, '')
+    const oversized = path.join(projectDir, 'large.md'); fs.writeFileSync(oversized, 'x'.repeat(120 * 1024 + 1))
+    const binary = path.join(projectDir, 'binary.md'); fs.writeFileSync(binary, 'task\0hidden')
+    const before = await store.load()
+    const save = vi.spyOn(store, 'updateWorkspace')
+    const invalidInputs: Record<string, string>[] = [
+      { 'prompt-file': '' }, { 'prompt-file': 'relative.md' }, { 'prompt-file': 'C:\\brief.md' },
+      { 'prompt-file': `${file}\nextra` }, { 'prompt-file': path.join(projectDir, 'missing') },
+      { 'prompt-file': empty }, { 'prompt-file': oversized },
+      { 'prompt-file': binary },
+      { 'prompt-file': projectDir }, { 'prompt-file': file, prompt: 'ambiguous' }
+    ]
+    for (const args of invalidInputs) {
+      const reply = await factory.openAgent('term-source', { agent: 'claude', ...args }, true)
+      expect(reply).toMatchObject({ ok: false, error: expect.stringContaining('--prompt') })
+    }
+    expect(save).not.toHaveBeenCalled()
+    expect(await store.load()).toEqual(before)
     expect(pty.creates).toEqual([])
+  })
+
+  it('dry-runs the same prompt file validation without persisting or delivering a launch', async () => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'task')
+    const before = await store.load()
+    expect(await factory.openAgent('term-source', { agent: 'codex', 'prompt-file': file, 'dry-run': '' }, true))
+      .toMatchObject({ ok: true, result: { dryRun: true, promptFile: file } })
+    expect(await factory.openAgent('term-source', { agent: 'codex', 'prompt-file': file, 'dry-run': '' }, false))
+      .toMatchObject({ ok: false })
+    expect(await factory.openAgent('term-source', { agent: 'codex', 'prompt-file': `${file}-missing`, 'dry-run': '' }, true))
+      .toMatchObject({ ok: false })
+    expect(await store.load()).toEqual(before)
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    expect(fs.existsSync(path.join(dataDir, 'launch-prompts'))).toBe(false)
+  })
+
+  it.each(['read', 'save'])('retains the original task when snapshot %s fails, and recovers explicitly', async (failure) => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'task')
+    if (failure === 'read') vi.spyOn(launchIntent, 'readPromptFileBounded')
+      .mockResolvedValueOnce('task').mockRejectedValueOnce(new Error('read failed'))
+    else vi.spyOn(uploads, 'saveUpload').mockResolvedValueOnce(null)
+    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': file }, true)
+    expect(reply.ok).toBe(false)
+    const id = (reply.result as { id: string }).id
+    const held = (await store.load()).projects[0].nodes.find((n) => n.id === id)!.pendingLaunch!
+    expect(held).toMatchObject({ promptFile: file, manualOnly: true })
+    expect(held.command).toContain(file)
+    expect(pty.creates).toEqual([])
+    expect(pty.sends).toEqual([])
+    expect(await factory.run('term-source', { node: id }, true)).toMatchObject({ result: { started: true } })
+    expect(pty.sends).toHaveLength(1)
+  })
+
+  it.skipIf(process.platform === 'win32')('captures a deferred file only when its dependency releases, and delivers the captured bytes', async () => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'initial task')
+    states['term-upstream'] = 'working'
+    expect((await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': file, after: 'term-upstream' }, true)).ok).toBe(true)
+    expect(fs.existsSync(path.join(dataDir, 'launch-prompts'))).toBe(false)
+    fs.writeFileSync(file, 'task at release\n  details')
+    states['term-upstream'] = 'done'
+    await factory.refreshArmed({ nodeId: 'term-upstream', state: 'done' })
+    expect(pty.sends).toHaveLength(1)
+    fs.unlinkSync(file)
+    expect(execFileSync('/bin/sh', ['-c', `claude() { printf '%s' "$1"; }; ${pty.sends[0].text}`], { encoding: 'utf8' })).toBe('task at release\n  details')
+  })
+
+  it('retains a delayed file launch when its file disappears, and only delivers after restoration and explicit recovery', async () => {
+    const file = path.join(projectDir, 'brief.md')
+    fs.writeFileSync(file, 'task')
+    states['term-upstream'] = 'working'
+    const reply = await factory.openAgent('term-source', { agent: 'claude', 'prompt-file': file, after: 'term-upstream' }, true)
+    expect(reply.ok, reply.error).toBe(true)
+    const id = (reply.result as { id: string }).id
+    const held = (await store.load()).projects[0].nodes.find((n) => n.id === id)!.pendingLaunch!
+    expect(held.promptFile).toBe(file)
+    fs.unlinkSync(file)
+    states['term-upstream'] = 'done'
+    await factory.refreshArmed({ nodeId: 'term-upstream', state: 'done' })
+    expect(pty.sends).toEqual([])
+    expect(await factory.run('term-source', { node: id }, true)).toMatchObject({
+      ok: true, result: { started: false, queued: true, reason: 'prompt-file-missing' }
+    })
+    expect(pty.sends).toEqual([])
+    fs.writeFileSync(file, 'restored task')
+    expect(await factory.run('term-source', { node: id }, true)).toMatchObject({ ok: true })
+    expect(pty.sends).toHaveLength(1)
   })
 
   it('accepts --run-now on open verbs as a no-op: server opens are already immediate (#925)', async () => {

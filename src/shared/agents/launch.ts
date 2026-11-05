@@ -46,9 +46,9 @@ export interface LaunchInputs {
    *  `promptFile` instead. */
   initialPrompt?: string
   /** Absolute path to a file holding the first-launch prompt (canvas-control `--prompt-file`).
-   *  Wins over `initialPrompt`. Composed as `"$(cat '<path>')"` so the TYPED line stays one line
-   *  while the pane's shell expands the file — newlines and all — into a single argv element at
-   *  execution. Requires a POSIX-style shell in the new node; validate with
+   *  Wins over `initialPrompt`. Read inside a subshell before starting the agent, so a failed
+   *  read prevents launch. The TYPED line stays one line; shell command substitution preserves
+   *  internal newlines and strips trailing linefeeds. Requires a POSIX-style shell; validate with
    *  `promptFilePathError` before passing. */
   promptFile?: string
   /** Permission mode to start in. `undefined` = no flag (the agent's own default). */
@@ -199,14 +199,12 @@ export function assembleLaunchCommand(
   //   load-bearing for the delivery path, not tidying (PR #516's finding). Callers that let a
   //   user or an agent supply the prompt must say the text arrives on one line — see
   //   `buildCanvasSkillBody` / `buildCanvasControlInstructions`.
-  // - `promptFile` (issue #520) keeps structure WITHOUT putting it on the typed line: the
-  //   argument is a `"$(cat '<path>')"` command substitution, so the pane's shell reads the file
-  //   at execution and hands the CLI its exact contents as ONE argv element. The double quotes
-  //   make the substitution a single word and keep its RESULT data — file content is never
-  //   re-parsed as shell syntax. On an SSH project the path (and the `cat`) are on the host,
-  //   which is exactly where the node runs. Only the PATH is interpolated, single-quoted.
+  // - `promptFile` keeps structure without putting it on the typed line. Read into a subshell's
+  //   private variable and invoke the CLI only if cat succeeds: a file lost after preflight must
+  //   not start an agent with an empty brief. The quoted expansion is one data argument, never
+  //   shell source. On SSH the path and read belong to that host. Only the path is interpolated.
   const promptArg = inputs.promptFile
-    ? `"$(cat ${shellSingleQuote(inputs.promptFile.trim())})"`
+    ? '"$nt_launch_prompt"'
     : inputs.initialPrompt
       ? shellSingleQuote(inputs.initialPrompt.replace(/\s+/g, ' ').trim())
       : null
@@ -239,7 +237,10 @@ export function assembleLaunchCommand(
 
   const composed = usesSep ? `${flagged(baseCmd)} ${sep} ${promptArg}` : flagged(withPrompt)
   // Codex has no prompt separator, so the flag lands last like its approval flag. See codex-daemon.
-  const command = withCodexNoDaemon(composed, capId, inputs.approvalCaps ?? {})
+  const launch = withCodexNoDaemon(composed, capId, inputs.approvalCaps ?? {})
+  const command = inputs.promptFile
+    ? `( nt_launch_prompt=$(cat ${shellSingleQuote(inputs.promptFile.trim())}) && ${launch} )`
+    : launch
   return { command, missingEnv: [...m1, ...m2] }
 }
 

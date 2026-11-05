@@ -81,6 +81,7 @@ export function isDestructiveVerb(verb: string): boolean {
  * renderer's dispatch receives a raw `verb: string` off IPC.
  */
 export const DRY_RUN_VERBS: ReadonlySet<string> = new Set([
+  'groups',
   'open-terminal',
   'open-claude',
   'open-agent',

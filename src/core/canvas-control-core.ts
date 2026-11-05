@@ -495,6 +495,7 @@ const VERBS: ControlVerb[] = [
   'show-web',
   'open-browser',
   'group',
+  'groups',
   'ungroup',
   'move',
   'arrange',
@@ -886,9 +887,9 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  place and size — see `list --geometry` below). Start here when you need a node id.',
     '  On the Server Edition it lists your own node and the nodes you opened during this server run.',
     '- `help` — print the verb list. Answered by the shim itself, so it works even if the app is down.',
-    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
-    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
-    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
+    '- `open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]` — open N plain terminals. `--cmd` requires verified node identity.',
+    '- `open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]` — open N Claude sessions.',
+    `- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open`,
     '  any agent CLI. `--group` parents the node(s) into a group frame; a worktree-bound group also',
     '  hands its worktree path down as the cwd. `--after <id,id>` opens the node ARMED: it does not',
     '  start until every listed station has finished a turn SUCCESSFULLY. It is',
@@ -984,6 +985,7 @@ export function buildCanvasControlInstructions(shimPath: string): string {
     '  Nothing is queued: unlike a session, a page or an image is finished the moment it is placed,',
     '  so there is nothing to wait for and nothing to poll. Say where it went rather than assuming',
     '  the user saw it.',
+    ...dynamicGroupsDocLines(),
     '- `group --nodes <id,id> [--label L] [--color C]` — wrap sibling nodes or sibling groups in a new labeled frame.',
     '  Every id must share one container. `ungroup --group <id>` dissolves a frame and promotes its direct',
     '  children into the frame\'s parent. `move --nodes <id,id> [--group <id>]` reparents nodes or groups INTO an',
@@ -1152,6 +1154,24 @@ export const CONTROL_UNREACHABLE_MSG = 'Could not reach nodeterm (control endpoi
  *  Names only, deliberately: flags live in the skill body, and a second copy of them here would be
  *  a second thing to keep in sync. */
 export const helpVerbList = (): string => VERBS.join(' ')
+
+function dynamicGroupsDocLines(): string[] {
+  return [
+    '- `groups --spec <json> [--dry-run] [--request-id <id>]` — apply one local visual batch: groups,',
+    '  nested membership, passive space reservations and frame retirement with explicit promotion.',
+    '  Schema: `{version:1, groups:[{id,title?,parent?}], members:[{id,group}],',
+    '  reserve:[{id,group,width,height}], release:[{id,group}], remove:[{id,promoteTo}]}`.',
+    '  `null` means top level; omitted arrays preserve other content. IDs are stable, not names or authority.',
+    '  `groups --get` reads authorized groups and slot facts freshly, including with a repeated request id.',
+    '  `open-agent` / `open-terminal --group <id> --reservation <slot-id>` consumes one reserved slot',
+    '  atomically (count=1). Ordinary grouped opens avoid real children and reserved footprints.',
+    '  Consumed/released slot identities never rearm when a spec is repeated. Use a new slot id for new work.',
+    '  A reserved slot is not a running node. Failed launch leaves its saved node and consumption recoverable.',
+    '  All explicit/indirect changes require permission; worktree/cwd inheritance changes are refused.',
+    '  Connected canvases must support atomic batches. A compatibility refusal changes nothing.',
+    '  An indeterminate response means inspect `groups --get` and retry only with the original request id.'
+  ]
+}
 
 /** The registry, exposed for the `help` test so it asserts against the source of truth rather than
  *  a copy of the list it is checking. Not for production use — read `VERBS` directly. */
@@ -1466,9 +1486,9 @@ Verbs:
   that station finishes another turn.
 - \`help\` — print the verb list. The shim answers this itself, without reaching the app, so it
   is also what to run when you are unsure whether the control endpoint is alive.
-- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
-- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
-- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
+- \`open-terminal [--count N] [--cwd P] [--cmd C] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--run-now]\` — open N plain terminals (default 1). \`--cmd\` requires verified node identity.
+- \`open-claude [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N Claude sessions (default 1).
+- \`open-agent --agent ${agentChoices} [--count N] [--cwd P] [--prompt T | --prompt-file F] [--model M] [--group <id>] [--reservation <id>] [--after <id,id>] [--after-success <id,id>] [--success-deadline <90m|12h|3d>] [--after-pr <N:checks|N:merged>] [--pr-deadline <90m|12h|3d>] [--project <id>] [--issue <owner/repo#N | #N>] [--run-now]\` — open N sessions of any agent CLI.
   \`--group\` parents the node(s) into an existing group frame; a worktree-bound group also
   hands its worktree path down as the cwd.
   \`--after <id,id>\` opens the node **armed**: it does NOT start yet, and launches itself once
@@ -1589,6 +1609,7 @@ ${reportOutcomeDocLines().join('\n')}
   render on the DESKTOP: \`show-image\` and \`show-video\` still work with a host path (the
   file is read/fetched back over the connection), but \`show-web --file/--html\` is refused —
   use \`--url\`, or copy the file to the desktop first.
+${dynamicGroupsDocLines().join('\n')}
 - \`group --nodes <id,id> [--label "Frontend Team"] [--color C]\` — wrap sibling nodes or sibling groups in a
   new labeled frame. Every id must share one container; an ancestor cannot be grouped with its descendant.
 - \`ungroup --group <id>\` — dissolve a group frame, promoting its direct children into the frame's

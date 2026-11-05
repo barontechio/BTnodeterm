@@ -8,6 +8,7 @@ import { arrangeArgsRefusal, isTopLevelGroupArg, parseArrangeGap, TOP_ARRANGE_LA
 import { geometryArgsRefusal, parseResizeArgs, parsePlaceArgs } from './geometry-verbs'
 import { placeReply, resizeReply } from './geometry-reply'
 import { markLegacyWaitRopes } from './canvas-lineage'
+import { finishDynamicGeometry } from './dynamic-group-geometry'
 
 export const GEOMETRY_CONTROL_VERBS = ['ungroup', 'move', 'resize', 'place', 'arrange', 'align'] as const
 export type GeometryControlVerb = typeof GEOMETRY_CONTROL_VERBS[number]
@@ -24,7 +25,7 @@ export function planGeometryCommand<N extends GeometryNode>(
   args: Record<string, string>,
   nodes: N[],
   options: { grid?: number; edges?: readonly { id: string; source: string; target: string }[] } = {}
-): { nodes: N[]; changed: boolean; reply: GeometryControlReply } {
+): { nodes: N[]; changed: boolean; reply: GeometryControlReply; required?: string[] } {
   const shape = geometryArgsRefusal(verb, args)
   if (shape) return { nodes, changed: false, reply: { ok: false, error: shape } }
   let planned = nodes
@@ -244,6 +245,6 @@ export function planGeometryCommand<N extends GeometryNode>(
   }
   dispatch()
   return answer.ok
-    ? { nodes: planned, changed: planned !== nodes, reply: answer }
+    ? finishDynamicGeometry(verb, args, nodes, planned, answer, options.grid ?? 0)
     : { nodes, changed: false, reply: answer }
 }

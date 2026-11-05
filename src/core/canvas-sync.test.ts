@@ -319,9 +319,9 @@ describe('initCanvasSync (reflector)', () => {
   // ServerPlatform keeps an ORDERED SET of listeners per channel, so a second registration on the
   // same platform is not an overwrite — it would reflect every mutation twice to every peer.
   it('is idempotent per platform: initCanvasSync twice registers the listener once', () => {
-    expect(t.registrations).toEqual([IPC.canvasMut]) // beforeEach registered it
+    expect(t.registrations).toEqual([IPC.canvasBatchSubscribe, IPC.canvasMut]) // beforeEach registered it
     initCanvasSync()
-    expect(t.registrations).toEqual([IPC.canvasMut])
+    expect(t.registrations).toEqual([IPC.canvasBatchSubscribe, IPC.canvasMut])
   })
 })
 

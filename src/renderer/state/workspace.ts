@@ -1,10 +1,11 @@
 import { projectAgentDefault, projectLaunchOverride } from '@shared/project-launch-policy'
+import { normalizeDynamicGroupState, reconcileDynamicGroups, placeDynamicGroupMember } from '@shared/dynamic-groups'
 import { wrapGeometryNodes } from '@shared/canvas-geometry'
 import { editorNodeData, EDITOR_NODE_SIZE } from '@shared/editor-node'
 export * from '@shared/canvas-geometry'
 import {
   groupsFirst, fitAncestorChain,
-  repositionForParent, reparentNode
+  repositionForParent, reparentNode, ungroupNodes as ungroupGeometryNodes
 } from '@shared/canvas-geometry'
 import type { Node } from '@xyflow/react'
 import type {
@@ -136,6 +137,7 @@ export function toggleCollapsed(nodes: CanvasNode[], ids: Iterable<string>): Can
 }
 /** User data carried in the React Flow node's data field. */
 export interface NodeData {
+  dynamicGroup?: import('@shared/dynamic-groups').DynamicGroupState
   title: string
   /**
    * Agent nodes only: while true (the default for agent nodes), the title auto-tracks the
@@ -1639,6 +1641,7 @@ export function nodeStatesToFlow(states: CanvasNodeState[]): CanvasNode[] {
         sshRemoteTmux: n.sshRemoteTmux,
         sshFs: n.sshFs,
         worktree: n.worktree,
+        dynamicGroup: n.kind === 'group' ? normalizeDynamicGroupState(n.dynamicGroup) : undefined,
         trigger: n.trigger,
         // Hostile-input seam (git-shared file → live data), like `icon` above.
         runConfig: normalizeRunConfig(n.runConfig),
@@ -1742,6 +1745,7 @@ export function flowToNodeStates(nodes: CanvasNode[], retainInitialCommand = tru
         sshRemoteTmux: n.data.sshRemoteTmux,
         sshFs: n.data.sshFs,
         worktree: n.data.worktree,
+        dynamicGroup: kind === 'group' ? normalizeDynamicGroupState(n.data.dynamicGroup) : undefined,
         trigger: n.data.trigger,
         // Re-validated on the way OUT too — the shared file is only as good as its last writer.
         runConfig: normalizeRunConfig(n.data.runConfig),
@@ -1825,4 +1829,99 @@ export function applyMutationToFlow(nodes: CanvasNode[], m: CanvasMutation): Can
     }
   }
   return prev.parentId === incoming.parentId ? next : groupsFirst(next)
+}
+
+/** Apply only planned layout to live nodes. Runtime data and untouched identities stay local. */
+export function applyDynamicLayoutToFlow(nodes: CanvasNode[], planned: readonly CanvasNodeState[]): CanvasNode[] {
+  const current = new Map(nodes.map((n) => [n.id, n]))
+  let changed = planned.length !== nodes.length
+  const next = planned.map((state) => {
+    const n = current.get(state.id)
+    if (!n) throw new Error(`dynamic group plan names an unknown live node: ${state.id}`)
+    const width = n.measured?.width ?? n.width
+    const height = n.data.collapsed ? n.data.expandedHeight : n.measured?.height ?? n.height
+    const dimensionsChanged = width !== state.size.width || height !== state.size.height
+    const collapsedChanged = !!n.data.collapsed !== !!state.collapsed
+    const restoreChanged = JSON.stringify(n.data.premaxRect) !== JSON.stringify(state.premaxRect)
+    const metadataChanged = JSON.stringify(n.data.dynamicGroup) !== JSON.stringify(state.dynamicGroup)
+    if (!dimensionsChanged && !collapsedChanged && !restoreChanged && !metadataChanged && n.parentId === state.parentId &&
+      n.position.x === state.position.x && n.position.y === state.position.y) return n
+    changed = true
+    const visibleHeight = state.collapsed ? COLLAPSED_HEIGHT : state.size.height
+    const next: CanvasNode = { ...n, position: { ...state.position }, parentId: state.parentId,
+      extent: state.parentId ? 'parent' : undefined,
+      ...(dimensionsChanged || collapsedChanged ? { width: state.size.width, height: visibleHeight,
+        measured: undefined, style: { ...n.style, width: state.size.width, height: visibleHeight } } : {}),
+      ...(metadataChanged || restoreChanged || collapsedChanged || (dimensionsChanged && state.collapsed) ? {
+        data: { ...n.data, ...(metadataChanged ? { dynamicGroup: state.dynamicGroup } : {}),
+          ...(restoreChanged ? { premaxRect: state.premaxRect } : {}),
+          ...(collapsedChanged ? { collapsed: state.collapsed } : {}),
+          ...((collapsedChanged || dimensionsChanged) && state.collapsed ? { expandedHeight: state.size.height } : {}) }
+      } : {}) }
+    return next
+  })
+  if (!changed && next.every((n, i) => n === nodes[i])) return nodes
+  return groupsFirst(next)
+}
+
+export type DynamicFlowResult = { ok: true; nodes: CanvasNode[] } | { ok: false; error: string }
+
+/** Plan the entire append before installing anything. Each open sees all earlier allocations. */
+export function appendGroupedFlowNodes(nodes: CanvasNode[], additions: readonly CanvasNode[], groupId?: string, grid = 0, capturedFrames: readonly CanvasNode[] = []): DynamicFlowResult {
+  const live = [...nodes]
+  const ensureFrame = (key: string, seen = new Set<string>()): void => {
+    if (live.some((n) => n.id === key) || seen.has(key)) return
+    seen.add(key)
+    const frame = capturedFrames.find((n) => n.id === key && n.type === 'group')
+    if (!frame) return
+    if (frame.parentId) ensureFrame(frame.parentId, seen)
+    live.push(frame)
+  }
+  for (const n of additions) { const key = groupId ?? n.parentId; if (key) ensureFrame(key) }
+  let states = flowToNodeStates(live)
+  for (const original of additions) {
+    if (live.some((n) => n.id === original.id)) return { ok: false, error: 'group append: duplicate node id' }
+    const target = groupId ?? original.parentId
+    const node = target ? { ...original, parentId: target, extent: 'parent' as const } : original
+    const state = flowToNodeStates([node])[0]
+    live.push(node)
+    if (!target) { states.push(state); continue }
+    const result = state.kind === 'group'
+      ? reconcileDynamicGroups([...states, state], [state.id], { grid })
+      : placeDynamicGroupMember(states, target, state, undefined, { grid })
+    if (!result.ok) return result
+    states = result.nodes
+  }
+  return { ok: true, nodes: applyDynamicLayoutToFlow(live, states) }
+}
+
+/** Only gestures touching a dynamic frame or its subtree opt into dynamic reconciliation. */
+export function reconcileDynamicFlowNodes(nodes: CanvasNode[], changedIds: readonly string[], grid = 0): DynamicFlowResult {
+  const byId = new Map(nodes.map((n) => [n.id, n]))
+  const dynamicAncestors = new Set<string>()
+  for (const n of nodes) {
+    if (!n.data.dynamicGroup) continue
+    let cur: CanvasNode | undefined = n
+    const seen = new Set<string>()
+    while (cur && !seen.has(cur.id)) { seen.add(cur.id); dynamicAncestors.add(cur.id); cur = cur.parentId ? byId.get(cur.parentId) : undefined }
+  }
+  const relevant = changedIds.filter((key) => {
+    let n = byId.get(key)
+    const seen = new Set<string>()
+    while (n && !seen.has(n.id)) {
+      if (dynamicAncestors.has(n.id)) return true
+      seen.add(n.id); n = n.parentId ? byId.get(n.parentId) : undefined
+    }
+    return false
+  })
+  if (!relevant.length) return { ok: true, nodes }
+  const result = reconcileDynamicGroups(flowToNodeStates(nodes), relevant, { grid })
+  return result.ok ? { ok: true, nodes: applyDynamicLayoutToFlow(nodes, result.nodes) } : result
+}
+
+/** A frame cannot silently discard pending layout reservations through the ordinary UI either. */
+export function ungroupNodes(nodes: CanvasNode[], groupId: string): CanvasNode[] {
+  const frame = nodes.find((n) => n.id === groupId)
+  if (normalizeDynamicGroupState(frame?.data.dynamicGroup)?.reservations.some((r) => r.state === 'reserved')) return nodes
+  return ungroupGeometryNodes(nodes, groupId)
 }

@@ -1,3 +1,4 @@
+import { createServerWebPush } from './web-push'
 import { registerBrowserJoin } from './browser-join'
 import { registerDevelopmentPreviewService } from './development-preview-service'
 import { createServerRemoteTransfers } from './remote-transfers'
@@ -146,7 +147,7 @@ import type { CodexCliCaps } from '../shared/types'
 import { UNKNOWN_CODEX_CLI_CAPS } from '../shared/types'
 import { claudeConfigDirFor, registerClaudeAccountsSource } from '../core/claude-config-dir'
 import { presenceHub } from '../core/presence/hub'
-import { initCanvasSync, publishCanvasMutation, setReflectedListener } from '../core/canvas-sync'
+import { initCanvasSync, publishCanvasMutation, setReflectedListener, setReflectedBatchListener } from '../core/canvas-sync'
 import { createCanvasAuthority, type CanvasAuthority } from '../core/canvas-authority'
 import { wireAgentStatus } from './agent-status'
 import { initServerContextLink, deriveLinkMap } from './context-link'
@@ -1338,6 +1339,7 @@ export async function startServer(
     // Synchronous and in seq order (canvas-sync.ts): the authority's own published diff echoes back
     // through here while it is still publishing.
     setReflectedListener((id, m) => authority.onReflected(id, m))
+    setReflectedBatchListener((id, batch) => authority.onReflectedBatch(id, batch))
     const hostedStart = await hosted.start().catch((err: unknown) => {
       console.error('[hosted-team] start failed:', err)
       return null
@@ -1436,6 +1438,7 @@ export async function startServer(
         // Write what the canvas authority still owes, then detach it from the reflector and the store.
         await canvasAuthority?.stop()
         setReflectedListener(null)
+        setReflectedBatchListener(null)
         workspaceStore.setContentAuthority(null)
         await ptyManager.killAll()
         await remoteWorkspaceIO.flush()
@@ -1452,9 +1455,12 @@ export async function startServer(
     }
   }
 
+  const webPush = await createServerWebPush({ auth, workspace: workspaceStore, dataDir: config.dataDir,
+    publicOrigin: config.publicOrigin, headless: config.headless })
   const server = http.createServer(
     createHttpHandler({
       auth,
+      webPush,
       rendererDir: config.rendererDir,
       trustProxy: config.trustProxy,
       publicOrigin: config.publicOrigin,
@@ -1498,6 +1504,7 @@ export async function startServer(
       remoteMeters.dispose()
       remoteTranscripts.dispose()
       mediaReferences.dispose()
+      await webPush.close()
       ownerConfirmations.dispose()
       branchOwners.dispose()
       worktreeRecoveryOwners.dispose()
@@ -1535,6 +1542,7 @@ export async function startServer(
       // Write what the canvas authority still owes (see the headless close() above).
       await canvasAuthority?.stop()
       setReflectedListener(null)
+      setReflectedBatchListener(null)
       workspaceStore.setContentAuthority(null)
       await ptyManager.killAll()
       await remoteWorkspaceIO.flush()

@@ -74,7 +74,8 @@ export const REQUEST_ID_VERBS: ReadonlySet<string> = new Set([
   'show-video',
   'show-web',
   'open-browser',
-  'group'
+  'group',
+  'groups'
 ])
 
 export const REQUEST_ID_MAX_LENGTH = 64
@@ -259,6 +260,11 @@ export function requestIdGate(
   cliRequestId: string | undefined
 ): RequestIdGate {
   const { 'request-id': explicitId, ...rest } = args
+  // A group/reservation read is always fresh, including when a generic caller supplied an id.
+  if (verb === 'groups' && rest.get !== undefined) {
+    if (explicitId !== undefined && !isValidRequestId(explicitId)) return { kind: 'refuse', outcome: 'request-id-invalid' }
+    return { kind: 'pass', args: rest, explicit: explicitId !== undefined }
+  }
   if (explicitId !== undefined) {
     if (!isValidRequestId(explicitId)) return { kind: 'refuse', outcome: 'request-id-invalid' }
     if (!REQUEST_ID_VERBS.has(verb)) return { kind: 'refuse', outcome: 'request-id-unsupported' }

@@ -808,6 +808,18 @@ action. Relay viewers have no recovery administration.
 
 Server canvas control is disabled by default. Set `NODETERM_SERVER_CANVAS_CONTROL=1` (or pass
 `--canvas-control`) to install the Server-local shim and enable its `/control/*` implementation.
+
+Current builds support local `spawn-team` and `open-agent --prompt-file` (also `open-claude`).
+Prompt files must be absolute readable regular files on the server. Pass either `--prompt` or
+`--prompt-file`; a file supplies the whole brief, including any issue reference. Keep it available
+until launch. A file lost while a task waits retains the launch for explicit recovery after the
+file is restored. At launch the host reads a private snapshot, bounded to 120 KiB; failure to read
+or save it retains the task. The brief must be nonempty text without NUL bytes. Internal newlines
+are preserved; trailing linefeeds follow shell substitution semantics and are removed.
+`--dry-run` validates without opening nodes or starting sessions. Use authenticated
+`capabilities` against the connected server to check implementation support; updating a source
+checkout does not replace a running bundle. Older builds may reject these commands outright.
+
 Every enabled request requires verified node identity. **Enabling it lets an agent session run
 arbitrary commands on this host as the user the server runs as** — `open-terminal --cmd <command>`
 is executed in a PTY this process spawns, with that user's environment, files and credentials. The
@@ -1032,3 +1044,6 @@ only exercises the HTTP/auth surface). With `npm run server:dev` running:
     parent node; click it to watch its live transcript stream.
 13. **Context meter (Phase 3b)** — as a Claude session accumulates transcript, the node's
     **context-window meter** should fill.
+
+
+For opt-in browser notifications with the page closed, see [Web Push setup](web-push.md).

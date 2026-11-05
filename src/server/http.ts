@@ -62,6 +62,7 @@ const COMPRESS_CACHE_MAX_BYTES = 32 * 1024 * 1024
 
 export interface HttpHandlerOpts {
   auth: Auth
+  webPush?: import('./web-push').ServerWebPush
   rendererDir: string
   /**
    * Reverse-proxy SSO trust (issue #29): when set, a request whose TCP peer is inside the
@@ -518,6 +519,19 @@ export function createHttpHandler(
     // Refused BEFORE any rate-limit slot is taken, so a refused post costs the lockout nothing.
     if (method === 'POST' && pathname.startsWith('/auth/') && !sameOriginRequest(req.headers, publicOrigin)) {
       sendJson(res, 403, { error: 'cross_origin' })
+      return
+    }
+
+    if (pathname.startsWith('/auth/web-push/')) {
+      if (!opts.webPush) { sendJson(res, 503, { available: false, error: 'Web Push unavailable.' }); return }
+      await opts.webPush.handle(req, res, sessionTokenFromCookie(req.headers.cookie), publicOrigin)
+      return
+    }
+
+    // A minimal inert worker may update without login. No fetch handler or application data.
+    if (pathname === '/web-push-sw.js' && method === 'GET') {
+      res.setHeader('Cache-Control', 'no-store')
+      await serveStatic(req, res, rendererDir, pathname)
       return
     }
 

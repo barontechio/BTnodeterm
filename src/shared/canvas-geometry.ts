@@ -10,6 +10,9 @@ import {
 } from './node-sizing'
 
 export interface GeometryNodeData {
+  dynamicGroup?: import('./dynamic-groups').DynamicGroupState
+  cwd?: string
+  worktree?: import('./types').CanvasNodeState['worktree']
   collapsed?: boolean
   expandedHeight?: number
   premaxRect?: Rect

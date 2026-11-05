@@ -82,6 +82,20 @@ Desktop releases synthetic clients after the operation while preserving the pers
 SSH, Windows and non-headless agents keep their existing Desktop adapter. Missing selected
 accounts and prompt files hold the saved task instead of substituting credentials or a brief.
 
+Host `open-agent` and the `open-claude` alias share prompt-file launch semantics with teams:
+validate a readable regular absolute host path, compose it through the shared launch assembler,
+and retain `pendingLaunch.promptFile` so immediate, deferred and owner retry paths check it again.
+At actual delivery read through the bounded descriptor reader and stage a private launch-prompt
+copy before PTY attachment; the caller's original path may disappear during attachment. Only the
+delivered command names the copy: claims, pending commands and deduplication retain the original.
+The copied text is nonempty, NUL-free and at most 120 KiB. Read/write failures retain the task.
+Deferred file launches use the same echo-verified path. Keep copies for the normal launch-prompt
+TTL because submitted input does not prove the shell has consumed them. The shared POSIX assembler
+guards cat failure before invoking the agent and confines its prompt variable to a subshell.
+Reject simultaneous literal/file prompts. With `--issue`, the file is the complete brief and must
+name the issue itself. Open dry runs perform the same input/target checks without saving nodes
+or dispatching input; CLI availability and actual launch success still need runtime verification.
+
 `core/worktree-control.ts` is the local host create/unbind service. It shares the create/bind
 sequence with Desktop UI (`shared/worktree-create.ts`), uses Git's actual worktree list, and
 rechecks source/group/path claims under the workspace queue before binding. Preparation shares
@@ -186,6 +200,14 @@ machine-local. Desktop cross-project and SSH paths retain their existing adapter
 testing habits). This file is what you reach for when you need to know *why* a rule is the way it
 is, or you are changing a subsystem it describes. A change that other developers must know about
 belongs in BOTH (see Conventions).
+
+Dynamic agent groups share `shared/dynamic-groups.ts` across host and renderer. Declarative
+`groups --spec` and reservation-consuming opens use `CanvasContentWriter.editBatch` inside the
+canonical workspace FIFO, validating every affected identity before one bounded publication.
+Clients advertise support only while an atomic receiver is mounted; incompatible live recipients
+refuse before effects. Preserve host reservation facts on client saves and ingress, including the
+publication-to-disk interval. Restored facts grant no creator/launch authority. The schema, limits
+and indeterminate retry semantics live in `docs/dynamic-agent-groups.md`.
 
 **PR text (title, description, comments, review responses) follows the `pr-writing` skill**: what
 changed and why it matters, then how it was checked and what was not, then risks or follow-up when
@@ -11834,3 +11856,14 @@ whole-node coordination or durable recovery capability.
 ### Allowance claim destination
 
 `core/project-limit.ts` rejects redirects on the allowance claim. Consent and activation gates run before identification/network IO; a redirected response cannot move the identifying POST body to a second authority. Real 307/308 tests use two separate loopback listeners and assert zero destination requests, unchanged allowance persistence and the existing offline result. Token verification, usage limits, deadlines and timeouts remain unchanged.
+
+
+Browser closed-page Web Push is a separate opt-in Server cookie-owner service (`core/web-push.ts`,
+`server/web-push.ts`), not the mobile push protocol or a document/WS grant. Bind consent to the
+real durable auth session hash and project; logout/expiry revokes it, closing pages does not.
+Consume the mirror's actionable seam, reserve attempts durably before send, and revalidate the
+unique local node/session and consent across IO. Use only approved-provider, public-DNS-pinned,
+nonredirecting bounded egress; standard encryption/VAPID never makes a caller endpoint trusted.
+The minimal worker has no fetch/cache/offline handlers. Click receipts grant no authority and
+must pass authenticated host resolution plus the actual local Canvas membership/session guard.
+See `docs/web-push.md` for operator configuration, privacy, caps and the limits of CDP evidence.
