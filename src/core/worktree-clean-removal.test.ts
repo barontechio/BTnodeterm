@@ -84,21 +84,9 @@ async function fixture(realBackend?: 'plain' | 'tmux') {
     manager.setNodeExecutionAdmission((id, permit, operation) => dispatch.assertAllowed(id, permit, operation))
     const created = await manager.createHeadless({ persistKey: terminalId, ownerProjectId: project.id, cwd: checkout, shell: '/bin/bash', shellArgs: ['--noprofile', '--norc'], cols: 80, rows: 24, newOnly: true })
     if (realBackend === 'tmux') await vi.waitFor(async () => expect(await manager!.localTmuxExecution(terminalId)).toBeDefined())
-    // A JUST-FORKED PLAIN SHELL IS NOT A SETTLED MANAGED SESSION. The removal proof hashes a
-    // bounded /proc observation of the managed process and refuses ANY fd/child/cwd/birth change
-    // by design, so it has to be captured against a shell that finished its own startup. Measured
-    // on this fixture (8/8 rounds, Linux): the instant `createHeadless` resolves, bash still has
-    // only fds 0/1/2, and within ~50 ms it opens its saved terminal descriptor (fd 255). A proof
-    // captured inside that window is invalidated by the shell's own startup when
-    // `OwnerConfirmationBroker.consume()` re-runs `checkCurrent` -> `physical.revalidate()`, which
-    // swallows `worktree-removal-runtime-changed` into `false`, and `removeClean` then answers
-    // `{ ok: false, outcome: 'refused', error: 'worktree-removal-approval-changed' }` — the exact
-    // CI failure of run 42045205168 on this file's plain case. Whether the window is hit depends on
-    // host scheduling, which is why it reproduces on a loaded 2-core runner and not on a dev box.
-    // The tmux case is already settled by the wait above (measured stable 4/4 without this step),
-    // so only the plain case needs one: prove the shell reached its read loop the way the sibling
-    // real-PTY suites do (worktree-manual-resume/-profile). The marker stays OUTSIDE the checkout —
-    // an untracked file inside it would make Git's no-force removal refuse instead.
+    // Bash can still open its saved terminal descriptor after createHeadless resolves. Prove
+    // it reached its read loop before capturing the removal proof, which correctly rejects
+    // descriptor changes. Keep the marker outside the checkout so Git's clean check stays real.
     if (realBackend === 'plain') {
       const ready = path.join(root, 'plain-shell-ready')
       manager.write(null, created.sessionId, `printf ready > '${ready}'\r`)

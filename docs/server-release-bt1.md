@@ -24,6 +24,8 @@ Web Push is optional and off by default. An operator must configure a stable ded
 
 Historical source `3d1b932a` passed Linux 25,931 tests / 82 skips, Windows 1,107 / 31 skips, types, Desktop/Server builds and all five source PR checks. Its Linux run 42014009276 attempt 1 failed in plain worktree removal; the single rerun at the same SHA passed without a proved cause. Dynamic-groups source `29cefa4e` has a separate Linux failure in that test (run 42045205168: 26,090 passes, one failure, 82 skips); its other four checks passed. Neither result certifies this release composition. The release handoff must record fresh exact-head CI and any diagnosed correction, preserving failed-run history. HTTPS/provider enrollment and real-device notification acceptance remain operator work.
 
+This composition also corrects the real-PTY test fixture: it waits for an observable plain-shell readiness marker before capturing the strict removal proof. Local bounded probes demonstrated that Bash can otherwise open its saved terminal descriptor after PTY creation resolves, invalidating that proof. No product guard, test timeout or skip was changed. This demonstrates a local race mechanism consistent with the CI refusal; the original runner was not instrumented, so its exact changing observation is not claimed as measured. Fresh release-head CI remains mandatory.
+
 ## Canvas control and client compatibility
 
 Canvas control is opt-in. Start the extracted package with the operator's private data directory:

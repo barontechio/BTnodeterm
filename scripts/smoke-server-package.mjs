@@ -49,6 +49,7 @@ const runtimeErrors = []
 const result = { status: 'RUNNING', version: pkg.version, platform: process.platform,
   architecture: process.arch, node: process.version, nodeAbi: process.versions.modules,
   privateEnvironment: true, packageRoot: root,
+  privateRuntimeRoot: runtimeTmp,
   limits: 'Local extracted-package HTTP/WS and disposable Chromium UI smoke; no provider/OS/device push, production deployment, SSH target or Desktop certification.' }
 // This is an explicit total budget; individual phase deadlines are upper bounds
 // within it. Report its expiry directly rather than attributing it to a later phase.
@@ -220,7 +221,6 @@ try {
     try { execFileSync('tmux', ['-L', 'node-terminal', 'kill-session', '-t', '=nt-' + persistKey], { env, stdio: 'ignore', timeout: 5000 }) } catch {}
   }
   await fs.rm(tmuxTmp, { recursive: true, force: true })
-  await fs.rm(runtimeTmp, { recursive: true, force: true })
   clearTimeout(watchdog)
   result.serverExit = { code: server?.exitCode, signal: server?.signalCode }
   result.serverDiagnostics = serverDiagnostics
@@ -235,6 +235,10 @@ try {
     process.exitCode = 1
   }
   result.runtimeErrors = [...new Set(runtimeErrors)]
+  // Keep failed disposable state private and locatable for diagnosis; no raw logs or
+  // credentials are copied into the report. Successful runs need no retained runtime.
+  if (result.status === 'PASS') await fs.rm(runtimeTmp, { recursive: true, force: true })
+  result.privateRuntimeRetained = result.status !== 'PASS'
   await fs.writeFile(path.join(evidence, 'smoke.json'), JSON.stringify(result, null, 2) + '\n', { mode: 0o600 })
   console.log(JSON.stringify({ status: result.status, version: result.version, evidence, error: result.error }))
 }

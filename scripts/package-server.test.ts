@@ -181,6 +181,8 @@ describe('Server packaging boundaries', () => {
     expect(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).nodeTermUpdates).toBe('manual')
     expect(realExec(process.execPath, ['-p', 'require.resolve(process.argv[1])', payload], { encoding: 'utf8' }).trim()).toBe(path.join(payload, 'out/server/main.cjs'))
     expect(fs.existsSync(path.join(payload, 'docs/web-push.md'))).toBe(true)
+    expect(fs.existsSync(path.join(payload, 'docs/dynamic-agent-groups.md'))).toBe(true)
+    expect(fs.existsSync(path.join(payload, 'docs/SERVER.md'))).toBe(true)
     expect(packaged.build).toBeUndefined()
     expect(fs.readFileSync(path.join(payload, 'LICENSE'), 'utf8')).toBe('LICENSE')
     expect(fs.readFileSync(path.join(payload, 'node_modules/node-pty/LICENSE'), 'utf8')).toBe('dependency license unchanged')
