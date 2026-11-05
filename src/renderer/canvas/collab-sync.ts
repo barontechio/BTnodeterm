@@ -97,3 +97,28 @@ export function followGoverned(
     }
   }
 }
+
+/**
+ * Whether the scene a render shows is the scene the refs hold — by IDENTITY, array for array.
+ *
+ * The publish effect diffs the RENDERED `nodes` / `linkEdges` / `controlEdges` against a baseline
+ * the receive handlers adopted from the REFS, and three writers move a ref synchronously before its
+ * setter has rendered (a peer's op, a project load, a server change — see the edge ref comments in
+ * Canvas.tsx). A render that commits with one array ahead and another behind is TORN: diffed against
+ * that baseline, the edges the behind array has not rendered yet read as REMOVED. MEASURED
+ * 2026-11-05 with two Server Edition tabs on an `open-agent` burst (test/server/
+ * open-edge-loss.e2e.test.ts): the node upsert and its two edge upserts arrived as separate frames, a
+ * render committed with the new nodes and the old edge arrays (bridges 0 rendered / 1 in the ref,
+ * ropes 0 / 1), and the effect cast `edge-remove` for a rope and a bridge every canvas held; the
+ * other tab applied them and its next whole save deleted them from disk — the "node present, edges
+ * gone" canvas the field reported, one family or both depending on the race. The render-time mirror
+ * (`mirrorLatest`) makes a rendered array equal its ref whenever the state changed in the latest
+ * epoch, so a mismatch here means exactly "a ref moved ahead, its render has not landed" (or an
+ * out-of-epoch switch render) — and the matching render follows. Publish from that one.
+ */
+export function renderedSceneIsCurrent(
+  rendered: { nodes: readonly unknown[]; bridges: readonly unknown[]; ropes: readonly unknown[] },
+  latest: { nodes: readonly unknown[]; bridges: readonly unknown[]; ropes: readonly unknown[] }
+): boolean {
+  return rendered.nodes === latest.nodes && rendered.bridges === latest.bridges && rendered.ropes === latest.ropes
+}

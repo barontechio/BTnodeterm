@@ -7,7 +7,8 @@
 // EDGE_LOSS_OUT. Opt-in (EDGE_LOSS_E2E=1): it needs the Playwright Chromium binary and a built
 // out/renderer, and the agents it launches leave their own temp entries behind, so the ordinary
 // suite never runs it. Variants: EDGE_LOSS_TABS=2 (the reproduction), EDGE_LOSS_SWITCH=1,
-// EDGE_LOSS_GROUP=1, EDGE_LOSS_POST_GROUP=1, EDGE_LOSS_SERVER=deployed (+ EDGE_LOSS_DEPLOYED_MAIN).
+// EDGE_LOSS_GROUP=1, EDGE_LOSS_POST_GROUP=1, EDGE_LOSS_SERVER=deployed (+ EDGE_LOSS_DEPLOYED_MAIN,
+// EDGE_LOSS_RENDERER_DIR to serve this worktree's renderer from the deployed server).
 // Example: EDGE_LOSS_E2E=1 EDGE_LOSS_TABS=2 EDGE_LOSS_OUT=/tmp/x.json npx vitest run test/server/open-edge-loss.e2e.test.ts
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { once } from 'node:events'
@@ -155,7 +156,7 @@ describe.skipIf(process.env.EDGE_LOSS_E2E !== '1' || !fs.existsSync(CHROMIUM) ||
     if (DEPLOYED) {
       httpPort = await freePort()
       child = spawn(process.execPath, [DEPLOYED, '--data-dir', dataDir, '--port', String(httpPort), '--host', '127.0.0.1',
-        '--renderer-dir', path.join(path.dirname(DEPLOYED), '..', 'renderer'), '--canvas-control', '1'],
+        '--renderer-dir', process.env.EDGE_LOSS_RENDERER_DIR || path.join(path.dirname(DEPLOYED), '..', 'renderer'), '--canvas-control', '1'],
         { env: { ...process.env, NODETERM_SERVER_PASSWORD: 'fixture-password', NODETERM_TELEMETRY_DISABLED: '1', DO_NOT_TRACK: '1' }, stdio: ['ignore', 'pipe', 'pipe'] })
       child.stdout!.on('data', (d) => childLog.push(String(d))); child.stderr!.on('data', (d) => childLog.push(String(d)))
       for (let i = 0; i < 400; i++) { if (childLog.join('').includes('listening on')) break; await sleep(50) }

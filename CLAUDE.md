@@ -788,6 +788,21 @@ Persistence has two layers:
   `markUnmirrored` was the smaller diff and was rejected: it needs the same shadow state anyway,
   and it only closes the one failure path that happens to report back. The set is runtime-only,
   bounded by the ids deleted this run, and pruned for projects that leave the index.
+  **A render that lags the edge refs is never published, pruned or merged from** (2026-11-05,
+  measured with TWO Server Edition tabs on an `open-agent` burst; `test/server/open-edge-loss.e2e.test.ts`
+  is the opt-in reproduction). The factory's node upsert and its two edge upserts arrive as separate
+  frames; each handler moves its ref synchronously and adopts the refs as the publisher's baseline,
+  and a render then commits with the new `nodes` but the OLD edge arrays. Three places read that
+  torn render and each lost a persisted edge for good: the publish effect diffed it against the
+  adopted baseline and cast `edge-remove` for a rope and a bridge every canvas held
+  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render); the rope prune paired the
+  rendered node set with the LATEST ropes and pruned the new rope as dangling (both prunes now read
+  `nodesRef.current` inside their functional update); and `planServerChange` read an edge "in base,
+  not in the file" as removed even when the file lacked the edge's NODE too — the stale payload a
+  tab's whole save had just produced — while never removing the node (an edge is now dropped only
+  when the file still holds both endpoints). The other tab applied the casts and its next whole save
+  wrote the node without its edges. The three fixes are renderer-side, so the deployed v0.4.5
+  renderer has all three; its server also still overwrites on a tab save (no `mergeWorkspaceSave`).
   **Neither surface may name a device for an adopted node** (`adoptedClause`,
   `renderer/lib/externalChange.ts`): nothing at that layer knows the source — a stale own mirror
   and a phone append are indistinguishable there — so the copy names the project FILE and offers

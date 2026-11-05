@@ -929,8 +929,7 @@ import {
   NO_PROJECTS,
   provesPeer,
   shouldPublish,
-  type GovernedProjects
-} from './collab-sync'
+  type GovernedProjects, renderedSceneIsCurrent } from './collab-sync'
 import {
   applyCanvasMutation,
   applyMutationToFlow,
@@ -4636,6 +4635,18 @@ export function Canvas() {
   useEffect(() => {
     const pub = publisherRef.current
     if (!pub) return
+    // A render whose nodes or edges lag the refs is TORN: a peer's op, a load or a server change
+    // moved a ref synchronously and its setter has not rendered yet. Diffed against the baseline
+    // those handlers adopted from the refs, the edges this render has not shown yet read as
+    // REMOVED, and the effect cast `edge-remove` for a rope and a bridge every canvas held
+    // (measured 2026-11-05, two Server Edition tabs on an open-agent burst — collab-sync.ts says
+    // what it cost). The matching render follows; publish (or adopt) from that one.
+    if (
+      !renderedSceneIsCurrent(
+        { nodes, bridges: linkEdges, ropes: controlEdges },
+        { nodes: nodesRef.current, bridges: linkEdgesRef.current, ropes: controlEdgesRef.current }
+      )
+    ) return
     const states = publishableLater(nodes, { bridges: linkEdges, ropes: controlEdges })
     if (loadingRef.current) {
       pub.adopt(states)
@@ -5236,12 +5247,17 @@ export function Canvas() {
   )
 
   // Prune ropes whose endpoints were deleted (mirrors the context-link pruning below).
+  // The node set is read from `nodesRef` INSIDE the functional update, never from the rendered
+  // `nodes`: the update applies to the LATEST ropes, and a peer's edge op moves the ropes ref before
+  // its node upsert has rendered, so the rendered node set paired with them is an older one — it
+  // pruned a rope the server had just written as dangling, and the publisher cast that removal to
+  // every tab (measured 2026-11-05, two Server Edition tabs on an open-agent burst: rope lost, bridge
+  // kept). `nodesRef` is the node set the latest edges were built against.
   useEffect(() => {
     // Nothing to prune → don't build the id set. This effect runs on every drag FRAME (`nodes`
     // identity), and most canvases have no ropes at all.
     if (!controlEdgesRef.current.length) return
-    const ids = new Set(nodes.map((n) => n.id))
-    setControlEdges((es) => pruneRopes(es, ids))
+    setControlEdges((es) => pruneRopes(es, new Set(nodesRef.current.map((n) => n.id))))
   }, [nodes])
 
   // The RENDERED epoch, not the ref: in a project switch's window the ref already names the incoming
@@ -5255,10 +5271,14 @@ export function Canvas() {
   useMirrorIdentitySeed()
 
   // Pruning is separate from publication: node geometry changes must not postpone link writes.
+  // Same latest-against-latest pairing as the rope prune above: a functional update over the
+  // newest bridges, judged by `nodesRef`; a prune that changes nothing returns the same array.
   useEffect(() => {
-    const ids = new Set(nodes.map((n) => n.id))
-    const valid = linkEdges.filter((e) => ids.has(e.source) && ids.has(e.target))
-    if (valid.length !== linkEdges.length) setLinkEdges(valid)
+    setLinkEdges((es) => {
+      const ids = new Set(nodesRef.current.map((n) => n.id))
+      const valid = es.filter((e) => ids.has(e.source) && ids.has(e.target))
+      return valid.length === es.length ? es : valid
+    })
   }, [linkEdges, nodes, setLinkEdges])
 
   // The app-level unread count (macOS Dock badge, Windows taskbar overlay, tray), across all
