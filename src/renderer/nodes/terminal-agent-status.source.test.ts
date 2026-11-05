@@ -137,7 +137,7 @@ describe('Canvas focus paths', () => {
   it("Canvas's two focus blocks clear unread through agentStatusForProject", () => {
     // The cross-project focus a project landing finishes: its owner is `project.id` by construction
     // (flowLanding runs it only once React Flow's store holds that project).
-    const landing = between(canvas, 'const pending = pendingFocusRef.current', '}, 0)')
+    const landing = between(canvas, 'const request = pendingFocusRef.current', '}, 0)')
     expect(landing).toContain('agentStatusForProject(project.id).store')
     expect(landing).not.toMatch(/useAgentStatus\.getState\(\)\.(setActive|clearUnread)/)
 
