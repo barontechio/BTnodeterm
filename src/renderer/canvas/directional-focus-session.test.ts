@@ -7,7 +7,7 @@ import { planDirectionalMove, isFocusTarget } from '../lib/directionalFocus'
 
 // Execute the shipped focus callback against two real status stores containing the same node id.
 // The hidden local copy must keep its unread state and must never acknowledge a relay focus.
-const canvas = readFileSync(resolve(__dirname, 'Canvas.tsx'), 'utf8')
+const canvas = readFileSync(resolve(__dirname, 'Canvas.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const start = canvas.indexOf('const moveNodeFocus = useCallback(')
 const end = canvas.indexOf('\n  /**', start)
 const callback = canvas.slice(start, end).replace('const moveNodeFocus =', 'return')

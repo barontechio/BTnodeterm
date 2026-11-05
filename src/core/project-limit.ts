@@ -308,6 +308,7 @@ async function runClaim(): Promise<ClaimResult> {
   try {
     const res = await fetch(`${API_BASE}/v1/limits/claim`, {
       method: 'POST',
+      redirect: 'error',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         deviceId,

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import crypto from 'node:crypto'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import path from 'path'
 import { IPC } from '../shared/ipc'
@@ -34,6 +36,7 @@ const DEADLINE = PROJECT_LIMIT_DEADLINE_MS
 const BEFORE = DEADLINE - 30 * DAY
 const AFTER = DEADLINE + 2 * DAY
 const API = 'http://127.0.0.1:1'
+const realFetch = globalThis.fetch
 const DEVICE = '3f0c6a52-9d7e-4b8a-a1c4-5e2f7d9b0c18'
 const MACHINE = machineHashOf('0123456789abcdef0123456789abcdef')
 const OTHER_MACHINE = machineHashOf('fedcba9876543210fedcba9876543210')
@@ -419,6 +422,43 @@ describe('project limit: on or off', () => {
 })
 
 describe('project limit: claim', () => {
+  it.each([307, 308])('refuses a %s redirect without sending identity to another authority', async (status) => {
+    const listen = (server: Server): Promise<string> => new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${(server.address() as AddressInfo).port}`))
+    })
+    let redirectedRequests = 0
+    let claimRequests = 0
+    const destination = createServer((_req, res) => { redirectedRequests++; res.end('{}') })
+    const destinationUrl = await listen(destination)
+    const source = createServer((req, res) => {
+      if (req.url === '/v1/limits/claim') {
+        claimRequests++
+        res.writeHead(status, { location: `${destinationUrl}/claim` }); res.end()
+      } else {
+        res.setHeader('content-type', 'application/json'); res.end('{}')
+      }
+    })
+    try {
+      process.env.NODETERM_API_BASE = await listen(source)
+      vi.stubGlobal('fetch', realFetch)
+      vi.setSystemTime(AFTER)
+      const { handle } = await boot({ file: { firstLaunchOpenCount: 3 } })
+      expect(handle.state().active).toBe(true)
+      const before = handle.state()
+      const saved = existsSync(limitFile()) ? readFileSync(limitFile(), 'utf8') : undefined
+      expect(await handle.claim()).toEqual({ ok: false, error: 'offline', state: before })
+      expect(claimRequests).toBe(1)
+      expect(redirectedRequests).toBe(0)
+      expect(existsSync(limitFile()) ? readFileSync(limitFile(), 'utf8') : undefined).toBe(saved)
+    } finally {
+      for (const server of [source, destination]) {
+        server.closeAllConnections()
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
+    }
+  })
+
   it('claim stores token, free and epoch and broadcasts', async () => {
     const { handle } = await boot({ file: { latched: true, epoch: 2 } })
     const token = allowanceToken({ allowance: 9, epoch: 2 })

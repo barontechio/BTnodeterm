@@ -11819,3 +11819,7 @@ whole-node coordination or durable recovery capability.
 ### Local transcript tail file identity
 
 `readCappedTail` and `readSmallTail` open before measuring and use `FileHandle.stat` plus reads on that same handle. A rename or pathname replacement must not switch the bytes after the size check. Both branches close in `finally`; short reads decode only `bytesRead`, so concurrent truncation cannot create NUL padding. The real-file replacement/truncation tests are in `core/transcript-reader.tail-identity.test.ts`. This pins the opened inode, without adding a no-symlink policy or claiming a stable snapshot of a concurrently written file.
+
+### Allowance claim destination
+
+`core/project-limit.ts` rejects redirects on the allowance claim. Consent and activation gates run before identification/network IO; a redirected response cannot move the identifying POST body to a second authority. Real 307/308 tests use two separate loopback listeners and assert zero destination requests, unchanged allowance persistence and the existing offline result. Token verification, usage limits, deadlines and timeouts remain unchanged.

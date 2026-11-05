@@ -2220,3 +2220,5 @@ recycle failure, including bulk reports; a failed copy may be partial. Renderer 
 is not verified conversation resumption, and a requested canvas update is not a durable host receipt.
 Keep existing eligibility, authority and effect ordering; these notices grant no new restart,
 whole-node coordination or durable recovery capability.
+
+Project allowance claims send device and machine identity only to the configured API. Keep `redirect: 'error'` on `/v1/limits/claim`: a 307/308 must not forward the POST to another authority. Failed redirects use the existing offline result and must not persist an allowance.
