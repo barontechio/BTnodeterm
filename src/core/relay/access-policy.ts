@@ -21,6 +21,7 @@
 // theatre.
 import path from 'node:path'
 import { IPC } from '../../shared/ipc'
+import { isCanvasMutationBatch } from '../../shared/canvas-batch'
 import { decodePtyDataSessionId } from '../../shared/rpc'
 import type { TeamRole } from './team-store'
 import type { AccessDecision } from './relay-host'
@@ -269,6 +270,8 @@ export const VIEW: Readonly<Record<string, Check>> = Object.freeze({
   [IPC.agentSubagentSnapshot]: pass,
   // Same: the host's per-node agent states for a late joiner, trimmed to the shared nodes.
   [IPC.agentStatusSnapshot]: pass,
+  // Advertises a mounted atomic receiver; grants no write or publication capability.
+  [IPC.canvasBatchSubscribe]: (a) => a.length === 1 && typeof a[0] === 'boolean' ? OK : no('Invalid canvas subscription.'),
   [IPC.presenceHello]: pass,
   [IPC.presenceCursor]: pass,
   [IPC.presenceFocus]: pass,
@@ -505,6 +508,7 @@ export const EDITOR_ONLY: ReadonlySet<string> = new Set<string>([
   // Server→client events (see the doc comment): what a non-editor receives is VIEW_EVENTS.
   IPC.ptyInputBlocked,
   IPC.canvasMutationRejected,
+  IPC.canvasMutationBatch,
   IPC.workspaceMigrated,
   IPC.workspaceCorruptRecovered,
   IPC.workspaceExternalChange,
@@ -572,6 +576,7 @@ export const VIEW_EVENTS: Readonly<Record<string, EventCheck>> = Object.freeze({
   // Addressed to a typing client; the only payload is the node whose input was refused.
   [IPC.ptyInputBlocked]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.canvasMut]: (a, ctx) => sharedProject(a[0], ctx),
+  [IPC.canvasMutationBatch]: (a, ctx) => sharedProject(a[0], ctx) && isCanvasMutationBatch(a[1]),
   [IPC.canvasMutationRejected]: (a, ctx) => sharedProject(a[0], ctx),
   [IPC.agentStatus]: (a, ctx) => sharedNode(field(a[0], 'nodeId'), ctx),
   [IPC.agentSubagentActivity]: (a, ctx, owners) => {

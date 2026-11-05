@@ -100,6 +100,24 @@ describe('host team execution without a renderer', () => {
     expect(pty.sends).toEqual([]); expect(pty.creates).toHaveLength(count)
   })
 
+  it('rejects invalid file briefs across the whole team before saving or launching a valid first member', async () => {
+    const file = path.join(dir, 'brief.md')
+    const before = await store.load()
+    for (const brief of ['', 'x'.repeat(120 * 1024 + 1), 'task\0hidden']) {
+      fs.writeFileSync(file, brief)
+      for (const role of [{ agent: 'codex', promptFile: file }, { agent: 'codex', prompt: brief }]) {
+        const team = JSON.stringify([{ agent: 'claude', prompt: 'valid first member' }, role])
+        const attempts: Record<string, string>[] = [{ team, 'dry-run': '' }, { team }]
+        for (const args of attempts) {
+          expect(await factory.orchestrate('spawn-team', 'src', args, true)).toMatchObject({ ok: false })
+        }
+      }
+      expect(await store.load()).toEqual(before)
+      expect(pty.creates).toEqual([])
+      expect(pty.sends).toEqual([])
+    }
+  })
+
   it('spills long briefs into owner-only files and holds a missing brief for explicit recovery', async () => {
     const reply = await factory.orchestrate('verify', 'src', { node: 'src', lenses: 'security', synthesis: 'off', focus: 'detail '.repeat(250) }, true)
     expect(reply.ok).toBe(true)

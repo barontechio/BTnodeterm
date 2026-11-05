@@ -122,9 +122,9 @@ describe('the off-canvas dispatch block (source pins)', () => {
     // React Flow holds the ACTIVE project's nodes. `setNodes` / `setControlEdges` / `markDirty`
     // would put the node in front of the wrong person and dirty the wrong file.
     const body = addAndConnectBody()
-    const off = code(body.slice(body.indexOf('if (offCanvas) {'), body.indexOf('setNodes((ns) =>')))
+    const off = code(body.slice(body.indexOf('if (offCanvas) {'), body.indexOf('const placed = appendUiNodes(')))
     expect(off.length).toBeGreaterThan(0)
-    expect(off).toContain('applyOwnNodeMutation(offCanvas.project.id, {')
+    expect(off).toContain('applyOwnNodeMutations(offCanvas.project.id,')
     expect(off).toContain('appendCanvasLinks(offCanvas.project.id, {')
     expect(off).toContain('writeDisk()')
     expect(off).not.toContain('setNodes(')
@@ -142,11 +142,11 @@ describe('the off-canvas dispatch block (source pins)', () => {
     const off = code(
       addAndConnectBody().slice(
         addAndConnectBody().indexOf('if (offCanvas) {'),
-        addAndConnectBody().indexOf('setNodes((ns) =>')
+        addAndConnectBody().indexOf('const placed = appendUiNodes(')
       )
     )
     expect(off).toContain(
-      'ropes: [ropeEdge(`ctrl-${sourceNodeId}-${placed.id}`, sourceNodeId, placed.id)]'
+      'ropes: [ropeEdge(`ctrl-${sourceNodeId}-${authored.id}`, sourceNodeId, authored.id)]'
     )
     expect(off).not.toContain('bridges:')
   })

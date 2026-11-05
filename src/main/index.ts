@@ -148,6 +148,7 @@ import {
 import { readProjectLaunchInfo, registerProjectLaunchInfoHandlers } from '../core/project-launch-info-handlers'
 import { HeadlessNodeFactory } from '../core/headless-node-factory'
 import { useHostTeamPlanner } from '../core/team-control-route'
+import { hostGroupedOpenRoute } from '../core/group-control-route'
 import { registerHostLaunchIpc } from '../core/host-launch-ipc'
 import { registerConversationBranchIpc } from '../core/conversation-branch-ipc'
 import { ConfirmedNodeBranch } from '../core/confirmed-node-branch'
@@ -4619,6 +4620,24 @@ app.whenReady().then(async () => {
     // stamps the new work with it, so a turn the typed text starts is always later.
     const requestAt = Date.now()
     if (verb === 'capabilities') return controlCapabilitiesReply(readControlCapabilities(), args, verified)
+    // Visual batches never travel the user's project/camera or fall back after an uncertain reply.
+    if (verb === 'groups' && coreTeams) return coreTeams.groups(nodeId, args, verified)
+    if (coreTeams && ['ungroup', 'move', 'resize', 'place', 'arrange', 'align'].includes(verb)) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const holders = workspace.projects.filter((project) => project.nodes.some((node) => node.id === nodeId))
+      if (holders.length === 1 && !holders[0].ssh && holders[0].nodes.some((node) => node.dynamicGroup !== undefined)) {
+        return coreTeams.geometry(verb as import('../shared/geometry-command').GeometryControlVerb, nodeId, args)
+      }
+    }
+    if (coreTeams && (args.group || args.reservation !== undefined) && ['open-terminal', 'open-agent', 'open-claude'].includes(verb)) {
+      const workspace = await workspaceStore.load({ sideline: false })
+      const route = hostGroupedOpenRoute({ verb, args, workspace, sourceNodeId: nodeId, hostPlatform: process.platform })
+      if (route === 'unsupported-shell') return { ok: false, error: 'open-reservation-unsupported-shell: host slot launches require a local POSIX headless backend' }
+      if (route === 'host') {
+        return verb === 'open-terminal' ? coreTeams.openTerminal(nodeId, args, verified) :
+          coreTeams.openAgent(nodeId, verb === 'open-claude' ? { ...args, agent: 'claude' } : args, verified)
+      }
+    }
     if (verb === 'branch') return nodeBranches.run(nodeId, args, verified)
     // `--dry-run` (issue #532) is honoured by the spawn verbs only, and this gate runs FIRST —
     // before the browser intercept, the open-project gates and the renderer forward — because a

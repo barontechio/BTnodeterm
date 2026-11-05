@@ -200,6 +200,7 @@ describe('where the verbs sit in the routing tables', () => {
     // `issues` / `prs` resolve the project to read from the CALLER's node, so a forgeable caller
     // could read any project's GitHub lane (bound sessions, dispatch state); new verbs.
     expect([...requiresVerified].sort()).toEqual([
+      'groups',
       'issues',
       'notify',
       'open-project',

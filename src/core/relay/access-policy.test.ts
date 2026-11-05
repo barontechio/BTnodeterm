@@ -27,6 +27,19 @@ const ctx = (role: AccessContext['role']): AccessContext => ({
 })
 
 describe('access policy', () => {
+  it('lets viewers advertise atomic reception without granting canvas writes and scopes complete batches', () => {
+    const viewer = ctx('viewer')
+    for (const enabled of [true, false]) {
+      expect(decideAccess('cast', IPC.canvasBatchSubscribe, [enabled], viewer).allow).toBe(true)
+    }
+    expect(decideAccess('cast', IPC.canvasBatchSubscribe, ['true'], viewer).allow).toBe(false)
+    const batch = { mutations: [{ op: 'remove', id: 'n1' }] }
+    const event = (project: string, value: unknown) => JSON.stringify({ t: 'ev', channel: IPC.canvasMutationBatch, args: [project, value] })
+    expect(filterOutboundEvent(event('P', batch), viewer)).toBe(true)
+    expect(filterOutboundEvent(event('Q', batch), viewer)).toBe(false)
+    expect(filterOutboundEvent(event('P', { mutations: [...batch.mutations, { op: 'bogus' }] }), viewer)).toBe(false)
+    expect(decideAccess('cast', IPC.canvasMutationBatch, ['P', batch], viewer).allow).toBe(false)
+  })
   it('editors and owners pass everything untouched', () => {
     expect(decideAccess('req', IPC.fsWrite, ['/x', 'y'], ctx('editor'))).toEqual({ allow: true })
     expect(decideAccess('req', IPC.ptyCreate, [{ persistKey: 'n2' }], ctx('owner'))).toEqual({ allow: true })

@@ -350,17 +350,23 @@ describe('reopen-last-closed records and dispatches through the shared history s
     expect(CANVAS_SRC).toContain("'app.reopenLastClosed': reopenLastClosedCommand")
   })
 
-  it('never live-inserts into a non-active project — routes through applyOwnNodeMutation instead', () => {
+  it('never live-inserts into a non-active project — commits its detached allocation through the stored writer', () => {
     // The bug this pins: a synchronous setNodes() right after switchProject()/reopenProject()
     // races the active-project load effect and silently loses the recreated nodes.
-    expect(CANVAS_SRC).toContain('.applyOwnNodeMutation(plan.projectId, {')
+    const start = CANVAS_SRC.indexOf("case 'insertStored': {")
+    const body = CANVAS_SRC.slice(start, CANVAS_SRC.indexOf('\n          return true', start))
+    expect(body).toContain('store.applyOwnNodeMutations(plan.projectId, next.filter(')
+    expect(body).toContain(".map((node) => ({ op: 'upsert', node })))")
+    expect(body).not.toContain('setNodes(')
   })
 
   it('arms a cold-open command before writing a restored node into a non-active project', () => {
     // The bug this pins: flowToNodeStates alone drops initialCommand, so an agent node restored
     // into a project that isn't on screen would never launch its command on the eventual cold
     // open — armForColdOpen is what carries it through serialization.
-    expect(CANVAS_SRC).toContain('node: flowToNodeStates([armForColdOpen(node)])[0]')
+    const start = CANVAS_SRC.indexOf("case 'insertStored': {")
+    const body = CANVAS_SRC.slice(start, CANVAS_SRC.indexOf('\n          return true', start))
+    expect(body).toMatch(/const state = flowToNodeStates\(\[armForColdOpen\(node\)\]\)\[0\][\s\S]*placeDynamicGroupMember\(next, node.parentId, state[\s\S]*store.applyOwnNodeMutations\(plan.projectId/)
   })
 
   it('commits the live canvas to the store before every reopenProject call — never a bare switch', () => {

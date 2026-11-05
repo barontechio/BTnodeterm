@@ -1,4 +1,6 @@
 import { captureManualProfileFile } from './worktree-manual-shell'
+import { preserveHostGroupMetadata, assertManagedClientGeometry } from './dynamic-groups-metadata'
+import { setDynamicGroupMetadataResolver, setCanvasStructureResolver } from './canvas-sync'
 import type { CanvasExecutionHold } from './canvas-execution-reservations'
 import type { SshConnection } from '../shared/ssh'
 import { promises as fs } from 'fs'
@@ -439,6 +441,9 @@ export class WorkspaceStore {
   }
 
   registerIpc(): void {
+    // Restored reservations stay host-owned even when agent canvas control is disabled.
+    setDynamicGroupMetadataResolver((projectId, nodeId) => this.dynamicGroupForClient(projectId, nodeId))
+    setCanvasStructureResolver((projectId) => this.canvasStructureForClient(projectId))
     platform().handleWithSender(IPC.workspaceLoad, async (senderId: number) => {
       const run = this.saveChain.then(async () => {
         const workspace = await this.load()
@@ -1279,6 +1284,9 @@ export class WorkspaceStore {
    *  used to interleave their file writes and land their indexes out of call order — the "both
    *  projects went blank after tab switching" wipe. */
   private saveChain: Promise<unknown> = Promise.resolve()
+  /** Cosmetic group facts inside the active FIFO publication/save window. Client mutations may
+   * arrive while disk IO awaits; they must not roll back a just-published slot consumption. */
+  private groupFactsInFlight: Workspace | undefined
   /** Last snapshot each owner loaded or submitted. Not shared and discarded on disconnect. */
   private clientBaselines = new Map<number, { workspace: Workspace }>()
 
@@ -1368,10 +1376,14 @@ export class WorkspaceStore {
       }
     }
     this.executionAdmission?.assertWorkspace(next)
-    beforeSave?.(current, next)
-    if (!intended && sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
-    await this.saveNow(next, opts.localOnly === true, changed, intended)
-    return { saved: true, workspace: next }
+    const previousGroupFacts = this.groupFactsInFlight
+    this.groupFactsInFlight = next
+    try {
+      beforeSave?.(current, next)
+      if (!intended && sameWorkspaceSave(current, next)) return { saved: false, workspace: current }
+      await this.saveNow(next, opts.localOnly === true, changed, intended)
+      return { saved: true, workspace: next }
+    } finally { this.groupFactsInFlight = previousGroupFacts }
   }
 
   /**
@@ -1414,8 +1426,9 @@ export class WorkspaceStore {
       if (ownerLoad) {
         let merged: Workspace | undefined
         await this.updateWorkspaceNow((current) => {
-          merged = mergeWorkspaceSave(ownerLoad.workspace, submitted, current,
+          merged = mergeWorkspaceSave(ownerLoad.workspace, preserveHostGroupMetadata(submitted, current), current,
             (id) => this.contentAuthority?.governs?.(id) === true)
+          assertManagedClientGeometry(merged, current)
           return merged
         }, undefined, { localOnly })
         // Disconnect and a newer load cannot have their baseline recreated by a late save.
@@ -1423,7 +1436,12 @@ export class WorkspaceStore {
           ownerLoad.workspace = merged ? baselineAfterSave(ownerLoad.workspace, submitted, merged) : submitted
         }
       } else {
-        await this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(submitted) : submitted, localOnly)
+        const current = await this.load({ sideline: false })
+        if (current.projects.some((project) => project.nodes.some((node) => node.dynamicGroup !== undefined))) {
+          throw new Error('workspace-save-group-baseline-required: load the current workspace before saving managed groups')
+        }
+        const protectedSnapshot = preserveHostGroupMetadata(submitted, current)
+        await this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(protectedSnapshot) : protectedSnapshot, localOnly)
       }
     })
     this.saveChain = run.catch(() => {})
@@ -2599,6 +2617,26 @@ export class WorkspaceStore {
     const hit = this.findNode(nodeId)
     if (!entry || !hit) return undefined
     return this.hostNodeSnapshots(entry, [hit.node], hit.root, hit.ssh)[0]
+  }
+
+  /** Host-owned visual facts only; this accessor grants no execution or node ownership. */
+  dynamicGroupForClient(projectId: string, nodeId: string): CanvasNodeState['dynamicGroup'] {
+    if (this.groupFactsInFlight) {
+      const holders = this.groupFactsInFlight.projects.filter((project) => project.nodes.some((node) => node.id === nodeId))
+      return holders.length === 1 && holders[0].id === projectId
+        ? structuredClone(holders[0].nodes.find((node) => node.id === nodeId)!.dynamicGroup) : undefined
+    }
+    const holders = this.projectIdsForNode(nodeId)
+    return holders.length === 1 && holders[0] === projectId ? this.getNodeForHostAction(nodeId)?.dynamicGroup : undefined
+  }
+
+  /** Fresh scene during a FIFO host publication; no ownership or launch claims derive from it. */
+  canvasStructureForClient(projectId: string): CanvasNodeState[] | undefined {
+    if (this.groupFactsInFlight) {
+      const projects = this.groupFactsInFlight.projects.filter((project) => project.id === projectId)
+      return projects.length === 1 ? structuredClone(projects[0].nodes) : undefined
+    }
+    return this.getProjectNodesForHostAction(projectId)
   }
 
   /** Bulk equivalent for a whole-project conditional check. One cached parse/overlay rather than
