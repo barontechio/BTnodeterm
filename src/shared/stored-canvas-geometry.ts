@@ -34,7 +34,8 @@ export function storedGeometryNodes(nodes: readonly CanvasNodeState[]): Geometry
     id: node.id, type: node.kind, position: { ...node.position }, parentId: node.parentId,
     width: node.size.width, height: node.collapsed ? COLLAPSED_HEIGHT : node.size.height,
     data: { collapsed: node.collapsed, expandedHeight: node.size.height,
-      premaxRect: node.premaxRect && { ...node.premaxRect }, openedBy: node.openedBy }
+      premaxRect: node.premaxRect && { ...node.premaxRect }, openedBy: node.openedBy,
+      dynamicGroup: node.dynamicGroup && structuredClone(node.dynamicGroup), cwd: node.cwd, worktree: node.worktree }
   }))
 }
 
@@ -53,6 +54,8 @@ export function applyStoredGeometry(original: readonly CanvasNodeState[], planne
     else delete next.parentId
     if (geometry.data.premaxRect) next.premaxRect = { ...geometry.data.premaxRect }
     else delete next.premaxRect
+    if (geometry.data.dynamicGroup) next.dynamicGroup = structuredClone(geometry.data.dynamicGroup)
+    else delete next.dynamicGroup
     return next
   })
 }

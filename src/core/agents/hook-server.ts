@@ -294,6 +294,7 @@ export interface HookEventMeta {
  * of every hatch and is the test that fails if either half of this comment stops being true.
  */
 export const requiresVerified: ReadonlySet<string> = new Set([
+  'groups',
   'send',
   'reply',
   'notify',

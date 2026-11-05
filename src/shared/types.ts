@@ -569,6 +569,8 @@ export interface CanvasNodeState {
   icon?: import('./node-icon').NodeIcon
   /** Parent group node id, if this node belongs to a group frame. */
   parentId?: string
+  /** Agent-managed visual layout and durable slot facts. Never runtime or ownership authority. */
+  dynamicGroup?: import('./dynamic-groups').DynamicGroupState
   // terminal-only
   /** This terminal's own font size (issue #915), set with ⌘+ / ⌘− when
    *  `settings.terminalFontZoomKeys` is on; absent = follow the global `fontSize`. Hand-editable,
@@ -807,6 +809,11 @@ export type CanvasMutation =
       origin?: 'core'
     }
   | (KanbanOp & MutationStamp)
+
+/** Host-only atomic publication. Flat children retain the ordinary canvas total-order stamps. */
+export interface CanvasMutationBatch {
+  mutations: CanvasMutation[]
+}
 
 /** The node and edge half of `CanvasMutation` — all a canvas SCENE diff (`diffToMutations`) ever
  *  produces. Their order keys are project-independent (node and edge ids are globally unique), so
@@ -3586,6 +3593,8 @@ export interface CanvasApi {
   mutate(projectId: string, mutation: CanvasMutation): void
   /** Fires with ordered peer/core mutations and our acknowledgements. Returns unsubscribe. */
   onMutation(listener: (projectId: string, mutation: CanvasMutation) => void): () => void
+  /** Atomic host edit. Subscribing advertises support until the last listener unsubscribes. */
+  onMutationBatch?(listener: (projectId: string, batch: CanvasMutationBatch) => void): () => void
   /** Addressed host refusal; a canonical correction may arrive on onMutation. Older hosts omit it. */
   onMutationRejected?(listener: (projectId: string, message: string) => void): () => void
 }

@@ -69,6 +69,7 @@ export async function serverEditionControlHandler({ verb, args = {}, verified = 
 }
 
 export interface ServerEditionControlActions {
+  groups(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   write?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   branch?(sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
   worktree(verb: 'open-worktree' | 'close-worktree', sourceNodeId: string, args: Record<string, string>, verified: boolean): Promise<ServerControlReply>
@@ -172,6 +173,8 @@ export function createServerEditionControlHandler(actions: ServerEditionControlA
     }
 
     switch (verb) {
+      case 'groups':
+        return actions.groups(nodeId, command.args, verified)
       case 'branch':
         return actions.branch ? actions.branch(nodeId, command.args, verified) : {
           ok: false, error: CONTROL_UNSUPPORTED_ERROR, message: 'branch-unavailable: no owner confirmation adapter is installed. Do not retry.'

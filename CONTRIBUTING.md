@@ -120,6 +120,12 @@ projections between Desktop and Server. Host commands authorize every affected n
 serialized `CanvasContentWriter.edit` publishes mutations and persists them. Board reads preserve
 lazy defaults; assignment changes never launch or type into a session.
 
+Agent-managed groups use `shared/dynamic-groups.ts` for declarative layout and reservations, and
+`CanvasContentWriter.editBatch` for one validated host publication in the workspace FIFO. Keep the
+host and UI on the same allocator. Reservation facts are host-owned visual metadata; client saves
+must preserve current facts, and restored metadata grants no creator or launch authority. See
+`docs/dynamic-agent-groups.md` for schema, retry semantics and compatibility limits.
+
 Host operations that need stable canvas execution metadata can use `CanvasExecutionReservations`
 with a real node batch claim. Acquire the metadata reservation inside the workspace writer FIFO,
 retain it until dispatched work settles, and release explicitly. Store admission runs before Core
@@ -318,6 +324,16 @@ Canvas-command implementation support is described by `shared/control-capabiliti
 available through the authenticated `capabilities` command and `control:capabilities` owner RPC.
 Keep the manifest and handler in the same change. Support is not authorization: identity,
 project scope, capability consent and backend checks still run when the command executes.
+
+Host `open-agent` (including `open-claude`) accepts `--prompt-file` for an absolute, readable
+regular file on that host. Pass either `--prompt` or `--prompt-file`. Preserve the file until
+launch, including dependency waits: a missing file retains the task for explicit Run now recovery.
+Host launch snapshots are private and bounded to 120 KiB; an empty, oversized or unreadable brief
+does not launch an agent. Snapshot failures retain the original task. Shell substitution removes
+trailing linefeeds while preserving internal newlines.
+`--dry-run` validates opens without saving nodes or starting sessions. It does not prove a CLI
+will start successfully. Check the connected runtime's capabilities as well as the source tree;
+an older deployed bundle can still reject a command implemented in a newer checkout.
 
 Server canvas commands persist through `core/canvas-content-writer.ts`: edit a private snapshot,
 publish its content mutations before an authority-overlay save, and re-read the persisted project

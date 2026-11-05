@@ -86,9 +86,9 @@ describe('the cold-open dispatch block (source pins)', () => {
     expect(body).not.toContain('addAndConnect')
   })
 
-  it('writes through the store: applyOwnNodeMutation for nodes, appendCanvasLinks for edges', () => {
+  it('writes through the store: one applyOwnNodeMutations batch for nodes, appendCanvasLinks for edges', () => {
     const body = coldOpenBody()
-    expect(body).toContain('applyOwnNodeMutation(owner.id, {')
+    expect(body).toContain('applyOwnNodeMutations(owner.id,')
     expect(body).toContain('appendCanvasLinks(owner.id,')
     expect(body).toContain('writeDisk()')
   })

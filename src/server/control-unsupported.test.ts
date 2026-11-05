@@ -220,6 +220,7 @@ describe('the enabled Server Edition handler parses and dispatches the v1 surfac
     })
   })
   const actions = () => ({
+    groups: vi.fn(async () => ({ ok: true as const })),
     orchestrate: vi.fn(async () => ({ ok: true as const })),
     worktree: vi.fn(async () => ({ ok: true as const })),
     reportIssue: vi.fn(async () => ({ ok: true as const })),
@@ -601,6 +602,7 @@ describe('the enabled Server Edition handler, behind the request ledger', () => 
     const openAgent = vi.fn(async () => ({ ok: true as const, message: 'opened agent-new', result: { id: 'agent-new' } }))
     const handler = createServerEditionControlHandler({
       openProject: vi.fn(),
+      groups: vi.fn(),
       openTerminal: vi.fn(),
       openAgent,
       orchestrate: vi.fn(),
