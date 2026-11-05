@@ -164,6 +164,14 @@ reconciliation must preserve that distinction before any attempted remote write.
 This is the deep-reference for working in this repo: the invariants, why each exists, and the
 measurements behind them. It is loaded automatically by Claude Code.
 
+An owner tab's whole save is rebased onto the host's copy (`shared/workspace-save-merge.ts`) from
+that client's baseline, which moves only when a save lands. A node or edge id both sides hold and the
+baseline lacks is the host's own item, adopted through an op or a server-change: the host's copy stays
+and the rest of the save goes through. Refusing it failed that save and every later one until a reload
+after any `open-agent`. Only a project id can really collide, and that is still refused. The cost: an
+edit made to an adopted node before that tab's first successful save stays live but not on disk until
+the node is edited again.
+
 Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
 `settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
 `settings:changed` pushes follow successful atomic persistence. `SettingsWriteQueue` overlays

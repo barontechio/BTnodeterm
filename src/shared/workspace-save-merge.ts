@@ -21,9 +21,20 @@ function fields<T extends object>(base: T, next: T, current: T, skip: readonly s
   return Object.fromEntries(entries) as T
 }
 
+/**
+ * Both sides hold an id the writer's baseline lacks. A project id can really collide (one folder
+ * added twice), so that is refused. A node or edge id is random, so the writer got it from the host,
+ * through an op or a server-change, and did not invent it: its copy differs only by how a client
+ * serializes it or by an edit made before its first save. The host's copy stays, and the baseline
+ * moving to this save lets the next edit through. Refusing there failed this save and all later
+ * ones, because a baseline only moves when a save lands.
+ */
+type BothCreated = 'refuse' | 'keep-host'
+
 function items<T extends { id: string }>(
   base: readonly T[], next: readonly T[], current: readonly T[],
-  merge: (before: T, wanted: T, fresh: T) => T
+  merge: (before: T, wanted: T, fresh: T) => T,
+  bothCreated: BothCreated = 'refuse'
 ): T[] {
   const before = new Map(base.map((x) => [x.id, x]))
   const fresh = new Map(current.map((x) => [x.id, x]))
@@ -36,7 +47,7 @@ function items<T extends { id: string }>(
     const now = fresh.get(wanted.id)
     // The host deleted it after this writer loaded it. A stale edit cannot resurrect it.
     if (old && !now) continue
-    if (!old && now && !same(wanted, now)) {
+    if (bothCreated === 'refuse' && !old && now && !same(wanted, now)) {
       throw new Error(`workspace-save-conflict: concurrent creation of ${wanted.id}; reload before retrying`)
     }
     result.push(old && now ? merge(old, wanted, now) : structuredClone(now ?? wanted))
@@ -88,14 +99,14 @@ function project(base: Project, next: Project, current: Project, governed: boole
       throw new Error(`workspace-save-conflict: ${wanted.id} changed coordinate frames; reload before retrying`)
     }
     return fields(old, wanted, fresh)
-  }))
+  }, 'keep-host'))
   const nodeIds = new Set(out.nodes.map((n) => n.id))
   const removed = new Set(base.nodes.filter((n) => !nodeIds.has(n.id)).map((n) => n.id))
   for (const n of out.nodes) if (n.parentId && removed.has(n.parentId)) {
     throw new Error(`workspace-save-conflict: parent ${n.parentId} was removed; reload before retrying`)
   }
   for (const key of ['bridges', 'ropes'] as const) {
-    const edges = items(base[key] ?? [], next[key] ?? [], current[key] ?? [], fields)
+    const edges = items(base[key] ?? [], next[key] ?? [], current[key] ?? [], fields, 'keep-host')
       .filter((e) => !removed.has(e.source) && !removed.has(e.target))
     if (edges.length || current[key] !== undefined || next[key] !== undefined) out[key] = edges
     else delete out[key]

@@ -79,13 +79,58 @@ describe('rebasing an owner workspace save', () => {
       .toEqual(next.projects[0].nodes[0])
   })
 
-  it('refuses ambiguous concurrent creation instead of guessing which item to overwrite', () => {
+  it('refuses a project both sides created: its id can really collide', () => {
     const base = workspace()
     const next = structuredClone(base)
     const current = structuredClone(base)
-    next.projects[0].nodes.push(node('collision'))
-    current.projects[0].nodes.push({ ...node('collision'), title: 'Another creation' })
+    next.projects.push({ ...next.projects[0], id: 'same-folder', name: 'Mine' })
+    current.projects.push({ ...current.projects[0], id: 'same-folder', name: 'Another creation' })
     expect(() => mergeWorkspaceSave(base, next, current)).toThrow('workspace-save-conflict')
+  })
+
+  // A tab adopts a node the server just created, from an op or a server-change, and then saves it
+  // with its own serialization. Its baseline lacks the node, because a baseline only moves when a
+  // save lands, so refusing here failed that save and every later one until a reload.
+  it('keeps the host copy of a node the writer adopted, and takes the rest of the save', () => {
+    const base = workspace()
+    const next = structuredClone(base)
+    const current = structuredClone(base)
+    next.projects[0].nodes[0].title = 'Edited in the same save'
+    next.projects[0].nodes.push({ ...node('adopted'), size: { width: 999, height: 999 } })
+    current.projects[0].nodes.push({ ...node('adopted'), pendingLaunch: { after: [], command: 'held' } })
+
+    const merged = mergeWorkspaceSave(base, next, current).projects[0].nodes
+
+    expect(merged.find((n) => n.id === 'adopted')).toEqual(current.projects[0].nodes.at(-1))
+    expect(merged[0].title).toBe('Edited in the same save')
+    expect(merged.filter((n) => n.id === 'adopted')).toHaveLength(1)
+  })
+
+  it('keeps the host copy of an edge the writer adopted', () => {
+    const base = workspace()
+    const next = structuredClone(base)
+    const current = structuredClone(base)
+    next.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c' }]
+    current.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', reader: 'a' }]
+
+    expect(mergeWorkspaceSave(base, next, current).projects[0].bridges).toEqual(current.projects[0].bridges)
+  })
+
+  it('applies an edit to an adopted node once the baseline holds it', () => {
+    const base = workspace()
+    const current = structuredClone(base)
+    const adopted = { ...node('adopted'), pendingLaunch: { after: [], command: 'held' } }
+    current.projects[0].nodes.push(adopted)
+    const first = structuredClone(base)
+    first.projects[0].nodes.push({ ...node('adopted'), size: { width: 999, height: 999 } })
+    const afterFirst = mergeWorkspaceSave(base, first, current)
+
+    const second = structuredClone(first)
+    second.projects[0].nodes.at(-1)!.title = 'Renamed later'
+    const merged = mergeWorkspaceSave(first, second, afterFirst).projects[0].nodes.at(-1)!
+
+    expect(merged.title).toBe('Renamed later')
+    expect(merged.pendingLaunch).toEqual(adopted.pendingLaunch)
   })
 
   it('does not interpret an unreadable project as a node deletion', () => {
