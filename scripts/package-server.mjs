@@ -15,6 +15,8 @@ export const RUNTIME_INPUTS = [
   'LICENSE',
   'resources/licenses',
   'docs/server-release-bt1.md',
+  'docs/dynamic-agent-groups.md',
+  'docs/SERVER.md',
   'docs/web-push.md',
   'docs/release-notes/v0.5.0-bt.1.md'
 ]

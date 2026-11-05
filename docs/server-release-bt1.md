@@ -1,10 +1,11 @@
 # Server 0.5.0-bt.1 preparation
 
-This is a fork Server candidate based on accepted source `3d1b932a53786e56f7ca1cdb4904d2a2ea53ddfe`, including upstream v0.5.0 and upstream main `a03473354ed486003dd8e35be112d7f3a4b0cc6c`. It is prepared separately from the existing integration draft PR #2. No tag, public release, production deployment or restart is part of preparation.
+This is a fork Server candidate composed from source `29cefa4e9b1c236e2eb93e97d5630b29d222ec69` (dynamic groups PRs #7 and #8) and the reviewed Server packaging preparation `9315f15bfacbab075de71886dc6ff50576ad9350`, including upstream v0.5.0 and upstream main `a03473354ed486003dd8e35be112d7f3a4b0cc6c`. It updates the existing release draft PR #6. No tag, public release, production deployment or restart is part of preparation. Earlier archives remain historical evidence and do not contain dynamic groups.
 
 ## Changes compared with upstream v0.5.0
 
 - Shared Core canvas geometry, board queries/assignment and verified comment delivery.
+- Dynamic nested groups, deterministic space reservations and atomic reservation consumption; retiring a frame preserves its terminals and surviving links. See [Dynamic agent groups](dynamic-agent-groups.md).
 - Headless teams, reviews and dependencies; owner confirmations and allowed settings updates.
 - Worktree creation/binding/unbinding, guarded recovery and clean removal; missing editor/diff text remains copyable for its mounted lifetime.
 - Verified local POSIX tmux Claude conversation branching and confirmed terminal writes for supported identities.
@@ -21,7 +22,22 @@ E23, coordinated ordinary-agent restarts/account switching, private mobile apps 
 
 Web Push is optional and off by default. An operator must configure a stable dedicated HTTPS origin, valid VAPID contact and exact approved public provider origins; the owner then explicitly enrolls a supported browser for one local project. Do not copy sample addresses into production. See [Web Push](web-push.md) for configuration, private store backup, consent and revocation rules.
 
-The accepted source passes Linux 25,931 tests / 82 skips, Windows 1,107 / 31 skips, types, Desktop/Server builds and all five source PR checks. Linux run 42014009276 attempt 1 failed in legacy plain worktree removal; the single rerun at the same SHA passed. The cause was not proved. Focused reviews and runtime probes close the source P1/P2 findings. These are source results, not certification of provider delivery or notification display on an OS/device. HTTPS/provider enrollment and real-device acceptance remain operator work.
+Historical source `3d1b932a` passed Linux 25,931 tests / 82 skips, Windows 1,107 / 31 skips, types, Desktop/Server builds and all five source PR checks. Its Linux run 42014009276 attempt 1 failed in plain worktree removal; the single rerun at the same SHA passed without a proved cause. Dynamic-groups source `29cefa4e` has a separate Linux failure in that test (run 42045205168: 26,090 passes, one failure, 82 skips); its other four checks passed. Neither result certifies this release composition. The release handoff must record fresh exact-head CI and any diagnosed correction, preserving failed-run history. HTTPS/provider enrollment and real-device notification acceptance remain operator work.
+
+## Canvas control and client compatibility
+
+Canvas control is opt-in. Start the extracted package with the operator's private data directory:
+
+```sh
+NODETERM_SERVER_CANVAS_CONTROL=1 \
+NODETERM_SERVER_CONTROL_SCOPE=project \
+NODETERM_DATA_DIR=/absolute/private/operator-data \
+./start-server.sh
+```
+
+`project` scope lets a verified agent control eligible nodes in its own project even when it did not create them. Omitting the scope keeps the original `creator` default. Scope does not waive identity, capability, worktree, execution or account checks. See [Server operation](SERVER.md) for authentication and scope details.
+
+Every connected broadcast client must advertise a mounted atomic batch receiver before a group batch can be applied. An older client causes a named refusal before any mutation; reconnect it using the updated build. Reservations persist layout data and consumed/released tombstones, never execution or restored creator authority. Test both the explicit project-scope flags and the unchanged creator default against the extracted release archive.
 
 ## Build and package
 
