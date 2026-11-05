@@ -77,3 +77,25 @@ describe('the publish effect refuses a torn render', () => {
     expect(effect.slice(check, effect.indexOf('pub.adopt(states)'))).toMatch(/return/)
   })
 })
+
+describe('the dangling-edge prunes judge against the LATEST nodes', () => {
+  // The rope prune is `setControlEdges(es => pruneRopes(es, ids))`: a FUNCTIONAL update, applied to
+  // the latest ropes. Taking `ids` from the RENDERED `nodes` paired the newest ropes with an older
+  // node set: a render that committed before a peer's node upsert landed (but after its rope upsert
+  // had moved the ropes ref) pruned the new rope as dangling, and the publisher then cast its
+  // `edge-remove` to every tab — measured 2026-11-05 with two Server Edition tabs (rope lost, bridge
+  // kept: the bridge prune compared rendered against rendered). Both prunes must read `nodesRef.current`
+  // inside the updater, where it is the node set the latest edges were built against.
+  const ropePrune = src.slice(src.indexOf('// Prune ropes whose endpoints were deleted'), src.indexOf('// The RENDERED epoch, not the ref:'))
+  const linkPrune = src.slice(src.indexOf('// Pruning is separate from publication'), src.indexOf('// The app-level unread count'))
+  it('the rope prune reads nodesRef.current inside the functional update', () => {
+    expect(ropePrune).toContain('setControlEdges((es) =>')
+    expect(ropePrune).toContain('nodesRef.current.map')
+    expect(ropePrune).not.toMatch(/new Set\(nodes\.map/)
+  })
+  it('the link prune is a functional update that reads nodesRef.current', () => {
+    expect(linkPrune).toContain('setLinkEdges((es) =>')
+    expect(linkPrune).toContain('nodesRef.current.map')
+    expect(linkPrune).not.toMatch(/linkEdges\.filter\(/)
+  })
+})
