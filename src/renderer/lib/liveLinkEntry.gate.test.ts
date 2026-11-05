@@ -46,8 +46,17 @@ describe('live-link entry points vs the real Pro gate', () => {
     expect(gate.useUpgradeGate.getState().open).toBe(false)
     expect(r.show).not.toHaveBeenCalled()
     expect(r.notice).toHaveBeenCalledWith(
-      'Live links need a Pro license on this server — not available in the Server Edition yet'
+      'Live links require licensing to be enabled in this server’s host configuration.'
     )
+  })
+
+  it('uses the same Pro gate for an enabled Server host and still refuses relay targets', () => {
+    open(facts({ serverEdition: true, serverLicenseEnabled: true, source: 'server' }))
+    expect(gate.useUpgradeGate.getState().open).toBe(true)
+    gate.useUpgradeGate.setState({ open: false })
+    ent.useEntitlement.setState({ isPremium: true })
+    expect(open(facts({ serverEdition: true, serverLicenseEnabled: true, source: 'server' })).show).toHaveBeenCalledOnce()
+    expect(open(facts({ serverEdition: true, serverLicenseEnabled: true, source: 'relay' })).show).not.toHaveBeenCalled()
   })
 
   it('relay tab, not Pro: no Upgrade dialog, the relay sentence instead', () => {

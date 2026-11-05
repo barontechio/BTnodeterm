@@ -5,7 +5,8 @@ import WebSocket from 'ws'
 import { encodePtyData, E_DISCONNECTED } from '../../shared/rpc'
 
 // RpcClient is exported for tests
-import { RpcClient } from './ws-bridge'
+import { buildRealApi, RpcClient } from './ws-bridge'
+import { IPC } from '../../shared/ipc'
 
 let server: http.Server, wss: WebSocketServer, port: number
 
@@ -27,6 +28,18 @@ afterEach(async () => {
 })
 
 describe('RpcClient', () => {
+  it('forwards session name reads with node identity through the browser transport', async () => {
+    const seen: unknown[] = []
+    wss.on('connection', (socket) => socket.on('message', (data) => {
+      const message = JSON.parse(data.toString())
+      seen.push({ method: message.method, args: message.args })
+      socket.send(JSON.stringify({ t: 'res', id: message.id, ok: true, result: 'Node title' }))
+    }))
+    const client = new RpcClient(`ws://127.0.0.1:${port}/`)
+    await client.ready()
+    expect(await buildRealApi(client).pty.readSessionName('session', undefined, 'claude', 'node')).toBe('Node title')
+    expect(seen).toEqual([{ method: IPC.ptyReadSessionName, args: ['session', null, 'claude', 'node'] }])
+  })
   it('settles requests from responses and fans out JSON + binary events', async () => {
     wss.on('connection', (sock) => {
       sock.on('message', (d, isBinary) => {

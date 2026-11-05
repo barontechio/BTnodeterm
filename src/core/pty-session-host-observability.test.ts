@@ -19,7 +19,10 @@ vi.mock('./session-host-backend', async (importOriginal) => ({
   sessionHostSupported: backend.supported,
   createSessionHostPty: backend.create,
   sessionHostListSessionsDetailed: backend.listDetailed,
-  sessionHostKillSession: backend.kill
+  sessionHostKillSession: backend.kill,
+  // killAll's final snapshot belongs to this fake backend too. A built host bundle on disk
+  // must never turn an observability fixture into a real, detached host process.
+  sessionHostCapture: async () => ''
 }))
 
 vi.mock('node-pty', () => ({

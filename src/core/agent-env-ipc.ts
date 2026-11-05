@@ -74,6 +74,9 @@ async function discoverModels(
   const timer = setTimeout(() => controller.abort(), DISCOVERY_TIMEOUT_MS)
   try {
     const response = await fetch(routes.discovery, {
+      // Keep stored/environment credentials on the approved authority. Fetch strips
+      // Authorization across origins, but the compatibility x-bf-vk header can survive.
+      redirect: 'error',
       headers: {
         // Authorization is the OpenAI-compatible convention used by LiteLLM and
         // modern Bifrost keys. Older Bifrost virtual keys require x-bf-vk.

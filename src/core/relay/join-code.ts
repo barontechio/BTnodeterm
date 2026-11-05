@@ -1,3 +1,4 @@
+import { bytesToB64Url, b64UrlToBytes } from './bytes'
 // `nodeterm://join?code=<base64url(JSON)>` — the address of a hosted team. PUBLIC material only:
 // a leaked code lets someone ASK to join, never get in (an owner must approve the first connect).
 // The host key inside is what authenticates the host to the joiner, and the hostId must derive
@@ -23,27 +24,28 @@ export function allowedEndpoint(endpoint: string): boolean {
 }
 
 export function encodeJoinCode(c: JoinCode): string {
-  return PREFIX + Buffer.from(JSON.stringify(c), 'utf-8').toString('base64url')
+  return PREFIX + bytesToB64Url(new TextEncoder().encode(JSON.stringify(c)))
 }
 
 /** The code body's bytes, or null. Canonical base64url only: Node's decoder skips characters
  *  outside the alphabet, so junk inside a code (or after it) would otherwise decode to the same
  *  code. ASCII whitespace is removed first — a code that travelled through a chat or a mail client
  *  arrives wrapped across lines, and a line break is visible, not a disguise. */
-function codeBytes(body: string): Buffer | null {
+function codeBytes(body: string): Uint8Array | null {
   const b = body.replace(/[\t\n\r ]+/g, '')
   if (!b || !/^[A-Za-z0-9_-]+$/.test(b)) return null
-  const bytes = Buffer.from(b, 'base64url')
-  return bytes.toString('base64url') === b ? bytes : null
+  const bytes = b64UrlToBytes(b)
+  return bytesToB64Url(bytes) === b ? bytes : null
 }
 
 export function decodeJoinCode(s: string): JoinCode | null {
+  if (typeof s !== 'string' || s.length > 8192) return null
   const t = s.trim()
   if (!t.startsWith(PREFIX)) return null
   try {
     const bytes = codeBytes(t.slice(PREFIX.length))
     if (!bytes) return null
-    const o = JSON.parse(bytes.toString('utf-8')) as Record<string, unknown>
+    const o = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>
     const str = (k: string, max: number) => typeof o[k] === 'string' && (o[k] as string).length > 0 && (o[k] as string).length <= max
     if (o.v !== 1 || !str('relayEndpoint', 512) || !str('hostId', 64) || !str('hostPublicKeyB64', 64) || !str('hostDeviceId', 128)) return null
     if (typeof o.label !== 'string' || o.label.length > 60) return null

@@ -7,15 +7,16 @@
 // standard-base64-encodes). Keep this in sync with the server — a mismatch means the phone and
 // this host would register under different rooms and never bridge.
 
-import { createHash } from 'node:crypto'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToB64Url, legacyB64ToBytes } from './bytes'
 
 /** Derive the broker host id from the raw 32-byte NaCl box public key. */
 export function hostIdFromPublicKey(pub: Uint8Array): string {
   // Node's 'base64url' digest is already unpadded RFC 4648 §5, matching the server.
-  return createHash('sha256').update(pub).digest('base64url').slice(0, 22)
+  return bytesToB64Url(sha256(pub)).slice(0, 22)
 }
 
 /** Derive the broker host id from a standard-base64 NaCl box public key (what publicKeyToB64 emits). */
 export function hostIdFromPublicKeyB64(b64: string): string {
-  return hostIdFromPublicKey(Uint8Array.from(Buffer.from(b64, 'base64')))
+  return hostIdFromPublicKey(legacyB64ToBytes(b64))
 }

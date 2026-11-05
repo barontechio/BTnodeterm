@@ -66,7 +66,10 @@ describe('every canvas-control open path records the opener beside its rope', ()
   })
 
   it('the off-canvas and cold-open writes stamp the node they rope', () => {
-    expect(canvas).toContain('node: flowToNodeStates([withOpenedBy(placed, sourceNodeId)])[0]')
+    const body = arrowBody(canvas, 'const addAndConnect = (node: CanvasNode) => {', '      ')
+    expect(body).toMatch(/const authored = withOpenedBy\(settled, sourceNodeId\)[\s\S]*const state = flowToNodeStates\(\[authored\]\)\[0\]/)
+    expect(body).toContain('ocStore.applyOwnNodeMutations(offCanvas.project.id, result.nodes.filter(')
+    expect(body).toContain('ropeEdge(`ctrl-${sourceNodeId}-${authored.id}`, sourceNodeId, authored.id)')
     // The cold open stamps the node as it is built, right where `--after` (and any `--after-pr`
     // / `--after-success` hold, via withPrHold / withSuccessHold) is folded into its hold.
     expect(canvas).toMatch(/const node = withOpenedBy\(\s*(?:withSuccessHold\(\s*)?(?:withPrHold\(\s*)?held && coldAfterIds\.length[\s\S]{0,500}?sourceNodeId\s*\)/)

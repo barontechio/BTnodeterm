@@ -17,7 +17,9 @@ import {
   sweepForeignTempFiles,
   sweepStaleTempFiles,
   tempNameFor,
-  writeFileAtomic
+  writeFileAtomic,
+  writeFileDurableAtomic,
+  syncFileDurable
 } from './fs-atomic'
 
 let dir: string
@@ -184,6 +186,28 @@ describe('renameAtomicSync', () => {
 })
 
 describe('writeFileAtomic', () => {
+  it.skipIf(process.platform === 'win32')('acknowledges a durable record on a filesystem supporting directory sync', async () => {
+    const target = join(dir, 'write-ahead.json')
+    await writeFileDurableAtomic(target, 'prepared', { mode: 0o600 })
+    expect(await readFile(target, 'utf8')).toBe('prepared')
+    expect((await fs.stat(target)).mode & 0o777).toBe(0o600)
+  })
+
+  it('refuses a durable write before publication when directory acknowledgement is unsupported', async () => {
+    const target = join(dir, 'write-ahead.json'); writeFileSync(target, 'old')
+    const close = vi.fn(async () => {})
+    vi.spyOn(fs, 'open').mockResolvedValue({ sync: async () => { throw errWithCode('ENOTSUP') }, close } as never)
+    await expect(writeFileDurableAtomic(target, 'prepared')).rejects.toThrow('ENOTSUP')
+    expect(readFileSync(target, 'utf8')).toBe('old'); expect(close).toHaveBeenCalledOnce()
+  })
+
+  it('reports an uncertain durable publication when the post-rename acknowledgement fails', async () => {
+    const target = join(dir, 'write-ahead.json'); writeFileSync(target, 'old')
+    let flushes = 0
+    vi.spyOn(fs, 'open').mockResolvedValue({ sync: async () => { if (++flushes === 2) throw errWithCode('EIO') }, close: async () => {} } as never)
+    await expect(writeFileDurableAtomic(target, 'prepared')).rejects.toThrow('EIO')
+    expect(readFileSync(target, 'utf8')).toBe('prepared')
+  })
   it('publishes the new bytes', async () => {
     const target = join(dir, 'store.json')
     await writeFileAtomic(target, '{"a":1}')
@@ -506,4 +530,96 @@ describe('clearAtomicTarget', () => {
     expect(result.retainedTempCount).toBe(0)
     expect(await fs.readFile(target, 'utf8')).toBe('republished')
   })
+})
+
+
+describe.skipIf(process.platform === 'win32')('durability acknowledgement of existing metadata', () => {
+  it('flushes a regular file and its directory without rewriting bytes', async () => {
+    const file = join(dir, 'repaired.json'); await fs.writeFile(file, 'repaired')
+    const original = await fs.open(file, 'r')
+    try {
+      const before = await original.stat()
+      await syncFileDurable(file)
+      expect(await original.readFile('utf8')).toBe('repaired')
+      expect((await fs.stat(file)).ino).toBe(before.ino)
+    } finally { await original.close() }
+  })
+  it('refuses symlink files and directories without touching the referenced data', async () => {
+    const file = join(dir, 'original'); await fs.writeFile(file, 'keep')
+    const alias = join(dir, 'alias'); await fs.symlink(file, alias)
+    await expect(syncFileDurable(alias)).rejects.toThrow()
+    const parent = join(dir, 'parent'); await fs.mkdir(parent); await fs.writeFile(join(parent, 'file'), 'keep')
+    const redirected = join(dir, 'redirected'); await fs.symlink(parent, redirected)
+    await expect(syncFileDurable(join(redirected, 'file'))).rejects.toThrow()
+    expect(await fs.readFile(file, 'utf8')).toBe('keep')
+  })
+  it('refuses a path replaced after the file flush instead of acknowledging the replacement', async () => {
+    const file = join(dir, 'repaired.json'); await fs.writeFile(file, 'old')
+    const open = fs.open
+    vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+      const handle = await open(...args)
+      if (args[0] === file) {
+        const sync = handle.sync.bind(handle)
+        vi.spyOn(handle, 'sync').mockImplementation(async () => { await sync(); await writeFileAtomic(file, 'replacement') })
+      }
+      return handle
+    })
+    await expect(syncFileDurable(file)).rejects.toThrow('file-changed')
+    expect(await fs.readFile(file, 'utf8')).toBe('replacement')
+  })
+})
+
+it('rechecks dispatch after a transient rename refusal before another publication attempt', async () => {
+  const target = join(dir, 'guarded.json'); await fs.writeFile(target, 'original')
+  let active = true
+  const rename = vi.spyOn(fs, 'rename').mockImplementation(async () => {
+    active = false
+    throw errWithCode('EPERM')
+  })
+  await expect(writeFileAtomic(target, 'replacement', { assertDispatch: () => {
+    if (!active) throw new Error('owner expired')
+  } })).rejects.toThrow('owner expired')
+  expect(rename).toHaveBeenCalledOnce()
+  expect(await fs.readFile(target, 'utf8')).toBe('original')
+  expect(await fs.readdir(dir)).toEqual(['guarded.json'])
+})
+
+// This schedule requires a successful real directory flush. Windows refuses that operation;
+// unsupported flushes must instead retain the refusal tested below, never skip durability.
+it.skipIf(process.platform === 'win32')('does not publish new durable authority after expiry during directory preparation', async () => {
+  const target = join(dir, 'durable-authority.json'); const open = fs.open
+  let active = true
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === dir) {
+      const sync = handle.sync.bind(handle)
+      vi.spyOn(handle, 'sync').mockImplementation(async () => { await sync(); active = false })
+    }
+    return handle
+  })
+  await expect(writeFileDurableAtomic(target, 'authority', { assertDispatch: () => {
+    if (!active) throw new Error('owner expired')
+  } })).rejects.toThrow('owner expired')
+  expect(await fs.readdir(dir)).toEqual([])
+})
+
+it('refuses durable authority when the directory flush cannot be acknowledged', async () => {
+  const target = join(dir, 'unsupported-durability.json'); const open = fs.open
+  let syncAttempted = false
+  let close: ReturnType<typeof vi.spyOn> | undefined
+  vi.spyOn(fs, 'open').mockImplementation(async (...args: Parameters<typeof open>) => {
+    const handle = await open(...args)
+    if (args[0] === dir) {
+      vi.spyOn(handle, 'sync').mockImplementation(async () => {
+        syncAttempted = true
+        throw errWithCode('EPERM')
+      })
+      close = vi.spyOn(handle, 'close')
+    }
+    return handle
+  })
+  await expect(writeFileDurableAtomic(target, 'authority')).rejects.toMatchObject({ code: 'EPERM' })
+  expect(syncAttempted).toBe(true)
+  expect(close).toHaveBeenCalledOnce()
+  expect(await fs.readdir(dir)).toEqual([])
 })

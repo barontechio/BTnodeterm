@@ -45,7 +45,8 @@ import { isCanvasMutation } from '../shared/canvas-mutations'
 import { createCanvasOrder } from '../shared/canvas-order'
 import { defaultKanbanFor } from '../shared/kanban-default-board'
 import { carryLocalNodeExec, stripSharedNodeExec } from '../shared/node-exec'
-import type { BridgeLink, CanvasMutation, CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
+import { isCanvasMutationBatch } from './canvas-sync'
+import type { BridgeLink, CanvasMutation, CanvasMutationBatch, CanvasNodeState, Project, ProjectKanban, Workspace } from '../shared/types'
 
 export interface CanvasAuthorityDeps {
   /** The projects shared with the hosted team right now. Read on every call, never cached. */
@@ -91,6 +92,8 @@ export interface CanvasAuthority {
   adoptedIds(): string[]
   /** One op, as the reflector stamped it, in the reflector's order. */
   onReflected(projectId: string, m: CanvasMutation): void
+  /** One validated host batch; all children reduce before the new content becomes observable. */
+  onReflectedBatch(projectId: string, batch: CanvasMutationBatch): void
   /** Governed projects' content fields replaced by the authority's (the store's save hook). */
   overlaySave(ws: Workspace): Promise<Workspace>
   /** Governed projects' content fields replaced by the authority's (the store's load hook). */
@@ -421,6 +424,28 @@ export function createCanvasAuthority(deps: CanvasAuthorityDeps): CanvasAuthorit
       if (pending) pending.push(m)
       else queued.set(id, [m])
       void adopt(id)
+    },
+
+    onReflectedBatch(id: string, batch: CanvasMutationBatch): void {
+      if (!governs(id) || !isCanvasMutationBatch(batch)) return
+      const accepted = batch.mutations.filter((m) => order.accept(m, id))
+      const g = governed.get(id)
+      if (!g) {
+        queued.set(id, [...(queued.get(id) ?? []), ...accepted])
+        void adopt(id)
+        return
+      }
+      let next = g.content
+      const changed: CanvasMutation[] = []
+      for (const m of accepted) {
+        const after = applyCanvasOp(next, m, id)
+        if (after !== next) changed.push(m)
+        next = after
+      }
+      if (!changed.length) return
+      g.content = next
+      g.unflushed.push(...changed)
+      markDirty(id, g)
     },
 
     async overlaySave(ws: Workspace): Promise<Workspace> {

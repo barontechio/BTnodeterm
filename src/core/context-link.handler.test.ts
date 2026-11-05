@@ -218,7 +218,7 @@ describe('handleContextLinkRequest — remote (SSH) reads', () => {
     }
   )
 
-  it('falls back to local behavior when the shell injected no remote deps (Server Edition)', async () => {
+  it('retains local behavior for a local-only shell without remote deps', async () => {
     const p = join(dir, 'srv.jsonl')
     writeFileSync(p, CLAUDE_LINE)
     start() // no deps at all
@@ -228,6 +228,38 @@ describe('handleContextLinkRequest — remote (SSH) reads', () => {
       'user: ship it'
     )
   })
+})
+
+it('refuses remote terminal capture without a remote route adapter', async () => {
+  start({ isRemoteNode: () => true })
+  await setLinks({ reader: [{ id: 'remote', title: 'Remote' }] })
+  const answer = await handleContextLinkRequest({ verb: 'terminal', nodeId: 'reader', args: {} })
+  expect(answer).not.toContain('pane of remote'); expect(captured).toEqual([])
+})
+
+it('captures a remote terminal only through the explicit route adapter', async () => {
+  const captureRemoteTerminal = vi.fn(async () => 'verified remote pane')
+  start({ isRemoteNode: () => true, captureRemoteTerminal })
+  await setLinks({ reader: [{ id: 'remote', title: 'Remote' }] })
+  expect(await handleContextLinkRequest({ verb: 'terminal', nodeId: 'reader', args: {} })).toContain('verified remote pane')
+  expect(captureRemoteTerminal).toHaveBeenCalledWith('remote'); expect(captured).toEqual([])
+})
+
+it.each(['removed', 'account', 'route'])('discards an in-flight read after its %s authorization changes', async (change) => {
+  let remote = true; let release!: (bytes: string) => void
+  const readRemoteFile = vi.fn(() => new Promise<string>((resolve) => { release = resolve }))
+  start({ isRemoteNode: () => remote, readRemoteFile })
+  setNodeTranscript('held-remote', 'session', '/home/u/.claude/projects/fixture/held.jsonl')
+  const entry = { id: 'held-remote', title: 'Remote', agentId: 'claude', sessionId: 'session' }
+  await setContextLinks({ reader: [entry] })
+  const reading = handleContextLinkRequest({ verb: 'transcript', nodeId: 'reader', args: {} })
+  expect(readRemoteFile).toHaveBeenCalledOnce()
+  if (change === 'removed') await setContextLinks({})
+  if (change === 'account') await setContextLinks({ reader: [{ ...entry, accountId: 'another' }] })
+  if (change === 'route') remote = false
+  release(CLAUDE_LINE)
+  const answer = await reading
+  expect(answer).toContain('changed during the read'); expect(answer).not.toContain('ship it')
 })
 
 // Hold transcript discovery at a deterministic boundary, without touching real sessions.
@@ -374,4 +406,36 @@ it('starts another remote read after an edit while the first remote read is stil
   expect(await second).toContain('After')
   expect(await second).toContain('ship it')
   await refresh
+})
+
+
+it('passes current directed-edge authority to a remote reader without requiring a hook path', async () => {
+  let current!: () => boolean; let release!: (value: string) => void
+  const readRemoteTranscript = vi.fn((_node, scope) => {
+    current = scope.current
+    return new Promise<string>((resolve) => { release = resolve })
+  })
+  start({ isRemoteNode: () => true, readRemoteTranscript })
+  const target = { id: 'new-remote', title: 'Remote', agentId: 'codex', sessionId: 'codex-session', accountId: 'account' }
+  await setLinks({ caller: [target] })
+  const abort = new AbortController()
+  const read = handleContextLinkRequest({ verb: 'transcript', nodeId: 'caller', args: {},
+    scope: { signal: abort.signal, verified: () => true } })
+  expect(readRemoteTranscript).toHaveBeenCalledWith(target, expect.objectContaining({ callerId: 'caller', signal: abort.signal }))
+  expect(current()).toBe(true)
+  await setLinks({}); await setLinks({ caller: [target] })
+  expect(current()).toBe(false)
+  // The adapter uses current() before releasing bytes; this stand-in demonstrates the fence.
+  release(current() ? CLAUDE_LINE : '')
+  expect(await read).not.toContain('ship it')
+})
+
+it('refuses to deliver a response after its HTTP request was aborted', async () => {
+  let release!: (value: string) => void
+  start({ isRemoteNode: () => true, readRemoteTranscript: () => new Promise((resolve) => { release = resolve }) })
+  await setLinks({ caller: [{ id: 'remote', title: 'Remote', agentId: 'claude', sessionId: 'session' }] })
+  const abort = new AbortController()
+  const read = handleContextLinkRequest({ verb: 'transcript', nodeId: 'caller', args: {}, scope: { signal: abort.signal } })
+  abort.abort(); release(CLAUDE_LINE)
+  expect(await read).toContain('changed during the read')
 })

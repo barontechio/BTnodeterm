@@ -135,7 +135,7 @@ describe('LiveLinkChip', () => {
   it('the shared rule: only a LOCAL session shows this machine\'s links; a project resolves through its session', () => {
     expect(showsLiveLinks('local')).toBe(true)
     expect(showsLiveLinks('relay')).toBe(false)
-    expect(showsLiveLinks('server')).toBe(false)
+    expect(showsLiveLinks('server')).toBe(true)
     expect(showsLiveLinks(null)).toBe(false)
     expect(projectSessionSource('p-local')).toBe('local')
     expect(projectSessionSource('p-relay')).toBe('relay')

@@ -39,7 +39,7 @@ describe('phone chat verbs are wired end to end', () => {
     expect(src).toMatch(/catalog: \(q\) => readChatCatalog\(q, chatCatalogDeps\)/)
     expect(src).toMatch(/runRemote: async \(nodeId, cmd\) =>/)
     // The Server Edition names an SSH-project node remote (built-ins + partial), never reads its own ~/.claude for it.
-    expect(read('server/index.ts')).toMatch(/registerChatCatalogIpc\(\{ isRemoteNode: \(nodeId\) => !!workspaceStore\.sshProjectIdForNode\(nodeId\) \}\)/)
+    expect(read('server/index.ts')).toMatch(/registerChatCatalogIpc\(\{ isRemoteNode: remoteTranscripts\.isRemoteNode \}\)/)
   })
   it('the renderer answers the round-trip', () => {
     const canvas = read('renderer/canvas/Canvas.tsx')

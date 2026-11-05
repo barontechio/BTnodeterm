@@ -3,12 +3,36 @@ import {
   TYPED_TAB,
   localTypedArgs,
   localTypedEnv,
+  submitWithDispatchNotice,
   typeThenSubmitWhenSettled,
   typedInputScript,
   typedLines,
   typedStdin,
   type TypedSurface
 } from './typed-input'
+import { readClaudeDraft } from '../shared/agents/claude-screen'
+import composer from '../shared/agents/__fixtures__/claude/composer-capture.json'
+
+describe('host typed-submit dispatch notice', () => {
+  it('notifies after dispatch and before the backend promise settles', async () => {
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve })
+    const order: string[] = []
+    const result = submitWithDispatchNotice(() => { order.push('dispatch'); return pending }, () => { order.push('notice') })
+    expect(order).toEqual(['dispatch', 'notice'])
+    release(); await result
+  })
+
+  it('keeps notification failure pending until the dispatched effect actually settles', async () => {
+    let release!: () => void; const pending = new Promise<void>((resolve) => { release = resolve }); let settled = false
+    const result = submitWithDispatchNotice(() => pending, () => { throw new Error('notice failed') }).finally(() => { settled = true })
+    void result.catch(() => {})
+    await Promise.resolve(); expect(settled).toBe(false)
+    release(); await expect(result).rejects.toThrow('notice failed')
+    const notice = vi.fn()
+    await expect(submitWithDispatchNotice(() => { throw new Error('not dispatched') }, notice)).rejects.toThrow('not dispatched')
+    expect(notice).not.toHaveBeenCalled()
+  })
+})
 
 describe('typedLines', () => {
   it('splits on every line-ending style and keeps blank lines', () => {
@@ -140,6 +164,50 @@ describe('typeThenSubmitWhenSettled', () => {
 
     expect(result).toBe(true)
     expect(surface.canSubmit).toHaveBeenCalledTimes(1)
+    expect(surface.submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('submits a one-letter answer whose letter typing also removes elsewhere on screen', async () => {
+    // Real Claude Code captures: typing clears the placeholder and shortens the status line, which
+    // loses the `a` in "← for agents". Counting `a` across the screen never rose, so the Enter was
+    // withheld with the answer sitting in the box.
+    const before = composer.screens.empty
+    const after = composer.screens.draft.replace('heb ik getest', 'a')
+    let captures = 0
+    const submit = vi.fn(async () => true)
+
+    const result = await typeThenSubmitWhenSettled('a', {
+      capture: async () => (captures++ === 0 ? before : after),
+      type: async () => true,
+      submit,
+      draftOf: readClaudeDraft
+    }, noWait)
+
+    expect(result).toBe(true)
+    expect(submit).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not take a draft that already ended with the answer as the answer arriving', async () => {
+    const leftover = composer.screens.draft.replace('heb ik getest', 'a')
+    const submit = vi.fn(async () => true)
+
+    const result = await typeThenSubmitWhenSettled('a', {
+      capture: async () => leftover,
+      type: async () => true,
+      submit,
+      draftOf: readClaudeDraft
+    }, noWait)
+
+    expect(result).toBe('pasted-not-submitted')
+    expect(submit).not.toHaveBeenCalled()
+  })
+
+  it('falls back to counting on screen when the composer cannot be read', async () => {
+    const surface = { ...fakeSurface({ lag: 1 }), draftOf: () => null }
+
+    const result = await typeThenSubmitWhenSettled('hello there', surface, noWait)
+
+    expect(result).toBe(true)
     expect(surface.submit).toHaveBeenCalledTimes(1)
   })
 

@@ -1,3 +1,4 @@
+import type { ContextLinkRequestScope } from '../context-link'
 import { REPORT_OUTCOME_CONTROL_REFUSAL } from '../../shared/station-outcome'
 import { sessionContextWindow } from '../model-window'
 import { labelHeldForRevision } from './permission-decision'
@@ -293,6 +294,7 @@ export interface HookEventMeta {
  * of every hatch and is the test that fails if either half of this comment stops being true.
  */
 export const requiresVerified: ReadonlySet<string> = new Set([
+  'groups',
   'send',
   'reply',
   'notify',
@@ -449,7 +451,7 @@ export class HookServer {
   // Context-link reads. Same shape as the control handler, but it answers with TEXT (a rendered
   // transcript / summary / terminal capture) rather than acting on the canvas.
   private contextLinkHandler:
-    | ((req: { verb: string; nodeId: string; args: Record<string, string> }) => Promise<string>)
+    | ((req: { verb: string; nodeId: string; args: Record<string, string>; scope?: ContextLinkRequestScope }) => Promise<string>)
     | null = null
   /**
    * The shared-identity spine's handlers (see core/codex-identity-proxy.ts). Both are injected by
@@ -1084,15 +1086,49 @@ export class HookServer {
           }
           // Always text: the caller is the sh shim, and the payload IS prose (a rendered
           // transcript). The handler owns the authorization — see context-link.ts.
-          const text = this.contextLinkHandler
-            ? await withTimeout(
-                this.contextLinkHandler({ verb, nodeId, args }),
-                CONTEXT_LINK_READ_MS,
-                CONTEXT_LINK_TIMEOUT_TEXT
-              )
-            : 'Context link is unavailable in this session.'
-          res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
-          res.end(`${text}\n`)
+          const abort = new AbortController()
+          const deadline = Date.now() + CONTEXT_LINK_READ_MS
+          const identitySecret = this.nodeAuthSecretOrNull()
+          const presentedToken = req.headers['x-nodeterm-node-token']
+          const originalToken = Array.isArray(presentedToken) ? [...presentedToken] : presentedToken
+          const validators: Array<() => boolean> = []
+          let refused = false
+          const safe = (check: () => boolean) => { try { return check() === true } catch { return false } }
+          const retainAuthorization = (check: () => boolean) => {
+            if (refused || abort.signal.aborted || Date.now() >= deadline || validators.length >= 128 || !safe(check)) {
+              refused = true; return false
+            }
+            validators.push(check); return true
+          }
+          const cancelled = () => abort.abort()
+          // IncomingMessage.close also means normal POST body completion. Only aborted input
+          // or a closed RESPONSE ends the caller's lifetime while the handler is still working.
+          req.once('aborted', cancelled); res.once('close', cancelled)
+          if (req.aborted || res.destroyed) cancelled()
+          try {
+            const text = this.contextLinkHandler
+              ? await withTimeout(
+                  this.contextLinkHandler({ verb, nodeId, args, scope: {
+                    signal: abort.signal,
+                    verified: () => !abort.signal.aborted && Date.now() < deadline &&
+                      identitySecret === this.nodeAuthSecretOrNull() && this.identityGate(nodeId,
+                        CONTEXT_LINK_POLICY_VERB, originalToken).verdict === 'verified',
+                    retainAuthorization
+                  } }),
+                  CONTEXT_LINK_READ_MS,
+                  CONTEXT_LINK_TIMEOUT_TEXT
+                )
+              : 'Context link is unavailable in this session.'
+            if (!abort.signal.aborted && !res.destroyed) {
+              // No await between the original request's final authority check and publication.
+              // Every remote fetch/page contributes; a fresh capture cannot authorize old bytes.
+              const allowed = !refused && validators.every(safe)
+              res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+              res.end(`${allowed ? text : CONTEXT_LINK_TIMEOUT_TEXT}\n`)
+            }
+          } finally {
+            abort.abort(); req.removeListener('aborted', cancelled); res.removeListener('close', cancelled)
+          }
           return
         }
         const agentId = decodeURIComponent(reqUrl.pathname.replace(/^\/hook\//, ''))

@@ -529,6 +529,7 @@ describe('background writes into released sessions', () => {
     const before = vi.getTimerCount()
 
     const writing = m.backgroundWrite('node-1', 'ls\n') // arms the linger
+    await Promise.resolve() // dispatch the queued write before interrupting its control client
     control.only.exit(1) // …and the client dies under it: its own onExit clears `shared`
 
     expect(await writing).toBe(false)

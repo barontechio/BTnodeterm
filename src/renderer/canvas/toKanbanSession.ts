@@ -5,16 +5,19 @@ import { normalizeIssueRef } from '@shared/github-issue-ref'
 import { SYSTEM_NODE_COLORS, type CanvasNode } from '../state/workspace'
 import type { KanbanSession } from '../components/kanban/KanbanView'
 import type { PendingLaunch } from '@shared/types'
+import { boardCard } from '@shared/board-card'
 
 /** One canvas node as a board card, or null when this kind is not a card at all (a group frame, an
  *  editor, a diff). The board derives its cards from the canvas live, so this is the single
  *  definition of that mapping — the card list and the board-log's `cardTitle` lookup must agree on
  *  what a node is called, or a title change would log as a card appearing and disappearing. */
 export function toKanbanSession(n: CanvasNode): KanbanSession | null {
+  const summary = boardCard({ id: n.id, kind: n.type, title: n.data.title, text: n.data.text })
+  if (!summary) return null
   if (n.type === 'browser') {
     return {
       id: n.id,
-      title: (n.data.title as string) || 'Browser',
+      title: summary.title,
       color: (n.data.color as string) ?? SYSTEM_NODE_COLORS[0],
       kind: 'browser',
       url: n.data.url as string | undefined,
@@ -31,7 +34,7 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
       id: n.id,
       // A note has no title of its own — its trimmed first line is the card label. Bodies are
       // markdown, so a leading heading marker is presentation, not part of the label.
-      title: text.trim().split('\n')[0].replace(/^#{1,6}\s+/, '').trim().slice(0, 80) || 'Note',
+      title: summary.title,
       color: (n.data.color as string) ?? SYSTEM_NODE_COLORS[2],
       kind: 'sticky',
       text,
@@ -45,7 +48,7 @@ export function toKanbanSession(n: CanvasNode): KanbanSession | null {
   const pending = n.data.pendingLaunch as PendingLaunch | undefined
   return {
     id: n.id,
-    title: (n.data.title as string) ?? '',
+    title: summary.title,
     color: (n.data.color as string) ?? SYSTEM_NODE_COLORS[0],
     kind: 'terminal',
     agentId: n.data.agentId as string | undefined,

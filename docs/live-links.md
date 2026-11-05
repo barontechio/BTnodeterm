@@ -1051,18 +1051,15 @@ carry it to teammates and the canvas authority would write it into the git-share
   dot and "can type" on controllers), and the chat with reply and "Copy to card comments" (an explicit
   act, as the owner; mention tokens defused). A join raises an info strip, "Someone started watching
   <title> (2 watching)." — how an owner notices a leaked link.
-- **Server Edition:** the same core service is registered, with `entitlement: () => null` and
-  `unsupported: true` (R43), because that edition has no license layer yet (`initLicense` is
-  desktop-only). Create answers `unsupported` and the renderer shows "Live links need a Pro license on
-  this server — not available in the Server Edition yet", no Upgrade button; list answers `[]`; nothing
-  is loaded or hosted. The ws-bridge has a REAL `watchLink` member (`buildWatchLinkApi`, spread only
-  into the Server Edition's own api, never a relay-shared builder): its browser clients are the host's
-  own user, not relay peers, so the host-only prefix does not refuse them. Its four control requests are
-  real too: the three changes (`set-control`, `set-password`, `allow-control`) answer `false` there (no
-  link exists), while `control-support` answers the node's real support (the server wires
-  `controlSupport` like the desktop, and the service does not refuse it in `unsupported` mode). A server
-  license layer is the follow-up. A Server Edition that does not own its data dir skips `init()` and
-  logs it.
+- **Server Edition:** enable `NODETERM_SERVER_LICENSE=1` (or `--license`) to administer a
+  license bound to this host installation and host links with the same core service as Desktop.
+  The owner browser uses real license/watchLink RPC; relay peers remain refused. Checkout opens
+  in the requesting browser, while the key/token and device identity remain on the server. With
+  licensing disabled, create answers `unsupported`, list stays empty and no link is hosted.
+  With licensing enabled but no entitlement, create answers `not-entitled`; the Pro gate and
+  license verifier remain in force. Chips, project labels and Stop all recognize the owner Server
+  session. A second server sharing the data directory starts neither licensing nor link hosting.
+  See [Server licensing](server-license.md) for setup and remaining mobile activation limitations.
 - **Relay tab:** the API is an inert stub (`stubs.ts`); the row is disabled with "Live links are created
   on the machine that runs this terminal."; the chip is not shown. On the peer, every `watchLink:`
   channel is host-only, refused `E_FORBIDDEN` to every relay peer — Team Access guests and hosted owners

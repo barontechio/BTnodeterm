@@ -396,6 +396,18 @@ describe('scoped guest — a share rooted at the home directory or the disk root
 
 describe('scoped guest — what it receives', () => {
   const ev = (channel: string, ...args: unknown[]) => JSON.stringify({ t: 'ev', channel, args })
+  it('advertises atomic reception but never submits batches and receives only valid shared batches', () => {
+    const s = scopeForTest('alpha', deps())
+    const batch = { mutations: [{ op: 'remove', id: 'a1' }] }
+    expect(allowed(IPC.canvasBatchSubscribe, true)).toBe(true)
+    expect(allowed(IPC.canvasBatchSubscribe, false)).toBe(true)
+    expect(allowed(IPC.canvasBatchSubscribe, 'true')).toBe(false)
+    expect(allowed(IPC.canvasMutationBatch, 'alpha', batch)).toBe(false)
+    const owners = new Map<string, string>()
+    expect(filterScopedEvent(ev(IPC.canvasMutationBatch, 'alpha', batch), s, owners)).toBe(true)
+    expect(filterScopedEvent(ev(IPC.canvasMutationBatch, 'beta', batch), s, owners)).toBe(false)
+    expect(filterScopedEvent(ev(IPC.canvasMutationBatch, 'alpha', { mutations: [...batch.mutations, {}] }), s, owners)).toBe(false)
+  })
   it('drops other projects\' events and the host log; keeps its own', () => {
     const s = scopeForTest('alpha', deps())
     const owners = new Map<string, string>()
@@ -409,6 +421,14 @@ describe('scoped guest — what it receives', () => {
     expect(filterScopedEvent(ev(IPC.workspaceExternalChange, { id: 'beta' }), s, owners)).toBe(false)
     // A hosted team's shared set: a viewer of a hosted team receives it, a Team Access guest never.
     expect(filterScopedEvent(ev(IPC.relayHostedSharedChanged, { projectIds: ['alpha', 'beta'] }), s, owners)).toBe(false)
+  })
+  it("a scoped guest's snapshot holds only its project's nodes", () => {
+    const hooks = scopedGuestHooks('alpha', deps())
+    const session = null as never
+    const mine = 'a1'
+    const theirs = 'b1'
+    expect(allowed(IPC.agentStatusSnapshot)).toBe(true)
+    expect(hooks.narrowResponse!(session, IPC.agentStatusSnapshot, [{ nodeId: mine }, { nodeId: theirs }])).toEqual([{ nodeId: mine }])
   })
   it('delivers terminal bytes only for the shared project\'s sessions', () => {
     const hooks = scopedGuestHooks('alpha', deps())

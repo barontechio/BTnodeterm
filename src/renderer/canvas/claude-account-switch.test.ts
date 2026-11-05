@@ -105,7 +105,7 @@ describe('bulk move', () => {
     const { summarizeBulkSwitch } = await import('./claude-account-switch')
     expect(summarizeBulkSwitch([{ kind: 'switched' }, { kind: 'switched' }], 0, 'Work')).toEqual({
       kind: 'info',
-      text: 'Moved 2 sessions to Work.'
+      text: '2 conversations available in Work; account update and restart requested. Check that the terminals have resumed the right conversations.'
     })
     const mixed = summarizeBulkSwitch(
       [
@@ -118,7 +118,7 @@ describe('bulk move', () => {
     )
     expect(mixed.kind).toBe('error')
     expect(mixed.text).toBe(
-      'Moved 1 session to Work · 1 resumed on their old account (the conversation could not be copied) · 2 skipped (busy, not attached or without a conversation yet).'
+      '1 conversation available in Work; account update and restart requested · 2 copies unconfirmed; partial copies may remain · 1 session skipped before switching. Check the affected accounts and terminals before trying again.'
     )
   })
 
@@ -154,4 +154,11 @@ describe('startBulkSwitch', () => {
     )
     expect(out).toEqual([undefined, 'ok'])
   })
+})
+
+it('does not add inspection/retry warnings to batches refused before dispatch', async () => {
+  const { summarizeBulkSwitch } = await import('./claude-account-switch')
+  const notice = summarizeBulkSwitch([{ kind: 'refused', reason: 'no-connection' }], 1, 'Work')
+  expect(notice.text).toBe('2 sessions skipped before switching.')
+  expect(summarizeBulkSwitch([{ kind: 'same-account' }], 0, 'Work').text).toBe('No account switches requested.')
 })

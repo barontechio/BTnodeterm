@@ -36,6 +36,47 @@ import './index'
 const api = h.exposed.nodeTerminal as NodeTerminalApi
 
 describe('preload sshProject passphrase wiring', () => {
+  it('routes partial settings writes and host pushes without exposing native events', async () => {
+    await api.settings.patch!({ gridSize: 24 })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.settingsPatch, { gridSize: 24 })
+    const receive = vi.fn(); const off = api.settings.onChanged!(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.settingsChanged)![1] as (event: unknown, settings: unknown) => void
+    handler({ sender: 'native' }, { gridSize: 24 })
+    expect(receive).toHaveBeenCalledExactlyOnceWith({ gridSize: 24 })
+    off(); expect(h.removeListener).toHaveBeenCalledWith(IPC.settingsChanged, handler)
+  })
+  it('routes owner confirmation epochs, decisions and dismissals without leaking event objects', async () => {
+    const confirmation = api.ownerConfirmation!
+    await confirmation.connect()
+    await confirmation.decide({ id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    await confirmation.disconnect('epoch')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationConnect)
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDecide, { id: 'one', token: 'token', proof: 'proof', answer: 'approve' })
+    expect(h.invoke).toHaveBeenCalledWith(IPC.ownerConfirmationDisconnect, 'epoch')
+    const receive = vi.fn()
+    const off = confirmation.onDismiss(receive)
+    const handler = h.on.mock.calls.find((call) => call[0] === IPC.ownerConfirmationDismiss)![1] as (event: unknown, id: string) => void
+    handler({ sender: 'native' }, 'one')
+    expect(receive).toHaveBeenCalledExactlyOnceWith('one')
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.ownerConfirmationDismiss, handler)
+  })
+  it('delivers persisted host project changes and unsubscribes when the view closes', () => {
+    const got: unknown[] = []
+    const off = api.workspace.onServerChange((project) => got.push(project))
+    const call = h.on.mock.calls.find((entry) => entry[0] === IPC.workspaceServerChange)!
+    const handler = call[1] as (event: unknown, project: unknown) => void
+    const project = { id: 'p', nodes: [{ id: 'team-member' }] }
+    handler({}, project)
+    expect(got).toEqual([project])
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.workspaceServerChange, handler)
+  })
+
+  it('routes explicit host-owned launch recovery through owner IPC', async () => {
+    await api.control!.runLaunch!('node', 'claude prompt')
+    expect(h.invoke).toHaveBeenCalledWith(IPC.controlRunLaunch, 'node', 'claude prompt')
+  })
   it('routes foreground process termination through request IPC', async () => {
     await api.pty.terminateForeground('node-1', 'claude')
     expect(h.invoke).toHaveBeenCalledWith(IPC.ptyTerminateForeground, 'node-1', 'claude')
@@ -147,5 +188,30 @@ describe('preload canvasAuthority (the desktop governs nothing)', () => {
     expect(() => off()).not.toThrow()
     expect(h.invoke).not.toHaveBeenCalled()
     expect(h.on).not.toHaveBeenCalled()
+  })
+})
+
+// The renderer's half of the project-limit contract. Main registers the handlers (core
+// project-limit); the preload must invoke exactly these channels with no arguments — the claim's
+// deviceId and machine hash are read by core itself, never supplied from the page.
+describe('preload projectLimit wiring', () => {
+  it('state and claim invoke their own channels with no arguments', async () => {
+    h.invoke.mockClear()
+    await api.projectLimit.state()
+    await api.projectLimit.claim()
+    expect(h.invoke.mock.calls).toEqual([[IPC.projectLimitState], [IPC.projectLimitClaim]])
+  })
+
+  it('onChange subscribes the change channel, forwards the state and unsubscribes', () => {
+    const got: unknown[] = []
+    const off = api.projectLimit.onChange((s) => got.push(s))
+    const call = h.on.mock.calls.find((c) => c[0] === IPC.projectLimitChanged)
+    expect(call).toBeTruthy()
+    const handler = call![1] as (e: unknown, payload: unknown) => void
+    const state = { active: true, pro: false, free: 5, allowance: 12, dnt: false }
+    handler({}, state)
+    expect(got).toEqual([state])
+    off()
+    expect(h.removeListener).toHaveBeenCalledWith(IPC.projectLimitChanged, handler)
   })
 })
