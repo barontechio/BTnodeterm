@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { mergeWorkspaceSave } from './workspace-save-merge'
+import { baselineAfterSave, mergeWorkspaceSave } from './workspace-save-merge'
 import { defaultKanbanFor } from './kanban-default-board'
 import { placeAssignment } from './kanban-order'
-import type { CanvasNodeState, Workspace } from './types'
+import type { BridgeLink, CanvasNodeState, Workspace } from './types'
 
 const node = (id: string): CanvasNodeState => ({
   id, kind: 'terminal', title: id, color: '#0a84ff', group: null,
@@ -106,31 +106,92 @@ describe('rebasing an owner workspace save', () => {
     expect(merged.filter((n) => n.id === 'adopted')).toHaveLength(1)
   })
 
-  it('keeps the host copy of an edge the writer adopted', () => {
-    const base = workspace()
-    const next = structuredClone(base)
-    const current = structuredClone(base)
-    next.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c' }]
-    current.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', reader: 'a' }]
+  describe('what an adopting save cannot leave for later', () => {
+    const adopting = (mine: Partial<CanvasNodeState>, host: Partial<CanvasNodeState>) => {
+      const base = workspace()
+      const next = structuredClone(base)
+      const current = structuredClone(base)
+      next.projects[0].nodes.push({ ...node('adopted'), ...mine })
+      current.projects[0].nodes.push({ ...node('adopted'), ...host })
+      return mergeWorkspaceSave(base, next, current).projects[0].nodes.find((n) => n.id === 'adopted')!
+    }
 
-    expect(mergeWorkspaceSave(base, next, current).projects[0].bridges).toEqual(current.projects[0].bridges)
+    it('lands a launch claim, which the claimant reads as durable', () => {
+      const claim = { after: [], command: 'run', attempted: true, manualOnly: true }
+      expect(adopting({ pendingLaunch: claim }, { pendingLaunch: { after: [], command: 'run' } }).pendingLaunch).toEqual(claim)
+    })
+
+    it('never brings back a launch the host cleared, or claims a different one', () => {
+      const claim = { after: [], command: 'run', attempted: true, manualOnly: true }
+      expect(adopting({ pendingLaunch: claim }, {}).pendingLaunch).toBeUndefined()
+      const other = { after: [], command: 'other' }
+      expect(adopting({ pendingLaunch: claim }, { pendingLaunch: other }).pendingLaunch).toEqual(other)
+    })
+
+    it('never undoes a claim the host already holds', () => {
+      const held = { after: [], command: 'run', attempted: true, manualOnly: true }
+      expect(adopting({ pendingLaunch: { after: [], command: 'run' } }, { pendingLaunch: held }).pendingLaunch).toEqual(held)
+    })
+
+    const adoptingEdge = (mine: Partial<BridgeLink>, host: Partial<BridgeLink>) => {
+      const base = workspace()
+      const next = structuredClone(base)
+      const current = structuredClone(base)
+      next.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', ...mine }]
+      current.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', ...host }]
+      return mergeWorkspaceSave(base, next, current).projects[0].bridges![0]
+    }
+
+    it('lands a one-way reader, and never widens a link the host holds as one-way', () => {
+      expect(adoptingEdge({ reader: 'a' }, {}).reader).toBe('a')
+      expect(adoptingEdge({}, { reader: 'a' }).reader).toBe('a')
+      expect(adoptingEdge({ reader: 'c' }, { reader: 'a' }).reader).toBe('a')
+    })
   })
 
-  it('applies an edit to an adopted node once the baseline holds it', () => {
+  it('takes an adopted child out of a frame this writer removed, instead of refusing', () => {
     const base = workspace()
+    base.projects[0].nodes.push({ ...node('frame'), kind: 'group' })
+    const next = structuredClone(base)
     const current = structuredClone(base)
-    const adopted = { ...node('adopted'), pendingLaunch: { after: [], command: 'held' } }
-    current.projects[0].nodes.push(adopted)
-    const first = structuredClone(base)
-    first.projects[0].nodes.push({ ...node('adopted'), size: { width: 999, height: 999 } })
-    const afterFirst = mergeWorkspaceSave(base, first, current)
+    next.projects[0].nodes = next.projects[0].nodes.filter((n) => n.id !== 'frame')
+    next.projects[0].nodes.push({ ...node('adopted'), position: { x: 7, y: 8 } })
+    current.projects[0].nodes.push({ ...node('adopted'), parentId: 'frame', position: { x: 1, y: 2 } })
 
-    const second = structuredClone(first)
-    second.projects[0].nodes.at(-1)!.title = 'Renamed later'
-    const merged = mergeWorkspaceSave(first, second, afterFirst).projects[0].nodes.at(-1)!
+    const adopted = mergeWorkspaceSave(base, next, current).projects[0].nodes.find((n) => n.id === 'adopted')!
 
-    expect(merged.title).toBe('Renamed later')
-    expect(merged.pendingLaunch).toEqual(adopted.pendingLaunch)
+    expect(adopted.parentId).toBeUndefined()
+    expect(adopted.position).toEqual({ x: 7, y: 8 })
+  })
+
+  it('still refuses to orphan a child this writer never saw', () => {
+    const base = workspace()
+    base.projects[0].nodes.push({ ...node('frame'), kind: 'group' })
+    const next = structuredClone(base)
+    const current = structuredClone(base)
+    next.projects[0].nodes = next.projects[0].nodes.filter((n) => n.id !== 'frame')
+    current.projects[0].nodes.push({ ...node('adopted'), parentId: 'frame' })
+
+    expect(() => mergeWorkspaceSave(base, next, current)).toThrow('parent frame was removed')
+  })
+
+  describe('baselineAfterSave', () => {
+    it('makes an adopted item the host copy and leaves everything else as submitted', () => {
+      const base = workspace()
+      const submitted = structuredClone(base)
+      submitted.projects[0].nodes[0].title = 'Mine'
+      submitted.projects[0].nodes.push({ ...node('adopted'), size: { width: 999, height: 999 } })
+      submitted.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c' }]
+      const merged = structuredClone(submitted)
+      merged.projects[0].nodes.at(-1)!.size = { width: 1, height: 1 }
+      merged.projects[0].bridges = [{ id: 'b', source: 'a', target: 'c', reader: 'a' }]
+
+      const out = baselineAfterSave(base, submitted, merged).projects[0]
+
+      expect(out.nodes[0].title).toBe('Mine')
+      expect(out.nodes.at(-1)!.size).toEqual({ width: 1, height: 1 })
+      expect(out.bridges).toEqual(merged.projects[0].bridges)
+    })
   })
 
   it('does not interpret an unreadable project as a node deletion', () => {

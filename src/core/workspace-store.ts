@@ -52,7 +52,7 @@ import { countOpenProjects } from '../shared/project-limit'
 import { SYSTEM_NODE_COLORS } from '../shared/node-colors'
 import { codedError } from './relay/admin-error'
 import { createLaunchClaimLedger } from './launch-claim-ledger'
-import { mergeWorkspaceSave, sameWorkspaceSave } from '../shared/workspace-save-merge'
+import { baselineAfterSave, mergeWorkspaceSave, sameWorkspaceSave } from '../shared/workspace-save-merge'
 
 /** What `WorkspaceStore.adoptFolder` did: the project now holding the folder, and whether this call
  *  added it (`created: false` = an existing project already held the same real directory). */
@@ -1412,10 +1412,16 @@ export class WorkspaceStore {
         throw new Error('workspace-save-stale-client: the owner loaded again or disconnected; load before retrying')
       }
       if (ownerLoad) {
-        await this.updateWorkspaceNow((current) => mergeWorkspaceSave(ownerLoad.workspace, submitted, current,
-          (id) => this.contentAuthority?.governs?.(id) === true), undefined, { localOnly })
+        let merged: Workspace | undefined
+        await this.updateWorkspaceNow((current) => {
+          merged = mergeWorkspaceSave(ownerLoad.workspace, submitted, current,
+            (id) => this.contentAuthority?.governs?.(id) === true)
+          return merged
+        }, undefined, { localOnly })
         // Disconnect and a newer load cannot have their baseline recreated by a late save.
-        if (this.clientBaselines.get(senderId) === ownerLoad) ownerLoad.workspace = submitted
+        if (this.clientBaselines.get(senderId) === ownerLoad) {
+          ownerLoad.workspace = merged ? baselineAfterSave(ownerLoad.workspace, submitted, merged) : submitted
+        }
       } else {
         await this.saveNow(this.pendingAdoptions.size ? await this.withPendingAdoptions(submitted) : submitted, localOnly)
       }

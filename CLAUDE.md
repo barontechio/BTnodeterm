@@ -166,11 +166,13 @@ measurements behind them. It is loaded automatically by Claude Code.
 
 An owner tab's whole save is rebased onto the host's copy (`shared/workspace-save-merge.ts`) from
 that client's baseline, which moves only when a save lands. A node or edge id both sides hold and the
-baseline lacks is the host's own item, adopted through an op or a server-change: the host's copy stays
-and the rest of the save goes through. Refusing it failed that save and every later one until a reload
-after any `open-agent`. Only a project id can really collide, and that is still refused. The cost: an
-edit made to an adopted node before that tab's first successful save stays live but not on disk until
-the node is edited again.
+baseline lacks is the host's own item, adopted through an op or a server-change: refusing it failed
+that save and every later one until a reload after any `open-agent`. The host's copy stays for that
+save, because the tab's copy may predate it, and `baselineAfterSave` makes it the base of the tab's
+next save, exactly as after a load, so the tab's edits land whole then. A launch claim and a one-way
+`reader` land at once: a claimant reads a landed save as durable, and a lost reader widens who may
+read. Only a project id can really collide, and that is still refused. The cost: until that next save
+an edit to an adopted node is live but not on disk.
 
 Settings updates share one FIFO: `SettingsStore.update` edits the latest durable cache and
 `settings:patch` applies explicit owner UI fields. Cache replacement, listeners and owner-only
@@ -796,16 +798,19 @@ Persistence has two layers:
   `markUnmirrored` was the smaller diff and was rejected: it needs the same shadow state anyway,
   and it only closes the one failure path that happens to report back. The set is runtime-only,
   bounded by the ids deleted this run, and pruned for projects that leave the index.
-  **A render that lags the edge refs is never published, pruned or merged from** (2026-11-05,
-  measured with TWO Server Edition tabs on an `open-agent` burst; `test/server/open-edge-loss.e2e.test.ts`
+  **A render behind the edge refs is not published from** (2026-11-05, measured with TWO Server
+  Edition tabs on an `open-agent` burst; `test/server/open-edge-loss.e2e.test.ts`
   is the opt-in reproduction). The factory's node upsert and its two edge upserts arrive as separate
   frames; each handler moves its ref synchronously and adopts the refs as the publisher's baseline,
   and a render then commits with the new `nodes` but the OLD edge arrays. Three places read that
   torn render and each lost a persisted edge for good: the publish effect diffed it against the
   adopted baseline and cast `edge-remove` for a rope and a bridge every canvas held
-  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render); the rope prune paired the
-  rendered node set with the LATEST ropes and pruned the new rope as dangling (both prunes now read
-  `nodesRef.current` inside their functional update); and `planServerChange` read an edge "in base,
+  (`renderedSceneIsCurrent`, collab-sync.ts, now refuses the render; it cannot see a render that moved
+  the ref BACK, which review reproduced in isolation and not in the app); the rope prune paired the
+  rendered node set with the LATEST ropes and pruned the new rope as dangling (`pruneDanglingEdges`
+  now decides in the effect, over the refs, and removes only the ids it saw: judging inside a
+  functional update drops an add queued behind it, before `nodesRef` has moved); and
+  `planServerChange` read an edge "in base,
   not in the file" as removed even when the file lacked the edge's NODE too — the stale payload a
   tab's whole save had just produced — while never removing the node (an edge is now dropped only
   when the file still holds both endpoints). The other tab applied the casts and its next whole save

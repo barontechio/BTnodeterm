@@ -245,6 +245,7 @@ import {
   mergeIncomingNodes
 } from '../lib/externalChange'
 import { planServerChange } from '../lib/serverChange'
+import { pruneDanglingEdges } from './pruneDanglingEdges'
 import {
   CONTENT_ADD_ITEMS,
   agentEntriesToMenuItems,
@@ -5246,18 +5247,10 @@ export function Canvas() {
     [onLinkEdgesChange]
   )
 
-  // Prune ropes whose endpoints were deleted (mirrors the context-link pruning below).
-  // The node set is read from `nodesRef` INSIDE the functional update, never from the rendered
-  // `nodes`: the update applies to the LATEST ropes, and a peer's edge op moves the ropes ref before
-  // its node upsert has rendered, so the rendered node set paired with them is an older one — it
-  // pruned a rope the server had just written as dangling, and the publisher cast that removal to
-  // every tab (measured 2026-11-05, two Server Edition tabs on an open-agent burst: rope lost, bridge
-  // kept). `nodesRef` is the node set the latest edges were built against.
+  // Prune ropes whose endpoints were deleted (mirrors the context-link pruning below). This effect
+  // runs on every drag FRAME (`nodes` identity); most canvases have no ropes, and that costs nothing.
   useEffect(() => {
-    // Nothing to prune → don't build the id set. This effect runs on every drag FRAME (`nodes`
-    // identity), and most canvases have no ropes at all.
-    if (!controlEdgesRef.current.length) return
-    setControlEdges((es) => pruneRopes(es, new Set(nodesRef.current.map((n) => n.id))))
+    pruneDanglingEdges(nodesRef, controlEdgesRef, setControlEdges)
   }, [nodes])
 
   // The RENDERED epoch, not the ref: in a project switch's window the ref already names the incoming
@@ -5271,14 +5264,8 @@ export function Canvas() {
   useMirrorIdentitySeed()
 
   // Pruning is separate from publication: node geometry changes must not postpone link writes.
-  // Same latest-against-latest pairing as the rope prune above: a functional update over the
-  // newest bridges, judged by `nodesRef`; a prune that changes nothing returns the same array.
   useEffect(() => {
-    setLinkEdges((es) => {
-      const ids = new Set(nodesRef.current.map((n) => n.id))
-      const valid = es.filter((e) => ids.has(e.source) && ids.has(e.target))
-      return valid.length === es.length ? es : valid
-    })
+    pruneDanglingEdges(nodesRef, linkEdgesRef, setLinkEdges)
   }, [linkEdges, nodes, setLinkEdges])
 
   // The app-level unread count (macOS Dock badge, Windows taskbar overlay, tray), across all

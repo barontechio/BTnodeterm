@@ -105,6 +105,26 @@ describe('planServerChange', () => {
     expect(plan.bridges.map((b) => b.id)).toEqual(['link-2-ef56ab78'])
   })
 
+  it.each([
+    ['target', 'the source is kept'],
+    ['source', 'the target is kept']
+  ])('keeps an edge when the payload lacks its %s, though %s', (missing) => {
+    const stranger = node('term-stranger')
+    const edge = missing === 'target'
+      ? rope('ctrl-x', caller.id, stranger.id)
+      : rope('ctrl-x', stranger.id, caller.id)
+    const plan = planServerChange({
+      base: project([caller, stranger], { ropes: [edge], bridges: [] }),
+      incoming: project([caller], { ropes: [], bridges: [] }),
+      liveNodeIds: [caller.id, stranger.id],
+      liveRopes: [edge],
+      liveBridges: []
+    })
+
+    expect(plan.ropesChanged).toBe(false)
+    expect(plan.ropes.map((r) => r.id)).toEqual(['ctrl-x'])
+  })
+
   it('still drops an edge the server removed between two nodes it kept', () => {
     // The payload that says "edge removed" is one that still holds BOTH endpoints without it
     // (an unlink, a cancelled wait). That rule is unchanged by the case above.

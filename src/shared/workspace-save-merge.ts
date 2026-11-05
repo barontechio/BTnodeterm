@@ -3,7 +3,7 @@
 import { stableStringify } from './canvas-mutations'
 import { applyKanbanOp, diffKanbanOps } from './kanban-ops'
 import { groupsFirst } from './node-order'
-import type { Project, ProjectKanban, Workspace } from './types'
+import type { BridgeLink, CanvasNodeState, Project, ProjectKanban, Workspace } from './types'
 
 const same = (a: unknown, b: unknown): boolean => stableStringify(a) === stableStringify(b)
 
@@ -22,19 +22,16 @@ function fields<T extends object>(base: T, next: T, current: T, skip: readonly s
 }
 
 /**
- * Both sides hold an id the writer's baseline lacks. A project id can really collide (one folder
- * added twice), so that is refused. A node or edge id is random, so the writer got it from the host,
- * through an op or a server-change, and did not invent it: its copy differs only by how a client
- * serializes it or by an edit made before its first save. The host's copy stays, and the baseline
- * moving to this save lets the next edit through. Refusing there failed this save and all later
- * ones, because a baseline only moves when a save lands.
+ * What to do when both sides hold an id the writer's baseline lacks. A project id can really collide
+ * (one folder added twice), so by default that is refused. A node id is random and an edge id is built
+ * from its endpoints, so there the writer got it from the host, through an op or a server-change:
+ * `adopted` says what to keep. Refusing there failed this save and all later ones, because a baseline
+ * only moves when a save lands.
  */
-type BothCreated = 'refuse' | 'keep-host'
-
 function items<T extends { id: string }>(
   base: readonly T[], next: readonly T[], current: readonly T[],
   merge: (before: T, wanted: T, fresh: T) => T,
-  bothCreated: BothCreated = 'refuse'
+  adopted?: (wanted: T, fresh: T) => T
 ): T[] {
   const before = new Map(base.map((x) => [x.id, x]))
   const fresh = new Map(current.map((x) => [x.id, x]))
@@ -47,8 +44,10 @@ function items<T extends { id: string }>(
     const now = fresh.get(wanted.id)
     // The host deleted it after this writer loaded it. A stale edit cannot resurrect it.
     if (old && !now) continue
-    if (bothCreated === 'refuse' && !old && now && !same(wanted, now)) {
-      throw new Error(`workspace-save-conflict: concurrent creation of ${wanted.id}; reload before retrying`)
+    if (!old && now && !same(wanted, now)) {
+      if (!adopted) throw new Error(`workspace-save-conflict: concurrent creation of ${wanted.id}; reload before retrying`)
+      result.push(adopted(wanted, now))
+      continue
     }
     result.push(old && now ? merge(old, wanted, now) : structuredClone(now ?? wanted))
   }
@@ -71,6 +70,26 @@ function items<T extends { id: string }>(
     successor = x.id
   }
   return ordered
+}
+
+/**
+ * A node this writer adopted from the host: the host's copy stays, because the writer's copy may
+ * predate it, and `baselineAfterSave` makes that copy the base for the writer's next save, which then
+ * carries its edits. Only a launch claim cannot wait: the claimant reads a landed save as "durable,
+ * safe to type". It moves one way, so it cannot undo a host that already cleared the launch.
+ */
+function adoptedNode(wanted: CanvasNodeState, fresh: CanvasNodeState): CanvasNodeState {
+  const held = fresh.pendingLaunch
+  const claim = wanted.pendingLaunch
+  const claimed = !!held && !held.attempted && !!claim?.attempted && claim.command === held.command
+  return structuredClone(claimed ? { ...fresh, pendingLaunch: claim } : fresh)
+}
+
+/** As `adoptedNode`, and a one-way `reader` cannot wait either: without it the link reads both ways. */
+function adoptedEdge(wanted: BridgeLink, fresh: BridgeLink): BridgeLink {
+  return structuredClone(fresh.reader === undefined && wanted.reader !== undefined
+    ? { ...fresh, reader: wanted.reader }
+    : fresh)
 }
 
 function board(base: ProjectKanban | undefined, next: ProjectKanban | undefined,
@@ -99,14 +118,24 @@ function project(base: Project, next: Project, current: Project, governed: boole
       throw new Error(`workspace-save-conflict: ${wanted.id} changed coordinate frames; reload before retrying`)
     }
     return fields(old, wanted, fresh)
-  }, 'keep-host'))
+  }, adoptedNode))
   const nodeIds = new Set(out.nodes.map((n) => n.id))
   const removed = new Set(base.nodes.filter((n) => !nodeIds.has(n.id)).map((n) => n.id))
   for (const n of out.nodes) if (n.parentId && removed.has(n.parentId)) {
-    throw new Error(`workspace-save-conflict: parent ${n.parentId} was removed; reload before retrying`)
+    // This writer removed the frame and took an adopted child out of it: its own placement stands,
+    // since the host's copy would now name a frame that is gone.
+    const wanted = next.nodes.find((candidate) => candidate.id === n.id)
+    const adoptedHere = !base.nodes.some((candidate) => candidate.id === n.id)
+    if (!adoptedHere || !wanted || wanted.parentId === n.parentId) {
+      throw new Error(`workspace-save-conflict: parent ${n.parentId} was removed; reload before retrying`)
+    }
+    n.position = structuredClone(wanted.position)
+    if (wanted.parentId) n.parentId = wanted.parentId
+    else delete n.parentId
   }
+  out.nodes = groupsFirst(out.nodes)
   for (const key of ['bridges', 'ropes'] as const) {
-    const edges = items(base[key] ?? [], next[key] ?? [], current[key] ?? [], fields, 'keep-host')
+    const edges = items(base[key] ?? [], next[key] ?? [], current[key] ?? [], fields, adoptedEdge)
       .filter((e) => !removed.has(e.source) && !removed.has(e.target))
     if (edges.length || current[key] !== undefined || next[key] !== undefined) out[key] = edges
     else delete out[key]
@@ -129,6 +158,30 @@ export function mergeWorkspaceSave(base: Workspace, next: Workspace, current: Wo
       : active,
     projects
   }
+}
+
+/**
+ * The writer's baseline once its save landed: what it submitted, except that an item it adopted in
+ * this save counts as the host's copy. Its next save then diffs against what the host holds, exactly
+ * as after a load, so its edits land whole. Using its own copy here would make those edits look
+ * already saved, and a host copy in another frame would refuse its next move for good.
+ */
+export function baselineAfterSave(base: Workspace, submitted: Workspace, merged: Workspace): Workspace {
+  const out = structuredClone(submitted)
+  for (const project of out.projects) {
+    const before = base.projects.find((p) => p.id === project.id)
+    const landed = merged.projects.find((p) => p.id === project.id)
+    if (!before || !landed) continue
+    const rebase = <T extends { id: string }>(mine: T[], old: readonly T[], host: readonly T[]): T[] =>
+      mine.map((x) => {
+        const copy = old.some((o) => o.id === x.id) ? undefined : host.find((h) => h.id === x.id)
+        return copy ? structuredClone(copy) : x
+      })
+    project.nodes = rebase(project.nodes, before.nodes, landed.nodes)
+    if (project.bridges) project.bridges = rebase(project.bridges, before.bridges ?? [], landed.bridges ?? [])
+    if (project.ropes) project.ropes = rebase(project.ropes, before.ropes ?? [], landed.ropes ?? [])
+  }
+  return out
 }
 
 /** Persistence comparison is independent of JSON object key order. */

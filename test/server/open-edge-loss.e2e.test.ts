@@ -1,5 +1,5 @@
-// Experiment: edge (rope/bridge) loss after a burst of `open-agent` on the Server Edition with ONE
-// real browser tab attached. Boots a real server (this worktree, or the deployed build when
+// Experiment: edge (rope/bridge) loss after a burst of `open-agent` on the Server Edition with real
+// browser tabs attached (one by default, EDGE_LOSS_TABS=2 is the reproduction). Boots a real server (this worktree, or the deployed build when
 // EDGE_LOSS_SERVER=deployed names its main.cjs), serves the real renderer bundle to a real headless
 // Chromium (Playwright's binary), taps the tab's WebSocket (every canvas:mut / server-change frame
 // in, every workspace:save out), fires the burst through the hook server's /control route with the
@@ -125,7 +125,7 @@ function post(url: string, headers: Record<string, string>, body: string, extra:
   })
 }
 
-describe.skipIf(process.env.EDGE_LOSS_E2E !== '1' || !fs.existsSync(CHROMIUM) || !hasTmux || process.platform === 'win32')('edge loss after an open-agent burst with one real browser tab', () => {
+describe.skipIf(process.env.EDGE_LOSS_E2E !== '1' || !fs.existsSync(CHROMIUM) || !hasTmux || process.platform === 'win32')('edge loss after an open-agent burst with real browser tabs', () => {
   it('keeps every rope and bridge the factory wrote', async () => {
     vi.stubEnv('NODETERM_TELEMETRY_DISABLED', '1')
     const root = testTmpDir('edge-loss-'); const dataDir = path.join(root, 'data'); const cwd = path.join(root, 'project')
@@ -275,6 +275,13 @@ describe.skipIf(process.env.EDGE_LOSS_E2E !== '1' || !fs.existsSync(CHROMIUM) ||
       if (OUT) fs.writeFileSync(OUT, JSON.stringify(results, null, 2))
       // The claim under test: every open's node AND both its edges are on disk.
       expect(missing.filter((m) => !m.node || !m.rope || !m.bridge), 'nodes whose rope or bridge did not survive on disk').toEqual([])
+      // And the two ways it can pass while still being wrong: a tab whose saves are all refused never
+      // writes the loss to disk, and a tab casting a removal is one race away from it.
+      const frames = [results.tap, ...extraTaps].flatMap((t) => (t as { frames?: Array<Record<string, unknown>> }).frames ?? [])
+      expect(frames.filter((f) => JSON.stringify(f).includes('workspace-save-conflict')), 'refused tab saves').toEqual([])
+      if (!SWITCH) {
+        expect(frames.filter((f) => f.dir === 'out' && /remove/.test(JSON.stringify(f))), 'removals cast by a tab').toEqual([])
+      }
     } finally {
       if (OUT && !fs.existsSync(OUT)) fs.writeFileSync(OUT, JSON.stringify({ ...results, fileHistory, childLog }, null, 2))
       clearInterval(poll); watcher.close()
