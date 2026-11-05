@@ -28,8 +28,11 @@ it('persists consent across browser absence and host restart, with private atomi
   const sub = subscription(); await service.subscribe(owner, 'project', sub, () => true)
   await service.close(); service = new WebPushService(deps); await service.init()
   expect(service.status(owner, sub.endpoint).enabled).toBe(true)
-  expect((await fs.stat(deps.file)).mode & 0o777).toBe(0o600)
-  const stored = await fs.readFile(deps.file, 'utf8'); expect(stored).not.toContain(token)
+  const file = await fs.open(deps.file, 'r')
+  try {
+    expect((await file.stat()).mode & 0o777).toBe(0o600)
+    expect(await file.readFile('utf8')).not.toContain(token)
+  } finally { await file.close() }
   service.accept(event()); await service.idle()
   expect(deps.send).toHaveBeenCalledTimes(1)
   expect(JSON.stringify(vi.mocked(deps.send).mock.calls[0].slice(0, 2))).not.toMatch(/PRIVATE|SECRET|cli-session|project|nodeId/)
