@@ -753,7 +753,7 @@ import {
   type WorktreeAttachTarget
 } from '../lib/worktreeCreate'
 import {
-  WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, markLegacyWaitRopes, missingDepRopes, pruneRopes,
+  WAIT_LABEL, dropAfterDep, edgeHidden, hiddenEdgeNodeIds, markLegacyWaitRopes, missingDepRopes,
   ropeInfoOf, ropeVisual, waitRopeId
 } from '../lib/edgeModel'
 import { triggerEdges } from '../lib/triggerCard'

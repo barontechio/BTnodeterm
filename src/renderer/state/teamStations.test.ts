@@ -58,7 +58,7 @@ describe('wiring', () => {
   it('Canvas marks legacy wait ropes at load, before its prune can erase the order, and mints marked waits', () => {
     const canvas = read('../canvas/Canvas.tsx')
     expect(canvas).toContain('const restoredRopes = markLegacyWaitRopes(project.ropes ?? [])')
-    expect(canvas).toContain('setControlEdges((es) => pruneRopes(es, ids))')
+    expect(canvas).toContain('pruneDanglingEdges(nodesRef, controlEdgesRef, setControlEdges)')
     expect(canvas).toContain('ropeEdge(waitRopeId(dep, nid), dep, nid)')
     // No wait rope is minted with the opener's id shape anywhere on the canvas.
     expect(canvas).not.toContain('ropeEdge(`ctrl-${dep}-')
