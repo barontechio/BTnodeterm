@@ -82,8 +82,16 @@ async function fixture(realBackend?: 'plain' | 'tmux') {
     settings.tmuxEnabled = realBackend === 'tmux'
     manager.init(() => settings)
     manager.setNodeExecutionAdmission((id, permit, operation) => dispatch.assertAllowed(id, permit, operation))
-    await manager.createHeadless({ persistKey: terminalId, ownerProjectId: project.id, cwd: checkout, shell: '/bin/bash', shellArgs: ['--noprofile', '--norc'], cols: 80, rows: 24, newOnly: true })
+    const created = await manager.createHeadless({ persistKey: terminalId, ownerProjectId: project.id, cwd: checkout, shell: '/bin/bash', shellArgs: ['--noprofile', '--norc'], cols: 80, rows: 24, newOnly: true })
     if (realBackend === 'tmux') await vi.waitFor(async () => expect(await manager!.localTmuxExecution(terminalId)).toBeDefined())
+    // Bash can still open its saved terminal descriptor after createHeadless resolves. Prove
+    // it reached its read loop before capturing the removal proof, which correctly rejects
+    // descriptor changes. Keep the marker outside the checkout so Git's clean check stays real.
+    if (realBackend === 'plain') {
+      const ready = path.join(root, 'plain-shell-ready')
+      manager.write(null, created.sessionId, `printf ready > '${ready}'\r`)
+      await vi.waitFor(() => expect(fs.readFileSync(ready, 'utf8')).toBe('ready'), { timeout: 5000 })
+    }
   }
   const git = new GitService()
   const remove = vi.spyOn(git, 'worktreeRemoveClean')

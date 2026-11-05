@@ -66,6 +66,15 @@ are accepted under that license. Its Additional Use Grant does not cover product
 whose license or usage-limit checks were removed or bypassed; changing that code in a PR here is
 ordinary work.
 
+## Fork Server candidate packaging
+
+`npm run server:package -- --output /absolute/private/artifacts` packages existing Server/renderer,
+session-host and Codex-relay build outputs with isolated production dependencies for the actual
+host OS/architecture/Node ABI. Build in a clean release checkout first; never reuse live/shared native
+modules or run Electron rebuild there. The manifest/checksums and an extracted-package smoke are
+release gates. Keep fork `nodeTermUpdates=disabled`, existing license checks and operator-owned data
+intact. See `docs/server-release-bt1.md`; public release/deployment is a separate decision.
+
 ## Getting set up
 
 You need Node.js 20+ (22 for the Server Edition) on Linux or **macOS 12 Monterey or newer** —
